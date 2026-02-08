@@ -10,8 +10,8 @@
 
 use butteraugli::ButteraugliParams;
 use fast_ssim2::compute_ssimulacra2;
-use flate2::write::DeflateEncoder;
 use flate2::Compression;
+use flate2::write::DeflateEncoder;
 use imgref::ImgVec;
 use rgb::RGB8;
 use std::io::Write;
@@ -63,11 +63,21 @@ fn main() {
     println!(
         "{:<36} {:>7} {:>7} {:>7}  {:>7} {:>7} {:>7}  {:>7} {:>7} {:>7}  {:>8} {:>8} {:>8}  {:>7} {:>7} {:>7}",
         "Image",
-        "zq_ba", "iq_ba", "qr_ba",
-        "zq_ss2", "iq_ss2", "qr_ss2",
-        "zq_run", "iq_run", "qr_run",
-        "zq_defl", "iq_defl", "qr_defl",
-        "zq_ms", "iq_ms", "qr_ms",
+        "zq_ba",
+        "iq_ba",
+        "qr_ba",
+        "zq_ss2",
+        "iq_ss2",
+        "qr_ss2",
+        "zq_run",
+        "iq_run",
+        "qr_run",
+        "zq_defl",
+        "iq_defl",
+        "qr_defl",
+        "zq_ms",
+        "iq_ms",
+        "qr_ms",
     );
     println!("{}", "-".repeat(175));
 
@@ -127,11 +137,21 @@ fn main() {
         println!(
             "{:<36} {:>7.3} {:>7.3} {:>7.3}  {:>7.2} {:>7.2} {:>7.2}  {:>7.1} {:>7.1} {:>7.1}  {:>8} {:>8} {:>8}  {:>7.1} {:>7.1} {:>7.1}",
             &name[..name.len().min(36)],
-            zq_stats.butteraugli, iq_stats.butteraugli, qr_stats.butteraugli,
-            zq_stats.ssimulacra2, iq_stats.ssimulacra2, qr_stats.ssimulacra2,
-            zq_stats.avg_run, iq_stats.avg_run, qr_stats.avg_run,
-            zq_stats.deflate_size, iq_stats.deflate_size, qr_stats.deflate_size,
-            zq_ms, iq_ms, qr_ms,
+            zq_stats.butteraugli,
+            iq_stats.butteraugli,
+            qr_stats.butteraugli,
+            zq_stats.ssimulacra2,
+            iq_stats.ssimulacra2,
+            qr_stats.ssimulacra2,
+            zq_stats.avg_run,
+            iq_stats.avg_run,
+            qr_stats.avg_run,
+            zq_stats.deflate_size,
+            iq_stats.deflate_size,
+            qr_stats.deflate_size,
+            zq_ms,
+            iq_ms,
+            qr_ms,
         );
 
         totals[0].add(&zq_stats, zq_ms);
@@ -145,11 +165,21 @@ fn main() {
         println!(
             "{:<36} {:>7.3} {:>7.3} {:>7.3}  {:>7.2} {:>7.2} {:>7.2}  {:>7.1} {:>7.1} {:>7.1}  {:>8.0} {:>8.0} {:>8.0}  {:>7.1} {:>7.1} {:>7.1}",
             "AVERAGE",
-            totals[0].butteraugli / n, totals[1].butteraugli / n, totals[2].butteraugli / n,
-            totals[0].ssimulacra2 / n, totals[1].ssimulacra2 / n, totals[2].ssimulacra2 / n,
-            totals[0].avg_run / n, totals[1].avg_run / n, totals[2].avg_run / n,
-            totals[0].deflate_size / n, totals[1].deflate_size / n, totals[2].deflate_size / n,
-            totals[0].time_ms / n, totals[1].time_ms / n, totals[2].time_ms / n,
+            totals[0].butteraugli / n,
+            totals[1].butteraugli / n,
+            totals[2].butteraugli / n,
+            totals[0].ssimulacra2 / n,
+            totals[1].ssimulacra2 / n,
+            totals[2].ssimulacra2 / n,
+            totals[0].avg_run / n,
+            totals[1].avg_run / n,
+            totals[2].avg_run / n,
+            totals[0].deflate_size / n,
+            totals[1].deflate_size / n,
+            totals[2].deflate_size / n,
+            totals[0].time_ms / n,
+            totals[1].time_ms / n,
+            totals[2].time_ms / n,
         );
 
         // Summary comparison
@@ -229,7 +259,8 @@ fn compute_stats(
     let test_pixels: Vec<[u8; 3]> = test_rgb.iter().map(|p| [p.r, p.g, p.b]).collect();
     let ref_img_ss = ImgVec::new(ref_pixels, width, height);
     let test_img_ss = ImgVec::new(test_pixels, width, height);
-    let ssimulacra2 = compute_ssimulacra2(ref_img_ss.as_ref(), test_img_ss.as_ref()).unwrap_or(f64::NAN);
+    let ssimulacra2 =
+        compute_ssimulacra2(ref_img_ss.as_ref(), test_img_ss.as_ref()).unwrap_or(f64::NAN);
 
     let avg_run = average_run_length(indices);
     let deflate_size = deflate_compress(indices);
