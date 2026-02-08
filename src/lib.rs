@@ -24,9 +24,10 @@ use alloc::vec::Vec;
 /// so the optimal palette ordering and dithering strategy varies per format.
 /// Setting the output format applies sensible defaults that can be overridden
 /// via subsequent builder calls.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OutputFormat {
     /// No format-specific optimization. Full alpha quantization if RGBA.
+    #[default]
     Generic,
     /// GIF: LZW compression, binary transparency only.
     /// Uses delta-minimize sort + post-remap frequency reorder.
@@ -40,12 +41,6 @@ pub enum OutputFormat {
     /// JPEG XL modular: Squeeze wavelet + meta-adaptive entropy.
     /// Uses delta-minimize sort. Full RGBA palette.
     JxlModular,
-}
-
-impl Default for OutputFormat {
-    fn default() -> Self {
-        Self::Generic
-    }
 }
 
 /// Internal tuning parameters derived from OutputFormat + user overrides.
@@ -344,41 +339,89 @@ pub fn quantize_rgba(
     }
 
     let weights = masking::compute_masking_weights_rgba(pixels, width, height);
-
-    let (hist, has_transparent) = histogram::build_histogram_rgba(pixels, &weights);
-
     let refine = config.quality >= 50;
-    // Reserve one slot for transparency if needed
-    let opaque_colors = if has_transparent {
-        max_colors.saturating_sub(1)
-    } else {
-        max_colors
-    };
-    let mut centroids = median_cut::median_cut(hist, opaque_colors, refine);
 
-    if refine {
-        if pixels.len() <= 500_000 {
-            centroids = median_cut::refine_against_pixels_rgba(centroids, pixels, &weights, 8);
+    let (pal, mut indices) = if tuning.alpha_mode == AlphaMode::Full {
+        // Full alpha quantization: 4D OKLabA pipeline
+        let (hist, has_transparent) = histogram::build_histogram_alpha(pixels, &weights);
+        let opaque_colors = if has_transparent {
+            max_colors.saturating_sub(1)
         } else {
-            let (sub_pixels, sub_weights) = subsample_pixels_rgba(pixels, &weights, width);
-            centroids =
-                median_cut::refine_against_pixels_rgba(centroids, &sub_pixels, &sub_weights, 8);
+            max_colors
+        };
+        let mut centroids = median_cut::median_cut_alpha(hist, opaque_colors, refine);
+
+        if refine {
+            if pixels.len() <= 500_000 {
+                centroids = median_cut::refine_against_pixels_alpha(centroids, pixels, &weights, 8);
+            } else {
+                let (sub_pixels, sub_weights) = subsample_pixels_rgba(pixels, &weights, width);
+                centroids = median_cut::refine_against_pixels_alpha(
+                    centroids,
+                    &sub_pixels,
+                    &sub_weights,
+                    8,
+                );
+            }
         }
-    }
 
-    let pal =
-        palette::Palette::from_centroids_sorted(centroids, has_transparent, tuning.sort_strategy);
+        let pal = palette::Palette::from_centroids_alpha(
+            centroids,
+            has_transparent,
+            tuning.sort_strategy,
+        );
 
-    let mut indices = dither::dither_image_rgba(
-        pixels,
-        width,
-        height,
-        &weights,
-        &pal,
-        config.dither,
-        config.run_priority,
-        tuning.dither_strength,
-    );
+        let indices = dither::dither_image_rgba_alpha(
+            pixels,
+            width,
+            height,
+            &weights,
+            &pal,
+            config.dither,
+            config.run_priority,
+            tuning.dither_strength,
+        );
+
+        (pal, indices)
+    } else {
+        // Binary transparency: opaque pipeline with transparent index
+        let (hist, has_transparent) = histogram::build_histogram_rgba(pixels, &weights);
+        let opaque_colors = if has_transparent {
+            max_colors.saturating_sub(1)
+        } else {
+            max_colors
+        };
+        let mut centroids = median_cut::median_cut(hist, opaque_colors, refine);
+
+        if refine {
+            if pixels.len() <= 500_000 {
+                centroids = median_cut::refine_against_pixels_rgba(centroids, pixels, &weights, 8);
+            } else {
+                let (sub_pixels, sub_weights) = subsample_pixels_rgba(pixels, &weights, width);
+                centroids =
+                    median_cut::refine_against_pixels_rgba(centroids, &sub_pixels, &sub_weights, 8);
+            }
+        }
+
+        let pal = palette::Palette::from_centroids_sorted(
+            centroids,
+            has_transparent,
+            tuning.sort_strategy,
+        );
+
+        let indices = dither::dither_image_rgba(
+            pixels,
+            width,
+            height,
+            &weights,
+            &pal,
+            config.dither,
+            config.run_priority,
+            tuning.dither_strength,
+        );
+
+        (pal, indices)
+    };
 
     // GIF frequency reorder (post-dither)
     let pal = if tuning.gif_frequency_reorder {

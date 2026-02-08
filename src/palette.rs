@@ -2,7 +2,7 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::oklab::{OKLab, oklab_to_srgb};
+use crate::oklab::{OKLab, OKLabA, oklab_to_srgb};
 
 /// Strategy for ordering palette entries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +74,82 @@ impl Palette {
 
         let transparent_index = if has_transparency {
             // Reserve index 0 for transparency
+            entries_srgb.insert(0, [0, 0, 0]);
+            entries_rgba.insert(0, [0, 0, 0, 0]);
+            entries_oklab.insert(0, OKLab::new(0.0, 0.0, 0.0));
+            Some(0)
+        } else {
+            None
+        };
+
+        Self {
+            entries_srgb,
+            entries_rgba,
+            entries_oklab,
+            transparent_index,
+        }
+    }
+
+    /// Build a palette from alpha-aware centroids (4D quantization result).
+    ///
+    /// Each centroid has its own alpha value which becomes the palette entry's
+    /// alpha byte. Sort strategy applies to color channels only.
+    pub fn from_centroids_alpha(
+        centroids: Vec<OKLabA>,
+        has_transparency: bool,
+        strategy: PaletteSortStrategy,
+    ) -> Self {
+        if centroids.is_empty() {
+            return Self {
+                entries_srgb: Vec::new(),
+                entries_rgba: Vec::new(),
+                entries_oklab: Vec::new(),
+                transparent_index: if has_transparency { Some(0) } else { None },
+            };
+        }
+
+        // Convert to sRGB+alpha, keep OKLab paired
+        let pairs: Vec<(OKLab, [u8; 3], u8)> = centroids
+            .into_iter()
+            .map(|laba| {
+                let (r, g, b) = oklab_to_srgb(laba.lab);
+                let a = (laba.alpha * 255.0).round().clamp(0.0, 255.0) as u8;
+                (laba.lab, [r, g, b], a)
+            })
+            .collect();
+
+        // Sort by color channels (reusing the sort functions on the OKLab+sRGB part)
+        let mut color_pairs: Vec<(OKLab, [u8; 3])> =
+            pairs.iter().map(|(lab, srgb, _)| (*lab, *srgb)).collect();
+
+        let sorted_colors = match strategy {
+            PaletteSortStrategy::DeltaMinimize => delta_minimize_sort(&mut color_pairs),
+            PaletteSortStrategy::Luminance => luminance_sort(&mut color_pairs),
+        };
+
+        // Build a mapping from sorted position to original position
+        // by matching on OKLab values (they're unique enough)
+        let mut used = vec![false; pairs.len()];
+        let mut sorted_with_alpha: Vec<(OKLab, [u8; 3], u8)> = Vec::with_capacity(pairs.len());
+        for (lab, srgb) in &sorted_colors {
+            for (j, (olab, _, alpha)) in pairs.iter().enumerate() {
+                if !used[j] && lab.distance_sq(*olab) < 1e-10 {
+                    sorted_with_alpha.push((*lab, *srgb, *alpha));
+                    used[j] = true;
+                    break;
+                }
+            }
+        }
+
+        let mut entries_srgb: Vec<[u8; 3]> = sorted_with_alpha.iter().map(|(_, s, _)| *s).collect();
+        let mut entries_rgba: Vec<[u8; 4]> = sorted_with_alpha
+            .iter()
+            .map(|(_, [r, g, b], a)| [*r, *g, *b, *a])
+            .collect();
+        let mut entries_oklab: Vec<OKLab> =
+            sorted_with_alpha.iter().map(|(lab, _, _)| *lab).collect();
+
+        let transparent_index = if has_transparency {
             entries_srgb.insert(0, [0, 0, 0]);
             entries_rgba.insert(0, [0, 0, 0, 0]);
             entries_oklab.insert(0, OKLab::new(0.0, 0.0, 0.0));
@@ -165,6 +241,37 @@ impl Palette {
     /// Distance from a color to a palette entry.
     pub fn distance_sq(&self, color: OKLab, index: u8) -> f32 {
         color.distance_sq(self.entries_oklab[index as usize])
+    }
+
+    /// Find the nearest palette index considering both color and alpha.
+    /// Used for alpha-aware quantization paths.
+    pub fn nearest_with_alpha(&self, color: OKLab, alpha: f32) -> u8 {
+        let start = if self.transparent_index.is_some() {
+            1
+        } else {
+            0
+        };
+
+        let query = OKLabA::new(color.l, color.a, color.b, alpha);
+        let mut best_idx = start;
+        let mut best_dist = f32::MAX;
+
+        for i in start..self.entries_oklab.len() {
+            let entry_alpha = self.entries_rgba[i][3] as f32 / 255.0;
+            let entry = OKLabA::new(
+                self.entries_oklab[i].l,
+                self.entries_oklab[i].a,
+                self.entries_oklab[i].b,
+                entry_alpha,
+            );
+            let d = query.distance_sq(entry);
+            if d < best_dist {
+                best_dist = d;
+                best_idx = i;
+            }
+        }
+
+        best_idx as u8
     }
 }
 

@@ -2,7 +2,7 @@ extern crate alloc;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
-use crate::oklab::{OKLab, srgb_to_oklab};
+use crate::oklab::{OKLab, OKLabA, srgb_to_oklab};
 
 /// A histogram entry: accumulated color, weight, and count for a quantized bucket.
 #[derive(Debug, Clone)]
@@ -115,6 +115,86 @@ pub fn build_histogram_rgba(
     let bits = if pixels.len() <= 500_000 { 5 } else { 4 };
     let entries = build_hist_at_depth(&labs, &opaque_weights, bits);
     (entries, has_transparent)
+}
+
+/// Build a weighted histogram from RGBA pixels with alpha as a quantizable dimension.
+///
+/// Alpha is quantized to 6 bits (64 levels) for bucketing. Fully transparent pixels
+/// (alpha == 0) are excluded and flagged separately.
+/// Returns histogram entries as (OKLabA, weight) pairs.
+pub(crate) fn build_histogram_alpha(
+    pixels: &[rgb::RGBA<u8>],
+    weights: &[f32],
+) -> (Vec<(OKLabA, f32)>, bool) {
+    assert_eq!(pixels.len(), weights.len());
+
+    let bits = if pixels.len() <= 500_000 { 5 } else { 4 };
+    let alpha_bits: u32 = 6; // 64 alpha levels
+    let alpha_max = (1u32 << alpha_bits) - 1;
+    let alpha_scale = alpha_max as f32;
+
+    let mut has_transparent = false;
+    let mut buckets: BTreeMap<u64, AlphaHistEntry> = BTreeMap::new();
+
+    for (pixel, &weight) in pixels.iter().zip(weights.iter()) {
+        if pixel.a == 0 {
+            has_transparent = true;
+            continue;
+        }
+
+        let lab = srgb_to_oklab(pixel.r, pixel.g, pixel.b);
+        let alpha_f = pixel.a as f32 / 255.0;
+        let color_key = quantize_key(lab, bits);
+        let alpha_bin = ((alpha_f * alpha_scale).round() as u32).min(alpha_max);
+        let key = (color_key as u64) << alpha_bits | alpha_bin as u64;
+
+        let w64 = weight as f64;
+        buckets
+            .entry(key)
+            .and_modify(|e| {
+                e.l_sum += lab.l as f64 * w64;
+                e.a_sum += lab.a as f64 * w64;
+                e.b_sum += lab.b as f64 * w64;
+                e.alpha_sum += alpha_f as f64 * w64;
+                e.weight += w64;
+            })
+            .or_insert_with(|| AlphaHistEntry {
+                l_sum: lab.l as f64 * w64,
+                a_sum: lab.a as f64 * w64,
+                b_sum: lab.b as f64 * w64,
+                alpha_sum: alpha_f as f64 * w64,
+                weight: w64,
+            });
+    }
+
+    let entries = buckets
+        .into_values()
+        .map(|e| {
+            if e.weight < 1e-10 {
+                (OKLabA::new(0.0, 0.0, 0.0, 0.0), 0.0)
+            } else {
+                let laba = OKLabA::new(
+                    (e.l_sum / e.weight) as f32,
+                    (e.a_sum / e.weight) as f32,
+                    (e.b_sum / e.weight) as f32,
+                    (e.alpha_sum / e.weight) as f32,
+                );
+                (laba, e.weight as f32)
+            }
+        })
+        .collect();
+
+    (entries, has_transparent)
+}
+
+/// Histogram entry with alpha accumulation.
+#[derive(Debug, Clone)]
+struct AlphaHistEntry {
+    l_sum: f64,
+    a_sum: f64,
+    b_sum: f64,
+    alpha_sum: f64,
+    weight: f64,
 }
 
 /// Detect if an RGB image uses at most `max_colors` unique colors.

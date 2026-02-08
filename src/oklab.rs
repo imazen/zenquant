@@ -24,6 +24,37 @@ impl OKLab {
     }
 }
 
+/// OKLab color with alpha channel for RGBA quantization.
+///
+/// Alpha is stored as a linear 0.0–1.0 value. Distance function premultiplies
+/// by alpha so color differences matter less for transparent pixels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OKLabA {
+    pub lab: OKLab,
+    pub alpha: f32,
+}
+
+impl OKLabA {
+    pub const fn new(l: f32, a: f32, b: f32, alpha: f32) -> Self {
+        Self {
+            lab: OKLab::new(l, a, b),
+            alpha,
+        }
+    }
+
+    /// Alpha-weighted squared distance.
+    ///
+    /// Color difference is scaled by average alpha — two transparent pixels
+    /// with different RGB values should be "close" since the color isn't visible.
+    /// Alpha difference is always significant.
+    pub fn distance_sq(self, other: Self) -> f32 {
+        let avg_alpha = (self.alpha + other.alpha) * 0.5;
+        let color_dist = self.lab.distance_sq(other.lab) * avg_alpha;
+        let alpha_diff = self.alpha - other.alpha;
+        color_dist + alpha_diff * alpha_diff
+    }
+}
+
 // --- sRGB transfer function (delegated to linear-srgb crate) ---
 
 /// sRGB gamma → linear (single channel, 0..255 → 0.0..1.0)

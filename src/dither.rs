@@ -21,6 +21,7 @@ pub enum DitherMode {
 ///
 /// `dither_strength` controls the fraction of quantization error to diffuse
 /// (0.0 = no dithering, 0.5 = half-strength, 1.0 = standard Floyd-Steinberg).
+#[allow(clippy::too_many_arguments)]
 pub fn dither_image(
     pixels: &[rgb::RGB<u8>],
     width: usize,
@@ -135,6 +136,7 @@ pub fn dither_image(
 }
 
 /// Apply dithering for RGBA images. Transparent pixels pass through unchanged.
+#[allow(clippy::too_many_arguments)]
 pub fn dither_image_rgba(
     pixels: &[rgb::RGBA<u8>],
     width: usize,
@@ -254,6 +256,171 @@ pub fn dither_image_rgba(
     }
 
     indices
+}
+
+/// Alpha-aware dithering: error diffusion includes alpha channel.
+/// Used when the palette has per-entry alpha values (PNG, WebP, JXL, Generic).
+#[allow(clippy::too_many_arguments)]
+pub fn dither_image_rgba_alpha(
+    pixels: &[rgb::RGBA<u8>],
+    width: usize,
+    height: usize,
+    weights: &[f32],
+    palette: &Palette,
+    mode: DitherMode,
+    run_priority: RunPriority,
+    dither_strength: f32,
+) -> Vec<u8> {
+    let transparent_idx = palette.transparent_index().unwrap_or(0);
+
+    if mode == DitherMode::None {
+        return simple_remap_rgba_alpha(pixels, palette, transparent_idx);
+    }
+
+    let run_bias = run_priority.bias();
+
+    // Working buffer: [L, a, b, alpha]
+    let mut lab_buf: Vec<[f32; 4]> = pixels
+        .iter()
+        .map(|p| {
+            let lab = srgb_to_oklab(p.r, p.g, p.b);
+            let alpha = p.a as f32 / 255.0;
+            [lab.l, lab.a, lab.b, alpha]
+        })
+        .collect();
+
+    let mut indices = vec![0u8; pixels.len()];
+    let mut prev_index: Option<u8> = None;
+
+    for y in 0..height {
+        for x in 0..width {
+            let idx = y * width + x;
+            let current_alpha = lab_buf[idx][3];
+
+            // Fully transparent
+            if pixels[idx].a == 0 {
+                indices[idx] = transparent_idx;
+                prev_index = Some(transparent_idx);
+                continue;
+            }
+
+            let current = OKLab::new(lab_buf[idx][0], lab_buf[idx][1], lab_buf[idx][2]);
+            let best = palette.nearest_with_alpha(current, current_alpha);
+            let best_lab = palette.entries_oklab()[best as usize];
+
+            let chosen = if run_bias > 0.0 {
+                if let Some(prev) = prev_index {
+                    if prev != transparent_idx {
+                        let prev_lab = palette.entries_oklab()[prev as usize];
+                        let prev_dist = current.distance_sq(prev_lab);
+                        let best_dist = current.distance_sq(best_lab);
+                        let w = weights[idx];
+                        let threshold = run_bias * best_dist * 2.0 * (1.1 - w);
+                        if prev_dist < best_dist + threshold {
+                            prev
+                        } else {
+                            best
+                        }
+                    } else {
+                        best
+                    }
+                } else {
+                    best
+                }
+            } else {
+                best
+            };
+
+            indices[idx] = chosen;
+            prev_index = Some(chosen);
+
+            let chosen_lab = palette.entries_oklab()[chosen as usize];
+            let chosen_alpha = palette.entries_rgba()[chosen as usize][3] as f32 / 255.0;
+
+            // Compute quantization error in color + alpha
+            let err_l = (current.l - chosen_lab.l) * dither_strength;
+            let err_a = (current.a - chosen_lab.a) * dither_strength;
+            let err_b = (current.b - chosen_lab.b) * dither_strength;
+            let err_al = (current_alpha - chosen_alpha) * dither_strength;
+
+            let adaptive = mode == DitherMode::Adaptive;
+
+            let diffuse_err = |buf: &mut [[f32; 4]],
+                               ti: usize,
+                               fraction: f32,
+                               el: f32,
+                               ea: f32,
+                               eb: f32,
+                               eal: f32,
+                               w_mod: f32| {
+                let scale = fraction * w_mod;
+                buf[ti][0] += el * scale;
+                buf[ti][1] += ea * scale;
+                buf[ti][2] += eb * scale;
+                buf[ti][3] += eal * scale;
+            };
+
+            // Don't diffuse error to fully-transparent neighbors
+            if x + 1 < width && pixels[idx + 1].a > 0 {
+                let w = if adaptive { weights[idx + 1] } else { 1.0 };
+                diffuse_err(
+                    &mut lab_buf,
+                    idx + 1,
+                    7.0 / 16.0,
+                    err_l,
+                    err_a,
+                    err_b,
+                    err_al,
+                    w,
+                );
+            }
+            if y + 1 < height {
+                if x > 0 {
+                    let ti = (y + 1) * width + (x - 1);
+                    if pixels[ti].a > 0 {
+                        let w = if adaptive { weights[ti] } else { 1.0 };
+                        diffuse_err(&mut lab_buf, ti, 3.0 / 16.0, err_l, err_a, err_b, err_al, w);
+                    }
+                }
+                {
+                    let ti = (y + 1) * width + x;
+                    if pixels[ti].a > 0 {
+                        let w = if adaptive { weights[ti] } else { 1.0 };
+                        diffuse_err(&mut lab_buf, ti, 5.0 / 16.0, err_l, err_a, err_b, err_al, w);
+                    }
+                }
+                if x + 1 < width {
+                    let ti = (y + 1) * width + (x + 1);
+                    if pixels[ti].a > 0 {
+                        let w = if adaptive { weights[ti] } else { 1.0 };
+                        diffuse_err(&mut lab_buf, ti, 1.0 / 16.0, err_l, err_a, err_b, err_al, w);
+                    }
+                }
+            }
+        }
+    }
+
+    indices
+}
+
+/// Simple nearest-color remap for alpha-aware palettes.
+fn simple_remap_rgba_alpha(
+    pixels: &[rgb::RGBA<u8>],
+    palette: &Palette,
+    transparent_idx: u8,
+) -> Vec<u8> {
+    pixels
+        .iter()
+        .map(|p| {
+            if p.a == 0 {
+                transparent_idx
+            } else {
+                let lab = srgb_to_oklab(p.r, p.g, p.b);
+                let alpha = p.a as f32 / 255.0;
+                palette.nearest_with_alpha(lab, alpha)
+            }
+        })
+        .collect()
 }
 
 /// Simple nearest-color remap without dithering.

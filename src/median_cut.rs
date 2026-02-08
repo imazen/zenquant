@@ -2,7 +2,7 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::oklab::OKLab;
+use crate::oklab::{OKLab, OKLabA};
 
 /// A box of color entries for median cut subdivision.
 #[derive(Debug, Clone)]
@@ -166,8 +166,7 @@ pub fn median_cut(histogram: Vec<(OKLab, f32)>, max_colors: usize, refine: bool)
 
     if refine {
         // Collect all histogram entries for refinement
-        let all_entries: Vec<(OKLab, f32)> =
-            boxes.into_iter().flat_map(|b| b.entries).collect();
+        let all_entries: Vec<(OKLab, f32)> = boxes.into_iter().flat_map(|b| b.entries).collect();
         palette = kmeans_refine(palette, &all_entries);
     }
 
@@ -345,6 +344,293 @@ fn find_nearest(centroids: &[OKLab], color: OKLab) -> usize {
     best_idx
 }
 
+// =====================================================================
+// Alpha-aware median cut (4D: L, a, b, alpha)
+// =====================================================================
+
+/// A box of color+alpha entries for median cut subdivision.
+#[derive(Debug, Clone)]
+struct ColorBoxA {
+    entries: Vec<(OKLabA, f32)>,
+}
+
+impl ColorBoxA {
+    fn new(entries: Vec<(OKLabA, f32)>) -> Self {
+        Self { entries }
+    }
+
+    fn total_weight(&self) -> f32 {
+        self.entries.iter().map(|(_, w)| w).sum()
+    }
+
+    fn ranges(&self) -> (f32, f32, f32, f32) {
+        let (mut l_min, mut l_max) = (f32::MAX, f32::MIN);
+        let (mut a_min, mut a_max) = (f32::MAX, f32::MIN);
+        let (mut b_min, mut b_max) = (f32::MAX, f32::MIN);
+        let (mut al_min, mut al_max) = (f32::MAX, f32::MIN);
+
+        for (laba, _) in &self.entries {
+            l_min = l_min.min(laba.lab.l);
+            l_max = l_max.max(laba.lab.l);
+            a_min = a_min.min(laba.lab.a);
+            a_max = a_max.max(laba.lab.a);
+            b_min = b_min.min(laba.lab.b);
+            b_max = b_max.max(laba.lab.b);
+            al_min = al_min.min(laba.alpha);
+            al_max = al_max.max(laba.alpha);
+        }
+
+        (l_max - l_min, a_max - a_min, b_max - b_min, al_max - al_min)
+    }
+
+    fn volume(&self) -> f32 {
+        let (rl, ra, rb, ral) = self.ranges();
+        rl * ra * rb * (ral + 0.01) // small epsilon so zero-alpha-range doesn't collapse volume
+    }
+
+    fn priority(&self) -> f32 {
+        self.total_weight() * self.volume()
+    }
+
+    fn centroid(&self) -> OKLabA {
+        let mut l_sum = 0.0f32;
+        let mut a_sum = 0.0f32;
+        let mut b_sum = 0.0f32;
+        let mut al_sum = 0.0f32;
+        let mut w_sum = 0.0f32;
+
+        for (laba, w) in &self.entries {
+            l_sum += laba.lab.l * w;
+            a_sum += laba.lab.a * w;
+            b_sum += laba.lab.b * w;
+            al_sum += laba.alpha * w;
+            w_sum += w;
+        }
+
+        if w_sum < 1e-10 {
+            return OKLabA::new(0.0, 0.0, 0.0, 1.0);
+        }
+
+        OKLabA::new(l_sum / w_sum, a_sum / w_sum, b_sum / w_sum, al_sum / w_sum)
+    }
+
+    fn split(mut self) -> (ColorBoxA, ColorBoxA) {
+        let (rl, ra, rb, ral) = self.ranges();
+
+        // Choose split axis (4D)
+        let axis = if rl >= ra && rl >= rb && rl >= ral {
+            0 // L
+        } else if ra >= rb && ra >= ral {
+            1 // a
+        } else if rb >= ral {
+            2 // b
+        } else {
+            3 // alpha
+        };
+
+        self.entries.sort_unstable_by(|a, b| {
+            let va = match axis {
+                0 => a.0.lab.l,
+                1 => a.0.lab.a,
+                2 => a.0.lab.b,
+                _ => a.0.alpha,
+            };
+            let vb = match axis {
+                0 => b.0.lab.l,
+                1 => b.0.lab.a,
+                2 => b.0.lab.b,
+                _ => b.0.alpha,
+            };
+            va.partial_cmp(&vb).unwrap_or(core::cmp::Ordering::Equal)
+        });
+
+        let half_weight = self.total_weight() / 2.0;
+        let mut accumulated = 0.0f32;
+        let mut split_idx = 1;
+
+        for (i, (_, w)) in self.entries.iter().enumerate() {
+            accumulated += w;
+            if accumulated >= half_weight && i + 1 < self.entries.len() {
+                split_idx = i + 1;
+                break;
+            }
+        }
+
+        split_idx = split_idx.max(1).min(self.entries.len() - 1);
+
+        let right = self.entries.split_off(split_idx);
+        (ColorBoxA::new(self.entries), ColorBoxA::new(right))
+    }
+}
+
+/// Alpha-aware median cut: quantize in 4D (OKLab + alpha) space.
+pub fn median_cut_alpha(
+    histogram: Vec<(OKLabA, f32)>,
+    max_colors: usize,
+    refine: bool,
+) -> Vec<OKLabA> {
+    if histogram.is_empty() {
+        return Vec::new();
+    }
+
+    if histogram.len() <= max_colors {
+        return histogram.into_iter().map(|(laba, _)| laba).collect();
+    }
+
+    let mut boxes = Vec::with_capacity(max_colors);
+    boxes.push(ColorBoxA::new(histogram));
+
+    while boxes.len() < max_colors {
+        let best_idx = boxes
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.entries.len() >= 2)
+            .max_by(|(_, a), (_, b)| {
+                a.priority()
+                    .partial_cmp(&b.priority())
+                    .unwrap_or(core::cmp::Ordering::Equal)
+            })
+            .map(|(i, _)| i);
+
+        let Some(idx) = best_idx else {
+            break;
+        };
+
+        let to_split = boxes.swap_remove(idx);
+        let (left, right) = to_split.split();
+        boxes.push(left);
+        boxes.push(right);
+    }
+
+    let mut palette: Vec<OKLabA> = boxes.iter().map(|b| b.centroid()).collect();
+
+    if refine {
+        let all_entries: Vec<(OKLabA, f32)> = boxes.into_iter().flat_map(|b| b.entries).collect();
+        palette = kmeans_refine_alpha(palette, &all_entries);
+    }
+
+    palette
+}
+
+/// K-means refinement in 4D OKLabA space.
+fn kmeans_refine_alpha(mut centroids: Vec<OKLabA>, entries: &[(OKLabA, f32)]) -> Vec<OKLabA> {
+    const MAX_ITERS: usize = 32;
+    const CONVERGENCE_THRESHOLD: f32 = 1e-6;
+
+    let k = centroids.len();
+
+    for _ in 0..MAX_ITERS {
+        let mut sums_l = vec![0.0f32; k];
+        let mut sums_a = vec![0.0f32; k];
+        let mut sums_b = vec![0.0f32; k];
+        let mut sums_al = vec![0.0f32; k];
+        let mut weights = vec![0.0f32; k];
+
+        for &(laba, w) in entries {
+            let nearest = find_nearest_alpha(&centroids, laba);
+            sums_l[nearest] += laba.lab.l * w;
+            sums_a[nearest] += laba.lab.a * w;
+            sums_b[nearest] += laba.lab.b * w;
+            sums_al[nearest] += laba.alpha * w;
+            weights[nearest] += w;
+        }
+
+        let mut max_movement = 0.0f32;
+        for i in 0..k {
+            if weights[i] > 1e-10 {
+                let new_centroid = OKLabA::new(
+                    sums_l[i] / weights[i],
+                    sums_a[i] / weights[i],
+                    sums_b[i] / weights[i],
+                    sums_al[i] / weights[i],
+                );
+                max_movement = max_movement.max(centroids[i].distance_sq(new_centroid));
+                centroids[i] = new_centroid;
+            }
+        }
+
+        if max_movement < CONVERGENCE_THRESHOLD {
+            break;
+        }
+    }
+
+    centroids
+}
+
+/// Refine alpha-aware centroids against original RGBA pixel data.
+pub fn refine_against_pixels_alpha(
+    mut centroids: Vec<OKLabA>,
+    pixels: &[rgb::RGBA<u8>],
+    weights: &[f32],
+    iterations: usize,
+) -> Vec<OKLabA> {
+    use crate::oklab::srgb_to_oklab;
+
+    let k = centroids.len();
+    if k == 0 {
+        return centroids;
+    }
+
+    for _ in 0..iterations {
+        let mut sums_l = vec![0.0f64; k];
+        let mut sums_a = vec![0.0f64; k];
+        let mut sums_b = vec![0.0f64; k];
+        let mut sums_al = vec![0.0f64; k];
+        let mut total_w = vec![0.0f64; k];
+
+        for (pixel, &weight) in pixels.iter().zip(weights.iter()) {
+            if pixel.a == 0 {
+                continue;
+            }
+            let lab = srgb_to_oklab(pixel.r, pixel.g, pixel.b);
+            let alpha_f = pixel.a as f32 / 255.0;
+            let laba = OKLabA::new(lab.l, lab.a, lab.b, alpha_f);
+            let nearest = find_nearest_alpha(&centroids, laba);
+            let w = weight as f64;
+            sums_l[nearest] += lab.l as f64 * w;
+            sums_a[nearest] += lab.a as f64 * w;
+            sums_b[nearest] += lab.b as f64 * w;
+            sums_al[nearest] += alpha_f as f64 * w;
+            total_w[nearest] += w;
+        }
+
+        let mut max_movement = 0.0f32;
+        for i in 0..k {
+            if total_w[i] > 1e-10 {
+                let new_centroid = OKLabA::new(
+                    (sums_l[i] / total_w[i]) as f32,
+                    (sums_a[i] / total_w[i]) as f32,
+                    (sums_b[i] / total_w[i]) as f32,
+                    (sums_al[i] / total_w[i]) as f32,
+                );
+                max_movement = max_movement.max(centroids[i].distance_sq(new_centroid));
+                centroids[i] = new_centroid;
+            }
+        }
+
+        if max_movement < 1e-6 {
+            break;
+        }
+    }
+
+    centroids
+}
+
+/// Find nearest centroid in 4D OKLabA space.
+#[inline]
+fn find_nearest_alpha(centroids: &[OKLabA], color: OKLabA) -> usize {
+    let mut best_idx = 0;
+    let mut best_dist = f32::MAX;
+    for (i, c) in centroids.iter().enumerate() {
+        let d = color.distance_sq(*c);
+        if d < best_dist {
+            best_dist = d;
+            best_idx = i;
+        }
+    }
+    best_idx
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,9 +718,7 @@ mod tests {
     #[test]
     fn convergence_stops_early() {
         // All identical entries — should converge in 1 iteration
-        let hist: Vec<(OKLab, f32)> = (0..100)
-            .map(|_| (OKLab::new(0.5, 0.0, 0.0), 1.0))
-            .collect();
+        let hist: Vec<(OKLab, f32)> = (0..100).map(|_| (OKLab::new(0.5, 0.0, 0.0), 1.0)).collect();
         let result = median_cut(hist, 4, true);
         assert!(!result.is_empty());
     }
