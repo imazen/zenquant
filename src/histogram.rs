@@ -33,32 +33,38 @@ impl HistEntry {
     }
 }
 
-/// Quantize an OKLab value to an 18-bit bucket key (6 bits per channel).
-///
-/// 6 bits per channel → 262,144 possible buckets. This is fine-grained enough
-/// to separate visually distinct colors while keeping the histogram manageable
-/// for median cut + k-means (typically a few thousand active entries).
-fn quantize_key(lab: OKLab) -> u32 {
-    // L is roughly [0, 1], a and b are roughly [-0.4, 0.4]
-    let l_bin = ((lab.l * 63.0).round() as u32).min(63);
-    let a_bin = (((lab.a + 0.4) * (63.0 / 0.8)).round() as u32).min(63);
-    let b_bin = (((lab.b + 0.4) * (63.0 / 0.8)).round() as u32).min(63);
-    (l_bin << 12) | (a_bin << 6) | b_bin
+/// Quantize an OKLab value to a bucket key at the given bit depth (4, 5, or 6 bits per channel).
+fn quantize_key(lab: OKLab, bits: u32) -> u32 {
+    let max_val = (1u32 << bits) - 1;
+    let scale = max_val as f32;
+    let l_bin = ((lab.l * scale).round() as u32).min(max_val);
+    let a_bin = (((lab.a + 0.4) * (scale / 0.8)).round() as u32).min(max_val);
+    let b_bin = (((lab.b + 0.4) * (scale / 0.8)).round() as u32).min(max_val);
+    (l_bin << (bits * 2)) | (a_bin << bits) | b_bin
 }
 
 /// Build a weighted color histogram from RGB pixels and per-pixel AQ weights.
 ///
-/// Colors are quantized to 6-bit-per-channel OKLab buckets (262K possible bins,
-/// typically a few thousand active). Weighted centroids are computed in f64 for
-/// accumulation stability.
+/// Uses 4-bit/channel OKLab quantization (4096 possible bins). This resolution
+/// keeps the histogram compact enough for k-means while avoiding fragmentation
+/// of dominant colors across too many buckets. Weighted centroids are computed
+/// in f64 for accumulation stability.
 pub fn build_histogram(pixels: &[rgb::RGB<u8>], weights: &[f32]) -> Vec<(OKLab, f32)> {
     assert_eq!(pixels.len(), weights.len());
 
+    let labs: Vec<OKLab> = pixels
+        .iter()
+        .map(|p| srgb_to_oklab(p.r, p.g, p.b))
+        .collect();
+
+    build_hist_at_depth(&labs, weights, 4)
+}
+
+fn build_hist_at_depth(labs: &[OKLab], weights: &[f32], bits: u32) -> Vec<(OKLab, f32)> {
     let mut buckets: BTreeMap<u32, HistEntry> = BTreeMap::new();
 
-    for (pixel, &weight) in pixels.iter().zip(weights.iter()) {
-        let lab = srgb_to_oklab(pixel.r, pixel.g, pixel.b);
-        let key = quantize_key(lab);
+    for (lab, &weight) in labs.iter().zip(weights.iter()) {
+        let key = quantize_key(*lab, bits);
         let w64 = weight as f64;
 
         buckets
@@ -93,42 +99,20 @@ pub fn build_histogram_rgba(
 ) -> (Vec<(OKLab, f32)>, bool) {
     assert_eq!(pixels.len(), weights.len());
 
-    let mut buckets: BTreeMap<u32, HistEntry> = BTreeMap::new();
     let mut has_transparent = false;
+    let mut labs = Vec::with_capacity(pixels.len());
+    let mut opaque_weights = Vec::with_capacity(pixels.len());
 
     for (pixel, &weight) in pixels.iter().zip(weights.iter()) {
         if pixel.a == 0 {
             has_transparent = true;
             continue;
         }
-
-        let lab = srgb_to_oklab(pixel.r, pixel.g, pixel.b);
-        let key = quantize_key(lab);
-        let w64 = weight as f64;
-
-        buckets
-            .entry(key)
-            .and_modify(|e| {
-                e.l_sum += lab.l as f64 * w64;
-                e.a_sum += lab.a as f64 * w64;
-                e.b_sum += lab.b as f64 * w64;
-                e.weight += w64;
-                e.count += 1;
-            })
-            .or_insert_with(|| HistEntry {
-                l_sum: lab.l as f64 * w64,
-                a_sum: lab.a as f64 * w64,
-                b_sum: lab.b as f64 * w64,
-                weight: w64,
-                count: 1,
-            });
+        labs.push(srgb_to_oklab(pixel.r, pixel.g, pixel.b));
+        opaque_weights.push(weight);
     }
 
-    let entries: Vec<(OKLab, f32)> = buckets
-        .into_values()
-        .map(|e| (e.centroid(), e.weight as f32))
-        .collect();
-
+    let entries = build_hist_at_depth(&labs, &opaque_weights, 4);
     (entries, has_transparent)
 }
 

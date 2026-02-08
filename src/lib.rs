@@ -116,7 +116,17 @@ pub fn quantize(
     // 3. Median cut with histogram-level k-means refinement
     let refine = config.quality >= 50;
     let max_colors = config.max_colors as usize;
-    let centroids = median_cut::median_cut(hist, max_colors, refine);
+    let hist_len = hist.len();
+    let mut centroids = median_cut::median_cut(hist, max_colors, refine);
+
+    // 3b. Pixel-level refinement for small images with coarse histograms.
+    // When the histogram has fewer entries than max_colors, median cut can't
+    // produce a full palette and k-means can't improve beyond histogram precision.
+    // Refining against actual pixels recovers the lost precision.
+    if refine && hist_len <= max_colors * 2 && pixels.len() <= 1_000_000 {
+        centroids =
+            median_cut::refine_against_pixels(centroids, pixels, &weights, 4);
+    }
 
     // 4. Build palette with delta-minimizing sort
     let pal = palette::Palette::from_centroids(centroids, false);
@@ -159,7 +169,13 @@ pub fn quantize_rgba(
     } else {
         config.max_colors as usize
     };
-    let centroids = median_cut::median_cut(hist, max_colors, refine);
+    let hist_len = hist.len();
+    let mut centroids = median_cut::median_cut(hist, max_colors, refine);
+
+    if refine && hist_len <= max_colors * 2 && pixels.len() <= 1_000_000 {
+        centroids =
+            median_cut::refine_against_pixels_rgba(centroids, pixels, &weights, 4);
+    }
 
     let pal = palette::Palette::from_centroids(centroids, has_transparent);
 
