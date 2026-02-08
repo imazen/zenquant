@@ -113,7 +113,7 @@ pub fn quantize(
     // 2. Build weighted histogram
     let hist = histogram::build_histogram(pixels, &weights);
 
-    // 3. Median cut with optional refinement
+    // 3. Median cut with histogram-level k-means refinement
     let refine = config.quality >= 50;
     let max_colors = config.max_colors as usize;
     let centroids = median_cut::median_cut(hist, max_colors, refine);

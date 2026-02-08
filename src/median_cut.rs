@@ -219,6 +219,117 @@ fn kmeans_refine(mut centroids: Vec<OKLab>, entries: &[(OKLab, f32)]) -> Vec<OKL
     centroids
 }
 
+/// Refine centroids against original pixel data.
+///
+/// Performs k-means refinement by scanning original pixels and recomputing
+/// centroids from pixel-to-centroid assignments. This is more accurate than
+/// refining against histogram entries alone, since it accounts for the actual
+/// pixel distribution rather than pre-quantized histogram approximations.
+pub fn refine_against_pixels(
+    mut centroids: Vec<OKLab>,
+    pixels: &[rgb::RGB<u8>],
+    weights: &[f32],
+    iterations: usize,
+) -> Vec<OKLab> {
+    use crate::oklab::srgb_to_oklab;
+
+    let k = centroids.len();
+    if k == 0 {
+        return centroids;
+    }
+
+    for _ in 0..iterations {
+        let mut sums_l = vec![0.0f64; k];
+        let mut sums_a = vec![0.0f64; k];
+        let mut sums_b = vec![0.0f64; k];
+        let mut total_w = vec![0.0f64; k];
+
+        for (pixel, &weight) in pixels.iter().zip(weights.iter()) {
+            let lab = srgb_to_oklab(pixel.r, pixel.g, pixel.b);
+            let nearest = find_nearest(&centroids, lab);
+            let w = weight as f64;
+            sums_l[nearest] += lab.l as f64 * w;
+            sums_a[nearest] += lab.a as f64 * w;
+            sums_b[nearest] += lab.b as f64 * w;
+            total_w[nearest] += w;
+        }
+
+        let mut max_movement = 0.0f32;
+        for i in 0..k {
+            if total_w[i] > 1e-10 {
+                let new_centroid = OKLab::new(
+                    (sums_l[i] / total_w[i]) as f32,
+                    (sums_a[i] / total_w[i]) as f32,
+                    (sums_b[i] / total_w[i]) as f32,
+                );
+                max_movement = max_movement.max(centroids[i].distance_sq(new_centroid));
+                centroids[i] = new_centroid;
+            }
+        }
+
+        if max_movement < 1e-7 {
+            break;
+        }
+    }
+
+    centroids
+}
+
+/// Refine centroids against original RGBA pixel data.
+/// Transparent pixels (alpha == 0) are skipped.
+pub fn refine_against_pixels_rgba(
+    mut centroids: Vec<OKLab>,
+    pixels: &[rgb::RGBA<u8>],
+    weights: &[f32],
+    iterations: usize,
+) -> Vec<OKLab> {
+    use crate::oklab::srgb_to_oklab;
+
+    let k = centroids.len();
+    if k == 0 {
+        return centroids;
+    }
+
+    for _ in 0..iterations {
+        let mut sums_l = vec![0.0f64; k];
+        let mut sums_a = vec![0.0f64; k];
+        let mut sums_b = vec![0.0f64; k];
+        let mut total_w = vec![0.0f64; k];
+
+        for (pixel, &weight) in pixels.iter().zip(weights.iter()) {
+            if pixel.a == 0 {
+                continue;
+            }
+            let lab = srgb_to_oklab(pixel.r, pixel.g, pixel.b);
+            let nearest = find_nearest(&centroids, lab);
+            let w = weight as f64;
+            sums_l[nearest] += lab.l as f64 * w;
+            sums_a[nearest] += lab.a as f64 * w;
+            sums_b[nearest] += lab.b as f64 * w;
+            total_w[nearest] += w;
+        }
+
+        let mut max_movement = 0.0f32;
+        for i in 0..k {
+            if total_w[i] > 1e-10 {
+                let new_centroid = OKLab::new(
+                    (sums_l[i] / total_w[i]) as f32,
+                    (sums_a[i] / total_w[i]) as f32,
+                    (sums_b[i] / total_w[i]) as f32,
+                );
+                max_movement = max_movement.max(centroids[i].distance_sq(new_centroid));
+                centroids[i] = new_centroid;
+            }
+        }
+
+        if max_movement < 1e-7 {
+            break;
+        }
+    }
+
+    centroids
+}
+
 /// Find the index of the nearest centroid to a given color.
 #[inline]
 fn find_nearest(centroids: &[OKLab], color: OKLab) -> usize {
