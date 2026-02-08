@@ -54,22 +54,54 @@ For each pixel, find K=4 nearest palette entries. If the previous pixel's index 
 
 Floyd-Steinberg with AQ modulation: error is diffused normally but *received* with the target pixel's AQ weight. Smooth regions get full error correction; textured regions get damped dithering. Optional run-aware dither suppression for compression priority.
 
+### 8. Format-Specific Optimization
+
+Each output format has different compression characteristics. `OutputFormat` controls palette sort strategy, dither strength, alpha handling, and post-processing:
+
+| Format | Sort | Dither | Alpha | Post-pass |
+|--------|------|--------|-------|-----------|
+| Generic | DeltaMinimize | 0.5 | Full 4D | — |
+| Gif | DeltaMinimize | 0.5 | Binary (0/255) | Frequency reorder |
+| Png | Luminance | 0.3 | Full 4D + tRNS | — |
+| WebpLossless | DeltaMinimize | 0.5 | Full 4D | — |
+| JxlModular | DeltaMinimize | 0.4 | Full 4D | — |
+
+**Luminance sort** (PNG): Orders palette by OKLab L ascending. Spatially neighboring pixels tend to have similar lightness, so scanline filters (sub/up) produce small deltas → better deflate compression.
+
+**Frequency reorder** (GIF): After dithering, sorts palette by descending usage frequency. Most-common colors get lowest indices, helping LZW dictionary construction.
+
+**Full alpha** (Generic/PNG/WebP/JXL): 4D OKLabA quantization. Alpha is a quantizable dimension — the pipeline builds histogram, median-cuts, and k-means-refines in 4D space. Each palette entry has its own alpha value. Distance metric premultiplies by alpha so transparent pixel color differences matter less.
+
+**Binary alpha** (GIF): Classic opaque + transparent index approach. Alpha==0 → transparent, else opaque.
+
+### 9. Already-Paletted Fast Path
+
+At the start of `quantize`/`quantize_rgba`, images with ≤`max_colors` unique colors are detected via BTreeSet scan with early exit. When triggered: skip masking, histogram, median cut, k-means, and dithering. Build palette directly from exact colors, apply format-specific sort, simple nearest-color remap. Lossless for already-paletted images.
+
 ## Public API
 
 ```rust
+use zenquant::{QuantizeConfig, OutputFormat, DitherMode, RunPriority};
+
+// Default: Generic format, 256 colors, quality 85
 let result = zenquant::quantize(pixels, width, height, &QuantizeConfig::default())?;
 
+// Format-specific optimization
 let config = QuantizeConfig::new()
     .max_colors(256)
     .quality(85)
-    .run_priority(RunPriority::Balanced)
-    .dither(DitherMode::Adaptive);
+    .output_format(OutputFormat::Png)      // PNG-optimized defaults
+    .dither(DitherMode::Adaptive)          // user override
+    .run_priority(RunPriority::Balanced);
 
 let result = zenquant::quantize(pixels, width, height, &config)?;
 
-result.palette()           // &[[u8; 3]] — sRGB, delta-sorted
-result.indices()           // &[u8] — palette indices
+result.palette()           // &[[u8; 3]] — sRGB entries
+result.palette_rgba()      // &[[u8; 4]] — RGBA entries (alpha per index)
+result.indices()           // &[u8] — palette indices per pixel
 result.transparent_index() // Option<u8>
+result.alpha_table()       // Option<Vec<u8>> — for PNG tRNS chunk
+result.palette_len()       // usize
 ```
 
-Input: `&[rgb::RGB<u8>]` or `&[rgb::RGBA<u8>]`. RGBA with alpha=0 gets a dedicated transparent index.
+Input: `&[rgb::RGB<u8>]` or `&[rgb::RGBA<u8>]`. RGBA with alpha=0 gets a dedicated transparent index. Format selection controls whether alpha is binary (GIF) or quantized as a 4th dimension (everything else).
