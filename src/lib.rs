@@ -262,14 +262,18 @@ pub fn quantize(
         });
     }
 
-    // 1. Compute AQ masking weights
-    let weights = masking::compute_masking_weights(pixels, width, height);
+    // 1. Compute AQ masking weights (skip for fast mode — uniform weights)
+    let refine = config.quality >= 50;
+    let weights = if refine {
+        masking::compute_masking_weights(pixels, width, height)
+    } else {
+        vec![1.0f32; pixels.len()]
+    };
 
     // 2. Build weighted histogram
     let hist = histogram::build_histogram(pixels, &weights);
 
     // 3. Median cut with histogram-level k-means refinement
-    let refine = config.quality >= 50;
     let mut centroids = median_cut::median_cut(hist, max_colors, refine);
 
     // 3b. Pixel-level k-means refinement.
@@ -283,7 +287,10 @@ pub fn quantize(
     }
 
     // 4. Build palette with format-specific sort
-    let pal = palette::Palette::from_centroids_sorted(centroids, false, tuning.sort_strategy);
+    let mut pal = palette::Palette::from_centroids_sorted(centroids, false, tuning.sort_strategy);
+    // Build sRGB nearest-neighbor cache — always pays for itself
+    // (32K cells vs 262K+ pixels, each saving 256 distance checks)
+    pal.build_nn_cache();
 
     // 5. Dither / remap
     // Keep greedy run-bias during dithering even when Viterbi will run.
@@ -300,14 +307,26 @@ pub fn quantize(
         tuning.dither_strength,
     );
 
-    // 5b. Viterbi scanline optimization
-    let viterbi_lambda = config.viterbi_lambda.unwrap_or(match config.run_priority {
-        RunPriority::Quality => 0.0,
-        RunPriority::Balanced => 0.01,
-        RunPriority::Compression => 0.02,
-    });
+    // 5b. Viterbi scanline optimization (quality >= 50 only)
+    let viterbi_lambda = if refine {
+        config.viterbi_lambda.unwrap_or(match config.run_priority {
+            RunPriority::Quality => 0.0,
+            RunPriority::Balanced => 0.01,
+            RunPriority::Compression => 0.02,
+        })
+    } else {
+        config.viterbi_lambda.unwrap_or(0.0)
+    };
     if viterbi_lambda > 0.0 {
-        remap::viterbi_refine(pixels, width, height, &weights, &pal, &mut indices, viterbi_lambda);
+        remap::viterbi_refine(
+            pixels,
+            width,
+            height,
+            &weights,
+            &pal,
+            &mut indices,
+            viterbi_lambda,
+        );
     }
 
     // 6. GIF frequency reorder (post-dither)
@@ -362,8 +381,12 @@ pub fn quantize_rgba(
         });
     }
 
-    let weights = masking::compute_masking_weights_rgba(pixels, width, height);
     let refine = config.quality >= 50;
+    let weights = if refine {
+        masking::compute_masking_weights_rgba(pixels, width, height)
+    } else {
+        vec![1.0f32; pixels.len()]
+    };
 
     let (pal, mut indices) = if tuning.alpha_mode == AlphaMode::Full {
         // Full alpha quantization: 4D OKLabA pipeline
@@ -395,11 +418,15 @@ pub fn quantize_rgba(
             tuning.sort_strategy,
         );
 
-        let viterbi_lambda = config.viterbi_lambda.unwrap_or(match config.run_priority {
-            RunPriority::Quality => 0.0,
-            RunPriority::Balanced => 0.01,
-            RunPriority::Compression => 0.02,
-        });
+        let viterbi_lambda = if refine {
+            config.viterbi_lambda.unwrap_or(match config.run_priority {
+                RunPriority::Quality => 0.0,
+                RunPriority::Balanced => 0.01,
+                RunPriority::Compression => 0.02,
+            })
+        } else {
+            config.viterbi_lambda.unwrap_or(0.0)
+        };
         let mut indices = dither::dither_image_rgba_alpha(
             pixels,
             width,
@@ -412,7 +439,15 @@ pub fn quantize_rgba(
         );
 
         if viterbi_lambda > 0.0 {
-            remap::viterbi_refine_rgba(pixels, width, height, &weights, &pal, &mut indices, viterbi_lambda);
+            remap::viterbi_refine_rgba(
+                pixels,
+                width,
+                height,
+                &weights,
+                &pal,
+                &mut indices,
+                viterbi_lambda,
+            );
         }
 
         (pal, indices)
@@ -436,17 +471,22 @@ pub fn quantize_rgba(
             }
         }
 
-        let pal = palette::Palette::from_centroids_sorted(
+        let mut pal = palette::Palette::from_centroids_sorted(
             centroids,
             has_transparent,
             tuning.sort_strategy,
         );
+        pal.build_nn_cache();
 
-        let viterbi_lambda = config.viterbi_lambda.unwrap_or(match config.run_priority {
-            RunPriority::Quality => 0.0,
-            RunPriority::Balanced => 0.01,
-            RunPriority::Compression => 0.02,
-        });
+        let viterbi_lambda = if refine {
+            config.viterbi_lambda.unwrap_or(match config.run_priority {
+                RunPriority::Quality => 0.0,
+                RunPriority::Balanced => 0.01,
+                RunPriority::Compression => 0.02,
+            })
+        } else {
+            config.viterbi_lambda.unwrap_or(0.0)
+        };
         let mut indices = dither::dither_image_rgba(
             pixels,
             width,
@@ -459,7 +499,15 @@ pub fn quantize_rgba(
         );
 
         if viterbi_lambda > 0.0 {
-            remap::viterbi_refine_rgba(pixels, width, height, &weights, &pal, &mut indices, viterbi_lambda);
+            remap::viterbi_refine_rgba(
+                pixels,
+                width,
+                height,
+                &weights,
+                &pal,
+                &mut indices,
+                viterbi_lambda,
+            );
         }
 
         (pal, indices)

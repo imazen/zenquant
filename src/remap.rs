@@ -61,14 +61,12 @@ pub fn remap_pixels(
             let max_acceptable = best_dist * 2.0; // base error budget
             let threshold = bias * max_acceptable * (1.1 - w);
 
-            if let Some(prev) = prev_index {
-                if candidates.contains(&prev) {
-                    let prev_dist = palette.distance_sq(lab, prev);
-                    if prev_dist < best_dist + threshold {
-                        indices[i] = prev;
-                        prev_index = Some(prev);
-                        continue;
-                    }
+            if let Some(prev) = prev_index.filter(|p| candidates.contains(p)) {
+                let prev_dist = palette.distance_sq(lab, prev);
+                if prev_dist < best_dist + threshold {
+                    indices[i] = prev;
+                    prev_index = Some(prev);
+                    continue;
                 }
             }
 
@@ -115,14 +113,14 @@ pub fn remap_pixels_rgba(
             let max_acceptable = best_dist * 2.0;
             let threshold = bias * max_acceptable * (1.1 - w);
 
-            if let Some(prev) = prev_index {
-                if prev != transparent_idx && candidates.contains(&prev) {
-                    let prev_dist = palette.distance_sq(lab, prev);
-                    if prev_dist < best_dist + threshold {
-                        indices[i] = prev;
-                        prev_index = Some(prev);
-                        continue;
-                    }
+            if let Some(prev) =
+                prev_index.filter(|&p| p != transparent_idx && candidates.contains(&p))
+            {
+                let prev_dist = palette.distance_sq(lab, prev);
+                if prev_dist < best_dist + threshold {
+                    indices[i] = prev;
+                    prev_index = Some(prev);
+                    continue;
                 }
             }
 
@@ -206,7 +204,11 @@ pub fn viterbi_refine_rgba(
                         let seg_pixels: Vec<rgb::RGB<u8>> = (start..x)
                             .map(|sx| {
                                 let p = &pixels[row_start + sx];
-                                rgb::RGB { r: p.r, g: p.g, b: p.b }
+                                rgb::RGB {
+                                    r: p.r,
+                                    g: p.g,
+                                    b: p.b,
+                                }
                             })
                             .collect();
                         let seg_weights = &weights[row_start + start..row_start + x];
@@ -251,66 +253,76 @@ fn viterbi_scanline(
     }
 
     // For each pixel, compute candidates and their quality costs.
-    // candidates[x] holds up to K candidate indices.
+    // candidates[x] stores up to K+1 candidate indices (K nearest + dithered).
     // quality_costs[x][j] = AQ_weight * distance_sq(pixel, palette[candidate_j])
     //
     // The dithered index is given a bonus: its quality cost is zeroed.
     // This makes Viterbi strongly prefer keeping the dithered choice,
     // only overriding when the transition cost savings are significant.
-    let mut candidates: Vec<Vec<u8>> = Vec::with_capacity(n);
-    let mut quality_costs: Vec<Vec<f32>> = Vec::with_capacity(n);
-    let mut dithered_cand_idx: Vec<usize> = Vec::with_capacity(n);
+    //
+    // Uses fixed-size arrays to avoid per-pixel allocation.
+    let max_cands = k + 1; // K nearest + potentially the dithered index
+    let mut candidates: Vec<[u8; 5]> = vec![[0u8; 5]; n]; // max K=4 + 1 dithered
+    let mut cand_counts: Vec<u8> = vec![0; n];
+    let mut quality_costs: Vec<[f32; 5]> = vec![[0.0f32; 5]; n];
+
+    let mut knn_buf = [0u8; 4]; // K=4
 
     for x in 0..n {
         let lab = srgb_to_oklab(pixels[x].r, pixels[x].g, pixels[x].b);
-        let mut cands = palette.k_nearest(lab, k);
+        let found = palette.k_nearest_into(lab, &mut knn_buf[..k]);
+
+        // Copy candidates to fixed array
+        let mut count = 0usize;
+        let current_idx = indices[x];
+        let mut dith_pos = None;
+
+        for &k in &knn_buf[..found] {
+            candidates[x][count] = k;
+            if k == current_idx {
+                dith_pos = Some(count);
+            }
+            count += 1;
+        }
 
         // Ensure the current dithered index is always a candidate
-        let current_idx = indices[x];
-        let dith_pos = if let Some(pos) = cands.iter().position(|&c| c == current_idx) {
-            pos
-        } else {
-            if cands.len() >= k {
-                cands.pop();
+        if dith_pos.is_none() {
+            if count >= max_cands {
+                count -= 1; // drop worst
             }
-            cands.push(current_idx);
-            cands.len() - 1
-        };
+            candidates[x][count] = current_idx;
+            dith_pos = Some(count);
+            count += 1;
+        }
 
-        let costs: Vec<f32> = cands
-            .iter()
-            .enumerate()
-            .map(|(j, &c)| {
-                if j == dith_pos {
-                    // Zero cost for keeping the dithered choice — preserves
-                    // error diffusion patterns in smooth regions
-                    0.0
-                } else {
-                    // Cost of switching: quality delta relative to dithered
-                    weights[x] * palette.distance_sq(lab, c)
-                }
-            })
-            .collect();
+        let dith_pos = dith_pos.unwrap();
+        cand_counts[x] = count as u8;
 
-        dithered_cand_idx.push(dith_pos);
-        candidates.push(cands);
-        quality_costs.push(costs);
+        // Compute quality costs
+        for j in 0..count {
+            quality_costs[x][j] = if j == dith_pos {
+                // Zero cost for keeping the dithered choice
+                0.0
+            } else {
+                weights[x] * palette.distance_sq(lab, candidates[x][j])
+            };
+        }
     }
 
-    // DP tables
+    // DP tables — fixed-size arrays, no per-pixel allocation
     // dp[j] = minimum total cost to reach candidate j at the current pixel
-    // backptr[x][j] = which candidate index (into candidates[x-1]) was the predecessor
-    let k0 = candidates[0].len();
-    let mut dp: Vec<f32> = quality_costs[0].clone();
-    let mut backptrs: Vec<Vec<u8>> = Vec::with_capacity(n);
-    backptrs.push(vec![0; k0]); // dummy for x=0
+    // backptrs[x][j] = which candidate index (into candidates[x-1]) was the predecessor
+    let k0 = cand_counts[0] as usize;
+    let mut dp = [f32::MAX; 5];
+    dp[..k0].copy_from_slice(&quality_costs[0][..k0]);
+    let mut backptrs: Vec<[u8; 5]> = vec![[0u8; 5]; n];
 
     // Forward pass
     for x in 1..n {
-        let k_cur = candidates[x].len();
-        let k_prev = candidates[x - 1].len();
-        let mut new_dp = vec![f32::MAX; k_cur];
-        let mut bp = vec![0u8; k_cur];
+        let k_cur = cand_counts[x] as usize;
+        let k_prev = cand_counts[x - 1] as usize;
+        let mut new_dp = [f32::MAX; 5];
+        let mut bp = [0u8; 5];
 
         let w = weights[x];
         // Transition cost: lambda * (1 - weight) when indices differ.
@@ -337,13 +349,14 @@ fn viterbi_scanline(
         }
 
         dp = new_dp;
-        backptrs.push(bp);
+        backptrs[x] = bp;
     }
 
     // Traceback: find the best final state
+    let k_last = cand_counts[n - 1] as usize;
     let mut best_j = 0;
     let mut best_cost = f32::MAX;
-    for (j, &cost) in dp.iter().enumerate() {
+    for (j, &cost) in dp[..k_last].iter().enumerate() {
         if cost < best_cost {
             best_cost = cost;
             best_j = j;

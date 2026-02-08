@@ -24,6 +24,12 @@ pub struct Palette {
     entries_oklab: Vec<OKLab>,
     /// Transparent index, if any.
     transparent_index: Option<u8>,
+    /// 5-bit sRGB nearest-neighbor cache: 32x32x32 = 32768 entries.
+    nn_cache: Option<Vec<u8>>,
+    /// Per-entry K nearest palette neighbors (for seeded dither search).
+    /// neighbors[i] = up to K closest palette indices to entry i.
+    neighbors: Vec<[u8; 16]>,
+    neighbor_counts: Vec<u8>,
 }
 
 impl Palette {
@@ -48,6 +54,9 @@ impl Palette {
                 entries_rgba: Vec::new(),
                 entries_oklab: Vec::new(),
                 transparent_index: if has_transparency { Some(0) } else { None },
+                nn_cache: None,
+                neighbors: Vec::new(),
+                neighbor_counts: Vec::new(),
             };
         }
 
@@ -82,11 +91,16 @@ impl Palette {
             None
         };
 
+        let (neighbors, neighbor_counts) = Self::compute_neighbors(&entries_oklab);
+
         Self {
             entries_srgb,
             entries_rgba,
             entries_oklab,
             transparent_index,
+            nn_cache: None,
+            neighbors,
+            neighbor_counts,
         }
     }
 
@@ -105,6 +119,9 @@ impl Palette {
                 entries_rgba: Vec::new(),
                 entries_oklab: Vec::new(),
                 transparent_index: if has_transparency { Some(0) } else { None },
+                nn_cache: None,
+                neighbors: Vec::new(),
+                neighbor_counts: Vec::new(),
             };
         }
 
@@ -158,11 +175,16 @@ impl Palette {
             None
         };
 
+        let (neighbors, neighbor_counts) = Self::compute_neighbors(&entries_oklab);
+
         Self {
             entries_srgb,
             entries_rgba,
             entries_oklab,
             transparent_index,
+            nn_cache: None,
+            neighbors,
+            neighbor_counts,
         }
     }
 
@@ -198,14 +220,15 @@ impl Palette {
         self.entries_srgb.is_empty()
     }
 
-    /// Find the nearest palette index for an OKLab color (brute force).
+    /// Find the nearest palette index for an OKLab color.
+    /// Uses SoA layout for better cache behavior.
+    #[inline]
     pub fn nearest(&self, color: OKLab) -> u8 {
         let start = if self.transparent_index.is_some() {
             1 // skip transparent entry
         } else {
             0
         };
-
         let mut best_idx = start;
         let mut best_dist = f32::MAX;
 
@@ -218,6 +241,56 @@ impl Palette {
         }
 
         best_idx as u8
+    }
+
+    /// Find nearest palette entry using a seed + neighbor refinement.
+    /// The seed is a good initial guess (e.g. from NN cache); we only check
+    /// the seed and its precomputed K=16 nearest palette neighbors.
+    /// Returns (index, distance_sq).
+    #[inline]
+    pub fn nearest_seeded(&self, color: OKLab, seed: u8) -> u8 {
+        let seed_idx = seed as usize;
+        let mut best_idx = seed_idx;
+        let mut best_dist = color.distance_sq(self.entries_oklab[seed_idx]);
+
+        let count = self.neighbor_counts[seed_idx] as usize;
+        let nbrs = &self.neighbors[seed_idx];
+        for &nbr in &nbrs[..count] {
+            let ni = nbr as usize;
+            let d = color.distance_sq(self.entries_oklab[ni]);
+            if d < best_dist {
+                best_dist = d;
+                best_idx = ni;
+            }
+        }
+
+        best_idx as u8
+    }
+
+    /// Compute K=16 nearest neighbors for each palette entry.
+    fn compute_neighbors(entries: &[OKLab]) -> (Vec<[u8; 16]>, Vec<u8>) {
+        let n = entries.len();
+        let mut neighbors = vec![[0u8; 16]; n];
+        let mut counts = vec![0u8; n];
+        const K: usize = 16;
+
+        for i in 0..n {
+            // Collect all distances to other entries
+            let mut dists: Vec<(u8, f32)> = (0..n)
+                .filter(|&j| j != i)
+                .map(|j| (j as u8, entries[i].distance_sq(entries[j])))
+                .collect();
+            dists.sort_unstable_by(|a, b| {
+                a.1.partial_cmp(&b.1).unwrap_or(core::cmp::Ordering::Equal)
+            });
+            let count = dists.len().min(K);
+            for k in 0..count {
+                neighbors[i][k] = dists[k].0;
+            }
+            counts[i] = count as u8;
+        }
+
+        (neighbors, counts)
     }
 
     /// Find the K nearest palette indices for an OKLab color.
@@ -236,6 +309,130 @@ impl Palette {
         dists.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(core::cmp::Ordering::Equal));
 
         dists.iter().take(k).map(|(idx, _)| *idx).collect()
+    }
+
+    /// Find the K nearest palette indices without allocation.
+    /// Writes indices to `out` and returns how many were written (up to K and out.len()).
+    /// Uses partial insertion sort — O(N*K) where N=palette size, K=candidates.
+    pub fn k_nearest_into(&self, color: OKLab, out: &mut [u8]) -> usize {
+        let k = out.len();
+        if k == 0 {
+            return 0;
+        }
+
+        let start = if self.transparent_index.is_some() {
+            1
+        } else {
+            0
+        };
+
+        // Track K best as (index, distance) pairs
+        let mut best = [(0u8, f32::MAX); 8]; // Max K=8, stack-allocated
+        let slots = k.min(best.len());
+        let mut filled = 0usize;
+
+        for i in start..self.entries_oklab.len() {
+            let d = color.distance_sq(self.entries_oklab[i]);
+
+            if filled < slots {
+                // Still filling — insert in sorted position
+                let mut pos = filled;
+                while pos > 0 && best[pos - 1].1 > d {
+                    best[pos] = best[pos - 1];
+                    pos -= 1;
+                }
+                best[pos] = (i as u8, d);
+                filled += 1;
+            } else if d < best[slots - 1].1 {
+                // Better than worst — insert in sorted position
+                let mut pos = slots - 1;
+                while pos > 0 && best[pos - 1].1 > d {
+                    best[pos] = best[pos - 1];
+                    pos -= 1;
+                }
+                best[pos] = (i as u8, d);
+            }
+        }
+
+        for i in 0..filled.min(k) {
+            out[i] = best[i].0;
+        }
+        filled.min(k)
+    }
+
+    /// Whether the nearest-neighbor cache has been built.
+    pub fn has_nn_cache(&self) -> bool {
+        self.nn_cache.is_some()
+    }
+
+    /// Build the nearest-neighbor cache for fast lookups.
+    /// Uses a 5-bit (32x32x32) sRGB grid — 32KB cache that maps each
+    /// grid cell center to its nearest palette index.
+    pub fn build_nn_cache(&mut self) {
+        const BITS: usize = 5;
+        const SIZE: usize = 1 << BITS; // 32
+        const TOTAL: usize = SIZE * SIZE * SIZE; // 32768
+        let shift = 8 - BITS; // 3
+
+        let start = if self.transparent_index.is_some() {
+            1
+        } else {
+            0
+        };
+        let mut cache = vec![0u8; TOTAL];
+
+        for ri in 0..SIZE {
+            for gi in 0..SIZE {
+                for bi in 0..SIZE {
+                    let r = ((ri << shift) | (1 << (shift - 1))) as u8;
+                    let g = ((gi << shift) | (1 << (shift - 1))) as u8;
+                    let b = ((bi << shift) | (1 << (shift - 1))) as u8;
+                    let lab = crate::oklab::srgb_to_oklab(r, g, b);
+
+                    let mut best_idx = start;
+                    let mut best_dist = f32::MAX;
+                    for i in start..self.entries_oklab.len() {
+                        let d = lab.distance_sq(self.entries_oklab[i]);
+                        if d < best_dist {
+                            best_dist = d;
+                            best_idx = i;
+                        }
+                    }
+                    cache[ri * SIZE * SIZE + gi * SIZE + bi] = best_idx as u8;
+                }
+            }
+        }
+
+        self.nn_cache = Some(cache);
+    }
+
+    /// Fast nearest-neighbor lookup using the sRGB cache.
+    /// Falls back to brute-force if cache isn't built.
+    #[inline]
+    pub fn nearest_cached(&self, r: u8, g: u8, b: u8) -> u8 {
+        if let Some(cache) = &self.nn_cache {
+            const SHIFT: usize = 3; // 8 - 5
+            const SIZE: usize = 32;
+            let ri = (r >> SHIFT) as usize;
+            let gi = (g >> SHIFT) as usize;
+            let bi = (b >> SHIFT) as usize;
+            cache[ri * SIZE * SIZE + gi * SIZE + bi]
+        } else {
+            let lab = crate::oklab::srgb_to_oklab(r, g, b);
+            self.nearest(lab)
+        }
+    }
+
+    /// Fast nearest-neighbor using the sRGB cache with OKLab→sRGB conversion.
+    /// Falls back to brute-force if cache isn't built.
+    #[inline]
+    pub fn nearest_fast(&self, color: OKLab) -> u8 {
+        if self.nn_cache.is_some() {
+            let (r, g, b) = oklab_to_srgb(color);
+            self.nearest_cached(r, g, b)
+        } else {
+            self.nearest(color)
+        }
     }
 
     /// Distance from a color to a palette entry.
@@ -385,11 +582,16 @@ pub(crate) fn reorder_by_frequency(palette: &Palette, indices: &mut [u8]) -> Pal
         new_oklab.push(palette.entries_oklab[old_idx]);
     }
 
+    let (neighbors, neighbor_counts) = Palette::compute_neighbors(&new_oklab);
+
     Palette {
         entries_srgb: new_srgb,
         entries_rgba: new_rgba,
         entries_oklab: new_oklab,
         transparent_index: transparent_idx,
+        nn_cache: None,
+        neighbors,
+        neighbor_counts,
     }
 }
 

@@ -55,8 +55,10 @@ pub fn dither_image(
             let idx = y * width + x;
             let current = OKLab::new(lab_buf[idx][0], lab_buf[idx][1], lab_buf[idx][2]);
 
-            // Find nearest palette entry
-            let best = palette.nearest(current);
+            // Find nearest palette entry using seed + neighbor refinement
+            let p = pixels[idx];
+            let seed = palette.nearest_cached(p.r, p.g, p.b);
+            let best = palette.nearest_seeded(current, seed);
             let best_lab = palette.entries_oklab()[best as usize];
 
             // Run-aware dither suppression: if we'd extend a run, and we're in
@@ -177,7 +179,9 @@ pub fn dither_image_rgba(
             }
 
             let current = OKLab::new(lab_buf[idx][0], lab_buf[idx][1], lab_buf[idx][2]);
-            let best = palette.nearest(current);
+            let p = pixels[idx];
+            let seed = palette.nearest_cached(p.r, p.g, p.b);
+            let best = palette.nearest_seeded(current, seed);
             let best_lab = palette.entries_oklab()[best as usize];
 
             let chosen = if run_bias > 0.0 {
@@ -424,14 +428,22 @@ fn simple_remap_rgba_alpha(
 }
 
 /// Simple nearest-color remap without dithering.
+/// Uses the sRGB nearest-neighbor cache if available.
 pub(crate) fn simple_remap(pixels: &[rgb::RGB<u8>], palette: &Palette) -> Vec<u8> {
-    pixels
-        .iter()
-        .map(|p| {
-            let lab = srgb_to_oklab(p.r, p.g, p.b);
-            palette.nearest(lab)
-        })
-        .collect()
+    if palette.has_nn_cache() {
+        pixels
+            .iter()
+            .map(|p| palette.nearest_cached(p.r, p.g, p.b))
+            .collect()
+    } else {
+        pixels
+            .iter()
+            .map(|p| {
+                let lab = srgb_to_oklab(p.r, p.g, p.b);
+                palette.nearest(lab)
+            })
+            .collect()
+    }
 }
 
 pub(crate) fn simple_remap_rgba(

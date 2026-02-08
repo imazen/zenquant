@@ -130,11 +130,7 @@ mod gif_integration {
     use enough::Unstoppable;
     use zenquant::{OutputFormat, QuantizeConfig};
 
-    fn encode_with_zenquant_palette(
-        result: &zenquant::QuantizeResult,
-        w: u16,
-        h: u16,
-    ) -> Vec<u8> {
+    fn encode_with_zenquant_palette(result: &zenquant::QuantizeResult, w: u16, h: u16) -> Vec<u8> {
         let palette = result.palette();
         let indices = result.indices();
         let transparent_idx = result.transparent_index();
@@ -160,8 +156,7 @@ mod gif_integration {
             .collect();
 
         let frame = zengif::FrameInput::with_palette(w, h, 10, rgba_pixels, gif_palette);
-        let config = zengif::EncoderConfig::new()
-            .quantizer(zengif::Quantizer::quantizr());
+        let config = zengif::EncoderConfig::new().quantizer(zengif::Quantizer::quantizr());
         zengif::encode_gif(
             vec![frame],
             w,
@@ -264,7 +259,8 @@ mod png_integration {
             encoder.set_color(png::ColorType::Indexed);
             encoder.set_depth(png::BitDepth::Eight);
 
-            let palette_flat: Vec<u8> = palette_rgb.iter().flat_map(|c| c.iter().copied()).collect();
+            let palette_flat: Vec<u8> =
+                palette_rgb.iter().flat_map(|c| c.iter().copied()).collect();
             encoder.set_palette(palette_flat);
 
             if let Some(trns) = alpha_table {
@@ -317,11 +313,9 @@ mod png_integration {
             };
             let name = path.file_name().unwrap().to_string_lossy();
 
-            let result =
-                zenquant::quantize(&pixels, w as usize, h as usize, &config).unwrap();
+            let result = zenquant::quantize(&pixels, w as usize, h as usize, &config).unwrap();
 
-            let png_data =
-                encode_indexed_png(result.palette(), result.indices(), w, h, None);
+            let png_data = encode_indexed_png(result.palette(), result.indices(), w, h, None);
 
             let (decoded, dw, dh) = decode_png_to_rgba(&png_data);
             assert_eq!(dw, w);
@@ -361,10 +355,8 @@ mod png_integration {
             };
             let name = path.file_name().unwrap().to_string_lossy();
 
-            let result =
-                zenquant::quantize(&pixels, w as usize, h as usize, &config).unwrap();
-            let indexed_png =
-                encode_indexed_png(result.palette(), result.indices(), w, h, None);
+            let result = zenquant::quantize(&pixels, w as usize, h as usize, &config).unwrap();
+            let indexed_png = encode_indexed_png(result.palette(), result.indices(), w, h, None);
 
             let truecolor_png = {
                 let mut buf = Vec::new();
@@ -408,10 +400,7 @@ mod png_integration {
                 .map(|e| e.path())
                 .filter(|p| {
                     p.extension().is_some_and(|ext| ext == "png")
-                        && p.file_name()
-                            .unwrap()
-                            .to_string_lossy()
-                            .starts_with("tbyn")
+                        && p.file_name().unwrap().to_string_lossy().starts_with("tbyn")
                 })
                 .collect()
         } else {
@@ -436,8 +425,7 @@ mod png_integration {
             }
 
             let config = QuantizeConfig::new().output_format(OutputFormat::Png);
-            let result =
-                zenquant::quantize_rgba(&pixels, w as usize, h as usize, &config).unwrap();
+            let result = zenquant::quantize_rgba(&pixels, w as usize, h as usize, &config).unwrap();
 
             let alpha_table = result.alpha_table();
             let png_data = encode_indexed_png(
@@ -473,8 +461,7 @@ mod png_integration {
             };
             let name = path.file_name().unwrap().to_string_lossy();
 
-            let result =
-                zenquant::quantize_rgba(&pixels, w as usize, h as usize, &config).unwrap();
+            let result = zenquant::quantize_rgba(&pixels, w as usize, h as usize, &config).unwrap();
             let alpha_table = result.alpha_table();
             let png_data = encode_indexed_png(
                 result.palette(),
@@ -533,8 +520,7 @@ mod webp_integration {
             };
             let name = path.file_name().unwrap().to_string_lossy();
 
-            let result =
-                zenquant::quantize(&pixels, w as usize, h as usize, &config).unwrap();
+            let result = zenquant::quantize(&pixels, w as usize, h as usize, &config).unwrap();
             let rgba = reconstruct_rgba(result.palette_rgba(), result.indices());
 
             let lossless_config = zenwebp::LosslessConfig::new();
@@ -576,8 +562,7 @@ mod webp_integration {
             };
             let name = path.file_name().unwrap().to_string_lossy();
 
-            let result =
-                zenquant::quantize(&pixels, w as usize, h as usize, &config).unwrap();
+            let result = zenquant::quantize(&pixels, w as usize, h as usize, &config).unwrap();
             let rgba = reconstruct_rgba(result.palette_rgba(), result.indices());
 
             let lossless_config = zenwebp::LosslessConfig::new();
@@ -620,8 +605,7 @@ mod webp_integration {
             };
             let name = path.file_name().unwrap().to_string_lossy();
 
-            let result =
-                zenquant::quantize(&pixels, w as usize, h as usize, &config).unwrap();
+            let result = zenquant::quantize(&pixels, w as usize, h as usize, &config).unwrap();
             let quant_rgba = reconstruct_rgba(result.palette_rgba(), result.indices());
             let quantized_webp = zenwebp::EncodeRequest::lossless(
                 &lossless_config,
@@ -633,8 +617,7 @@ mod webp_integration {
             .encode()
             .unwrap();
 
-            let raw_rgba: Vec<u8> =
-                pixels.iter().flat_map(|p| [p.r, p.g, p.b, 255]).collect();
+            let raw_rgba: Vec<u8> = pixels.iter().flat_map(|p| [p.r, p.g, p.b, 255]).collect();
             let raw_webp = zenwebp::EncodeRequest::lossless(
                 &lossless_config,
                 &raw_rgba,
@@ -702,8 +685,7 @@ mod cross_format {
 
             for &(fmt_name, fmt) in &formats {
                 let config = QuantizeConfig::new().output_format(fmt);
-                let result =
-                    zenquant::quantize(&pixels, w as usize, h as usize, &config).unwrap();
+                let result = zenquant::quantize(&pixels, w as usize, h as usize, &config).unwrap();
                 let deflate = deflate_size(result.indices());
                 let avg_run = zenquant::remap::average_run_length(result.indices());
                 eprintln!(

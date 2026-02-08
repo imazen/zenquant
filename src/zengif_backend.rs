@@ -225,14 +225,20 @@ pub fn quantize_animation(
         .map(|c| crate::oklab::srgb_to_oklab(c[0], c[1], c[2]))
         .collect();
 
-    let has_transparent = frames.iter().any(|(pixels, _)| pixels.iter().any(|p| p.a == 0));
+    let has_transparent = frames
+        .iter()
+        .any(|(pixels, _)| pixels.iter().any(|p| p.a == 0));
     let pal = crate::palette::Palette::from_centroids_sorted(
         centroids,
         has_transparent,
         crate::palette::PaletteSortStrategy::DeltaMinimize,
     );
 
-    let palette_flat: Vec<u8> = pal.entries().iter().flat_map(|c| c.iter().copied()).collect();
+    let palette_flat: Vec<u8> = pal
+        .entries()
+        .iter()
+        .flat_map(|c| c.iter().copied())
+        .collect();
     let gif_palette = Palette::from_rgb_bytes(&palette_flat);
 
     let mut result_frames = Vec::with_capacity(frames.len());
@@ -248,7 +254,8 @@ pub fn quantize_animation(
             })
             .collect();
 
-        let weights = crate::masking::compute_masking_weights_rgba(&rgba, width as usize, height as usize);
+        let weights =
+            crate::masking::compute_masking_weights_rgba(&rgba, width as usize, height as usize);
 
         let indices = crate::dither::dither_image_rgba(
             &rgba,

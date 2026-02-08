@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use zenquant::remap::average_run_length;
 use zenquant::{DitherMode, QuantizeConfig, RunPriority};
 
-const LAMBDAS: &[f32] = &[0.0, 0.001, 0.002, 0.003, 0.005, 0.008, 0.01, 0.02];
+const LAMBDAS: &[f32] = &[0.0, 0.005, 0.01, 0.02];
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -41,10 +41,7 @@ fn main() {
     paths.sort();
     paths.truncate(max_images);
 
-    eprintln!(
-        "Lambda sweep on {} images from {image_dir}",
-        paths.len()
-    );
+    eprintln!("Lambda sweep on {} images from {image_dir}", paths.len());
 
     // Pre-load images
     let images: Vec<(Vec<rgb::RGB<u8>>, Vec<RGB8>, usize, usize)> = paths
@@ -55,7 +52,11 @@ fn main() {
             let height = img.height() as usize;
             let pixels: Vec<rgb::RGB<u8>> = img
                 .pixels()
-                .map(|p| rgb::RGB { r: p.0[0], g: p.0[1], b: p.0[2] })
+                .map(|p| rgb::RGB {
+                    r: p.0[0],
+                    g: p.0[1],
+                    b: p.0[2],
+                })
                 .collect();
             let ref_rgb: Vec<RGB8> = pixels.iter().map(|p| RGB8::new(p.r, p.g, p.b)).collect();
             Some((pixels, ref_rgb, width, height))
@@ -63,7 +64,10 @@ fn main() {
         .collect();
 
     // Header
-    println!("{:<10} {:>8} {:>8} {:>8} {:>8}", "lambda", "BA", "SS2", "deflate", "runs");
+    println!(
+        "{:<10} {:>8} {:>8} {:>8} {:>8}",
+        "lambda", "BA", "SS2", "deflate", "runs"
+    );
     println!("{}", "-".repeat(44));
 
     for &lambda in LAMBDAS {
@@ -111,8 +115,8 @@ fn main() {
             let test_pixels: Vec<[u8; 3]> = test_rgb.iter().map(|p| [p.r, p.g, p.b]).collect();
             let ref_img_ss = ImgVec::new(ref_pixels, width, height);
             let test_img_ss = ImgVec::new(test_pixels, width, height);
-            let ss2 = compute_ssimulacra2(ref_img_ss.as_ref(), test_img_ss.as_ref())
-                .unwrap_or(f64::NAN);
+            let ss2 =
+                compute_ssimulacra2(ref_img_ss.as_ref(), test_img_ss.as_ref()).unwrap_or(f64::NAN);
 
             let avg_run = average_run_length(result.indices());
             let deflate = deflate_compress(result.indices());
