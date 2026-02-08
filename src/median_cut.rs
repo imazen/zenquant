@@ -40,10 +40,10 @@ impl ColorBox {
         (l_max - l_min, a_max - a_min, b_max - b_min)
     }
 
-    /// Volume of this box (product of ranges, or max range for split criterion).
+    /// Volume of this box (product of ranges).
     fn volume(&self) -> f32 {
         let (rl, ra, rb) = self.ranges();
-        rl.max(ra).max(rb) // Use max range as volume proxy for split priority
+        rl * ra * rb
     }
 
     /// Split priority: larger weighted boxes with more color variation split first.
@@ -175,10 +175,10 @@ pub fn median_cut(histogram: Vec<(OKLab, f32)>, max_colors: usize, refine: bool)
 }
 
 /// Weighted k-means refinement with convergence checking.
-/// Runs up to 16 iterations, stops early if centroids stabilize.
+/// Runs up to 32 iterations, stops early if centroids stabilize.
 fn kmeans_refine(mut centroids: Vec<OKLab>, entries: &[(OKLab, f32)]) -> Vec<OKLab> {
-    const MAX_ITERS: usize = 16;
-    const CONVERGENCE_THRESHOLD: f32 = 1e-7; // max centroid movement² to stop
+    const MAX_ITERS: usize = 32;
+    const CONVERGENCE_THRESHOLD: f32 = 1e-6; // max centroid movement² to stop
 
     let k = centroids.len();
 
@@ -267,7 +267,7 @@ pub fn refine_against_pixels(
             }
         }
 
-        if max_movement < 1e-7 {
+        if max_movement < 1e-6 {
             break;
         }
     }
@@ -322,7 +322,7 @@ pub fn refine_against_pixels_rgba(
             }
         }
 
-        if max_movement < 1e-7 {
+        if max_movement < 1e-6 {
             break;
         }
     }
