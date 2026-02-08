@@ -17,6 +17,10 @@ pub enum DitherMode {
     Adaptive,
 }
 
+/// Base dither strength: fraction of the quantization error to diffuse.
+/// 1.0 = standard Floyd-Steinberg, 0.5 = half-strength, 0.0 = no dithering.
+const DITHER_STRENGTH: f32 = 0.5;
+
 /// Apply Floyd-Steinberg error diffusion with AQ modulation.
 ///
 /// Returns palette indices for each pixel.
@@ -82,13 +86,13 @@ pub fn dither_image(
 
             let chosen_lab = palette.entries_oklab()[chosen as usize];
 
-            // Compute quantization error
-            let err_l = current.l - chosen_lab.l;
-            let err_a = current.a - chosen_lab.a;
-            let err_b = current.b - chosen_lab.b;
+            // Compute quantization error, scaled by dither strength
+            let err_l = (current.l - chosen_lab.l) * DITHER_STRENGTH;
+            let err_a = (current.a - chosen_lab.a) * DITHER_STRENGTH;
+            let err_b = (current.b - chosen_lab.b) * DITHER_STRENGTH;
 
             // Diffuse error with AQ modulation.
-            // Error is generated normally but *received* with the target pixel's AQ weight.
+            // Error is generated at reduced strength but *received* with the target pixel's AQ weight.
             let diffuse_err = |buf: &mut [[f32; 3]],
                                target_idx: usize,
                                fraction: f32,
@@ -201,9 +205,9 @@ pub fn dither_image_rgba(
             prev_index = Some(chosen);
 
             let chosen_lab = palette.entries_oklab()[chosen as usize];
-            let err_l = current.l - chosen_lab.l;
-            let err_a = current.a - chosen_lab.a;
-            let err_b = current.b - chosen_lab.b;
+            let err_l = (current.l - chosen_lab.l) * DITHER_STRENGTH;
+            let err_a = (current.a - chosen_lab.a) * DITHER_STRENGTH;
+            let err_b = (current.b - chosen_lab.b) * DITHER_STRENGTH;
 
             let adaptive = mode == DitherMode::Adaptive;
 
