@@ -325,8 +325,12 @@ pub fn quantize(
         tuning.dither_strength,
     );
 
-    // 5b. Viterbi scanline optimization (quality >= 50)
-    let viterbi_lambda = if use_masking {
+    // 5b. Run optimization
+    //   q >= 75: full Viterbi DP (optimal run extension, ~26ms)
+    //   q 50-74: fast run-extend post-pass (greedy bidirectional, ~1ms)
+    //   q < 50:  none (dither-level greedy run-bias only)
+    let use_viterbi = config.quality >= 75;
+    let run_lambda = if use_masking {
         config.viterbi_lambda.unwrap_or(match config.run_priority {
             RunPriority::Quality => 0.0,
             RunPriority::Balanced => 0.01,
@@ -335,16 +339,28 @@ pub fn quantize(
     } else {
         config.viterbi_lambda.unwrap_or(0.0)
     };
-    if viterbi_lambda > 0.0 {
-        remap::viterbi_refine(
-            pixels,
-            width,
-            height,
-            &weights,
-            &pal,
-            &mut indices,
-            viterbi_lambda,
-        );
+    if run_lambda > 0.0 {
+        if use_viterbi {
+            remap::viterbi_refine(
+                pixels,
+                width,
+                height,
+                &weights,
+                &pal,
+                &mut indices,
+                run_lambda,
+            );
+        } else {
+            remap::run_extend_refine(
+                pixels,
+                width,
+                height,
+                &weights,
+                &pal,
+                &mut indices,
+                run_lambda,
+            );
+        }
     }
 
     // 6. GIF frequency reorder (post-dither)
@@ -400,6 +416,7 @@ pub fn quantize_rgba(
     }
 
     let use_masking = config.quality >= 50;
+    let use_viterbi = config.quality >= 75;
     let kmeans_iters: usize = if config.quality >= 75 {
         8
     } else if config.quality >= 50 {
@@ -469,15 +486,27 @@ pub fn quantize_rgba(
         );
 
         if viterbi_lambda > 0.0 {
-            remap::viterbi_refine_rgba(
-                pixels,
-                width,
-                height,
-                &weights,
-                &pal,
-                &mut indices,
-                viterbi_lambda,
-            );
+            if use_viterbi {
+                remap::viterbi_refine_rgba(
+                    pixels,
+                    width,
+                    height,
+                    &weights,
+                    &pal,
+                    &mut indices,
+                    viterbi_lambda,
+                );
+            } else {
+                remap::run_extend_refine_rgba(
+                    pixels,
+                    width,
+                    height,
+                    &weights,
+                    &pal,
+                    &mut indices,
+                    viterbi_lambda,
+                );
+            }
         }
 
         (pal, indices)
@@ -538,15 +567,27 @@ pub fn quantize_rgba(
         );
 
         if viterbi_lambda > 0.0 {
-            remap::viterbi_refine_rgba(
-                pixels,
-                width,
-                height,
-                &weights,
-                &pal,
-                &mut indices,
-                viterbi_lambda,
-            );
+            if use_viterbi {
+                remap::viterbi_refine_rgba(
+                    pixels,
+                    width,
+                    height,
+                    &weights,
+                    &pal,
+                    &mut indices,
+                    viterbi_lambda,
+                );
+            } else {
+                remap::run_extend_refine_rgba(
+                    pixels,
+                    width,
+                    height,
+                    &weights,
+                    &pal,
+                    &mut indices,
+                    viterbi_lambda,
+                );
+            }
         }
 
         (pal, indices)

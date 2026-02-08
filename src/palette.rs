@@ -24,7 +24,7 @@ pub struct Palette {
     entries_oklab: Vec<OKLab>,
     /// Transparent index, if any.
     transparent_index: Option<u8>,
-    /// 5-bit sRGB nearest-neighbor cache: 32x32x32 = 32768 entries.
+    /// 4-bit sRGB nearest-neighbor cache: 16x16x16 = 4096 entries.
     nn_cache: Option<Vec<u8>>,
     /// Per-entry K nearest palette neighbors (for seeded dither search).
     /// neighbors[i] = up to K closest palette indices to entry i.
@@ -360,19 +360,71 @@ impl Palette {
         filled.min(k)
     }
 
+    /// Find K nearest palette indices using seed + neighbor refinement.
+    /// Searches seed + 16 neighbors (17 candidates), returns top-K.
+    /// Much faster than `k_nearest_into()` which scans all 256 entries.
+    pub fn k_nearest_seeded(&self, color: OKLab, seed: u8, out: &mut [u8]) -> usize {
+        let k = out.len();
+        if k == 0 {
+            return 0;
+        }
+
+        let seed_idx = seed as usize;
+        let count = self.neighbor_counts[seed_idx] as usize;
+        let nbrs = &self.neighbors[seed_idx];
+
+        // Track K best via insertion sort (same approach as k_nearest_into)
+        let mut best = [(0u8, f32::MAX); 8];
+        let slots = k.min(best.len());
+
+        // Check seed first
+        let d = color.distance_sq(self.entries_oklab[seed_idx]);
+        best[0] = (seed, d);
+        let mut filled = 1usize;
+
+        // Check all neighbors
+        for &nbr in &nbrs[..count] {
+            let ni = nbr as usize;
+            let d = color.distance_sq(self.entries_oklab[ni]);
+
+            if filled < slots {
+                let mut pos = filled;
+                while pos > 0 && best[pos - 1].1 > d {
+                    best[pos] = best[pos - 1];
+                    pos -= 1;
+                }
+                best[pos] = (nbr, d);
+                filled += 1;
+            } else if d < best[slots - 1].1 {
+                let mut pos = slots - 1;
+                while pos > 0 && best[pos - 1].1 > d {
+                    best[pos] = best[pos - 1];
+                    pos -= 1;
+                }
+                best[pos] = (nbr, d);
+            }
+        }
+
+        for i in 0..filled.min(k) {
+            out[i] = best[i].0;
+        }
+        filled.min(k)
+    }
+
     /// Whether the nearest-neighbor cache has been built.
     pub fn has_nn_cache(&self) -> bool {
         self.nn_cache.is_some()
     }
 
     /// Build the nearest-neighbor cache for fast lookups.
-    /// Uses a 5-bit (32x32x32) sRGB grid — 32KB cache that maps each
-    /// grid cell center to its nearest palette index.
+    /// Uses a 4-bit (16x16x16) sRGB grid — 4KB cache that maps each
+    /// grid cell center to its nearest palette index. Only used as a seed
+    /// for neighbor-refined searches, so lower resolution is fine.
     pub fn build_nn_cache(&mut self) {
-        const BITS: usize = 5;
-        const SIZE: usize = 1 << BITS; // 32
-        const TOTAL: usize = SIZE * SIZE * SIZE; // 32768
-        let shift = 8 - BITS; // 3
+        const BITS: usize = 4;
+        const SIZE: usize = 1 << BITS; // 16
+        const TOTAL: usize = SIZE * SIZE * SIZE; // 4096
+        let shift = 8 - BITS; // 4
 
         let start = if self.transparent_index.is_some() {
             1
@@ -411,8 +463,8 @@ impl Palette {
     #[inline]
     pub fn nearest_cached(&self, r: u8, g: u8, b: u8) -> u8 {
         if let Some(cache) = &self.nn_cache {
-            const SHIFT: usize = 3; // 8 - 5
-            const SIZE: usize = 32;
+            const SHIFT: usize = 4; // 8 - 4
+            const SIZE: usize = 16;
             let ri = (r >> SHIFT) as usize;
             let gi = (g >> SHIFT) as usize;
             let bi = (b >> SHIFT) as usize;

@@ -62,19 +62,31 @@ fn main() {
         centroids_mc.len()
     );
 
-    // Step 3b: Pixel-level k-means refinement
+    // Step 3b: Pixel-level k-means refinement (balanced = 2 iters)
+    let t = Instant::now();
+    let centroids_2 = if pixels.len() <= 500_000 {
+        median_cut::refine_against_pixels(centroids_mc.clone(), &pixels, &weights, 2)
+    } else {
+        let step = (pixels.len() / 250_000).max(1);
+        let sub_pixels: Vec<rgb::RGB<u8>> = pixels.iter().step_by(step).copied().collect();
+        let sub_weights: Vec<f32> = weights.iter().step_by(step).copied().collect();
+        median_cut::refine_against_pixels(centroids_mc.clone(), &sub_pixels, &sub_weights, 2)
+    };
+    let kmeans_2_ms = t.elapsed().as_secs_f64() * 1000.0;
+    println!("3b. K-means (2it):  {:>8.1}ms", kmeans_2_ms);
+
+    // Step 3c: Pixel-level k-means refinement (quality = 8 iters)
     let t = Instant::now();
     let centroids = if pixels.len() <= 500_000 {
         median_cut::refine_against_pixels(centroids_mc.clone(), &pixels, &weights, 8)
     } else {
-        // Subsample
         let step = (pixels.len() / 250_000).max(1);
         let sub_pixels: Vec<rgb::RGB<u8>> = pixels.iter().step_by(step).copied().collect();
         let sub_weights: Vec<f32> = weights.iter().step_by(step).copied().collect();
         median_cut::refine_against_pixels(centroids_mc.clone(), &sub_pixels, &sub_weights, 8)
     };
     let kmeans_ms = t.elapsed().as_secs_f64() * 1000.0;
-    println!("3b. K-means refine: {:>8.1}ms  (8 iters)", kmeans_ms);
+    println!("3c. K-means (8it):  {:>8.1}ms", kmeans_ms);
 
     // Step 4: Palette build + NN cache
     let t = Instant::now();

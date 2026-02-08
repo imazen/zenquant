@@ -159,13 +159,16 @@ pub fn viterbi_refine(
 
     const K: usize = 4;
 
+    // Pre-allocate buffers reused across scanlines
+    let mut bufs = ViterbiBufs::new(width);
+
     for y in 0..height {
         let row_start = y * width;
         let row = &pixels[row_start..row_start + width];
         let row_weights = &weights[row_start..row_start + width];
         let row_indices = &mut indices[row_start..row_start + width];
 
-        viterbi_scanline(row, row_weights, palette, row_indices, lambda, K);
+        viterbi_scanline(row, row_weights, palette, row_indices, lambda, K, &mut bufs);
     }
 }
 
@@ -185,6 +188,9 @@ pub fn viterbi_refine_rgba(
 
     const K: usize = 4;
     let transparent_idx = palette.transparent_index().unwrap_or(0);
+
+    // Pre-allocate buffers reused across scanlines/segments
+    let mut bufs = ViterbiBufs::new(width);
 
     for y in 0..height {
         let row_start = y * width;
@@ -214,7 +220,16 @@ pub fn viterbi_refine_rgba(
                         let seg_weights = &weights[row_start + start..row_start + x];
                         let seg_indices = &mut indices[row_start + start..row_start + x];
 
-                        viterbi_scanline(&seg_pixels, seg_weights, palette, seg_indices, lambda, K);
+                        bufs.ensure_capacity(seg_len);
+                        viterbi_scanline(
+                            &seg_pixels,
+                            seg_weights,
+                            palette,
+                            seg_indices,
+                            lambda,
+                            K,
+                            &mut bufs,
+                        );
                     }
                     seg_start = None;
                 }
@@ -225,6 +240,35 @@ pub fn viterbi_refine_rgba(
             } else if seg_start.is_none() {
                 seg_start = Some(x);
             }
+        }
+    }
+}
+
+/// Pre-allocated buffers for Viterbi scanline processing.
+/// Reused across scanlines to avoid per-scanline allocation.
+struct ViterbiBufs {
+    candidates: Vec<[u8; 5]>,
+    cand_counts: Vec<u8>,
+    quality_costs: Vec<[f32; 5]>,
+    backptrs: Vec<[u8; 5]>,
+}
+
+impl ViterbiBufs {
+    fn new(capacity: usize) -> Self {
+        Self {
+            candidates: vec![[0u8; 5]; capacity],
+            cand_counts: vec![0; capacity],
+            quality_costs: vec![[0.0f32; 5]; capacity],
+            backptrs: vec![[0u8; 5]; capacity],
+        }
+    }
+
+    fn ensure_capacity(&mut self, n: usize) {
+        if self.candidates.len() < n {
+            self.candidates.resize(n, [0u8; 5]);
+            self.cand_counts.resize(n, 0);
+            self.quality_costs.resize(n, [0.0f32; 5]);
+            self.backptrs.resize(n, [0u8; 5]);
         }
     }
 }
@@ -246,31 +290,31 @@ fn viterbi_scanline(
     indices: &mut [u8],
     lambda: f32,
     k: usize,
+    bufs: &mut ViterbiBufs,
 ) {
     let n = pixels.len();
     if n == 0 {
         return;
     }
 
-    // For each pixel, compute candidates and their quality costs.
-    // candidates[x] stores up to K+1 candidate indices (K nearest + dithered).
-    // quality_costs[x][j] = AQ_weight * distance_sq(pixel, palette[candidate_j])
-    //
-    // The dithered index is given a bonus: its quality cost is zeroed.
-    // This makes Viterbi strongly prefer keeping the dithered choice,
-    // only overriding when the transition cost savings are significant.
-    //
-    // Uses fixed-size arrays to avoid per-pixel allocation.
-    let max_cands = k + 1; // K nearest + potentially the dithered index
-    let mut candidates: Vec<[u8; 5]> = vec![[0u8; 5]; n]; // max K=4 + 1 dithered
-    let mut cand_counts: Vec<u8> = vec![0; n];
-    let mut quality_costs: Vec<[f32; 5]> = vec![[0.0f32; 5]; n];
+    bufs.ensure_capacity(n);
+    let max_cands = k + 1;
+    let candidates = &mut bufs.candidates[..n];
+    let cand_counts = &mut bufs.cand_counts[..n];
+    let quality_costs = &mut bufs.quality_costs[..n];
 
     let mut knn_buf = [0u8; 4]; // K=4
 
+    let has_cache = palette.has_nn_cache();
+
     for x in 0..n {
         let lab = srgb_to_oklab(pixels[x].r, pixels[x].g, pixels[x].b);
-        let found = palette.k_nearest_into(lab, &mut knn_buf[..k]);
+        let found = if has_cache {
+            let seed = palette.nearest_cached(pixels[x].r, pixels[x].g, pixels[x].b);
+            palette.k_nearest_seeded(lab, seed, &mut knn_buf[..k])
+        } else {
+            palette.k_nearest_into(lab, &mut knn_buf[..k])
+        };
 
         // Copy candidates to fixed array
         let mut count = 0usize;
@@ -315,7 +359,7 @@ fn viterbi_scanline(
     let k0 = cand_counts[0] as usize;
     let mut dp = [f32::MAX; 5];
     dp[..k0].copy_from_slice(&quality_costs[0][..k0]);
-    let mut backptrs: Vec<[u8; 5]> = vec![[0u8; 5]; n];
+    let backptrs = &mut bufs.backptrs[..n];
 
     // Forward pass
     for x in 1..n {
@@ -369,6 +413,86 @@ fn viterbi_scanline(
     for x in (1..n).rev() {
         j = backptrs[x][j] as usize;
         indices[x - 1] = candidates[x - 1][j];
+    }
+}
+
+/// Lightweight run-extension post-pass. O(n) per scanline.
+///
+/// Extends runs where the quality cost is within threshold. Much cheaper than
+/// full Viterbi (no k_nearest search, no DP) but greedy — can't plan ahead.
+/// Good for balanced mode where we want SOME compression benefit quickly.
+pub fn run_extend_refine(
+    pixels: &[rgb::RGB<u8>],
+    width: usize,
+    height: usize,
+    weights: &[f32],
+    palette: &Palette,
+    indices: &mut [u8],
+    lambda: f32,
+) {
+    if width <= 1 || lambda <= 0.0 {
+        return;
+    }
+
+    for y in 0..height {
+        let row_start = y * width;
+        // Forward pass: extend runs rightward where quality cost is acceptable.
+        // Only extend in textured regions (low weight) where changes are masked.
+        for x in 1..width {
+            let i = row_start + x;
+            if indices[i] != indices[i - 1] {
+                let w = weights[i];
+                // Only consider run extension in textured regions
+                if w > 0.7 {
+                    continue;
+                }
+                let lab = srgb_to_oklab(pixels[i].r, pixels[i].g, pixels[i].b);
+                let curr_dist = palette.distance_sq(lab, indices[i]);
+                let prev_dist = palette.distance_sq(lab, indices[i - 1]);
+                let threshold = lambda * (1.0 - w);
+                if prev_dist <= curr_dist + threshold {
+                    indices[i] = indices[i - 1];
+                }
+            }
+        }
+    }
+}
+
+/// Lightweight run-extension post-pass for RGBA images. Transparent pixels skipped.
+pub fn run_extend_refine_rgba(
+    pixels: &[rgb::RGBA<u8>],
+    width: usize,
+    height: usize,
+    weights: &[f32],
+    palette: &Palette,
+    indices: &mut [u8],
+    lambda: f32,
+) {
+    if width <= 1 || lambda <= 0.0 {
+        return;
+    }
+
+    for y in 0..height {
+        let row_start = y * width;
+        for x in 1..width {
+            let i = row_start + x;
+            if pixels[i].a == 0 || pixels[i - 1].a == 0 {
+                continue;
+            }
+            if indices[i] != indices[i - 1] {
+                let w = weights[i];
+                if w > 0.7 {
+                    continue;
+                }
+                let lab = srgb_to_oklab(pixels[i].r, pixels[i].g, pixels[i].b);
+                let curr_dist = palette.distance_sq(lab, indices[i]);
+                let prev_dist = palette.distance_sq(lab, indices[i - 1]);
+                let threshold = lambda * (1.0 - w);
+                if prev_dist <= curr_dist + threshold {
+                    indices[i] = indices[i - 1];
+                }
+            }
+        }
     }
 }
 

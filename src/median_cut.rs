@@ -237,15 +237,23 @@ pub fn refine_against_pixels(
         return centroids;
     }
 
+    // Pre-convert all pixels to OKLab once (avoids repeated cube-root per iteration)
+    let labs: Vec<OKLab> = pixels.iter().map(|p| srgb_to_oklab(p.r, p.g, p.b)).collect();
+
     for _ in 0..iterations {
+        // Build acceleration structures from current centroids
+        let nn_cache = build_centroid_nn_cache(&centroids);
+        let neighbors = build_centroid_neighbors(&centroids);
+
         let mut sums_l = vec![0.0f64; k];
         let mut sums_a = vec![0.0f64; k];
         let mut sums_b = vec![0.0f64; k];
         let mut total_w = vec![0.0f64; k];
 
-        for (pixel, &weight) in pixels.iter().zip(weights.iter()) {
-            let lab = srgb_to_oklab(pixel.r, pixel.g, pixel.b);
-            let nearest = find_nearest(&centroids, lab);
+        for (i, (pixel, &weight)) in pixels.iter().zip(weights.iter()).enumerate() {
+            let lab = labs[i];
+            let seed = centroid_cache_lookup(&nn_cache, pixel.r, pixel.g, pixel.b);
+            let nearest = find_nearest_seeded(&centroids, lab, seed, &neighbors);
             let w = weight as f64;
             sums_l[nearest] += lab.l as f64 * w;
             sums_a[nearest] += lab.a as f64 * w;
@@ -289,18 +297,35 @@ pub fn refine_against_pixels_rgba(
         return centroids;
     }
 
+    // Pre-convert all pixels to OKLab once (avoids repeated cube-root per iteration)
+    let labs: Vec<OKLab> = pixels
+        .iter()
+        .map(|p| {
+            if p.a == 0 {
+                OKLab::new(0.0, 0.0, 0.0) // placeholder for transparent pixels
+            } else {
+                srgb_to_oklab(p.r, p.g, p.b)
+            }
+        })
+        .collect();
+
     for _ in 0..iterations {
+        // Build acceleration structures from current centroids
+        let nn_cache = build_centroid_nn_cache(&centroids);
+        let neighbors = build_centroid_neighbors(&centroids);
+
         let mut sums_l = vec![0.0f64; k];
         let mut sums_a = vec![0.0f64; k];
         let mut sums_b = vec![0.0f64; k];
         let mut total_w = vec![0.0f64; k];
 
-        for (pixel, &weight) in pixels.iter().zip(weights.iter()) {
+        for (i, (pixel, &weight)) in pixels.iter().zip(weights.iter()).enumerate() {
             if pixel.a == 0 {
                 continue;
             }
-            let lab = srgb_to_oklab(pixel.r, pixel.g, pixel.b);
-            let nearest = find_nearest(&centroids, lab);
+            let lab = labs[i];
+            let seed = centroid_cache_lookup(&nn_cache, pixel.r, pixel.g, pixel.b);
+            let nearest = find_nearest_seeded(&centroids, lab, seed, &neighbors);
             let w = weight as f64;
             sums_l[nearest] += lab.l as f64 * w;
             sums_a[nearest] += lab.a as f64 * w;
@@ -342,6 +367,92 @@ fn find_nearest(centroids: &[OKLab], color: OKLab) -> usize {
         }
     }
     best_idx
+}
+
+// =====================================================================
+// Seeded nearest-neighbor acceleration for k-means
+// =====================================================================
+
+/// Build a 4-bit sRGB→centroid cache (16×16×16 = 4KB).
+/// Lower resolution than Palette's 5-bit cache, but sufficient for seeded
+/// search where the seed only needs to be approximate.
+fn build_centroid_nn_cache(centroids: &[OKLab]) -> Vec<u8> {
+    use crate::oklab::srgb_to_oklab;
+
+    const BITS: usize = 4;
+    const SIZE: usize = 1 << BITS; // 16
+    const TOTAL: usize = SIZE * SIZE * SIZE; // 4096
+    let shift = 8 - BITS; // 4
+
+    let mut cache = vec![0u8; TOTAL];
+
+    for r_idx in 0..SIZE {
+        for g_idx in 0..SIZE {
+            for b_idx in 0..SIZE {
+                let r = ((r_idx << shift) | (1 << (shift - 1))) as u8;
+                let g = ((g_idx << shift) | (1 << (shift - 1))) as u8;
+                let b = ((b_idx << shift) | (1 << (shift - 1))) as u8;
+                let lab = srgb_to_oklab(r, g, b);
+                let idx = find_nearest(centroids, lab);
+                let flat = (r_idx << (2 * BITS)) | (g_idx << BITS) | b_idx;
+                cache[flat] = idx as u8;
+            }
+        }
+    }
+
+    cache
+}
+
+/// Compute 16 nearest neighbors for each centroid.
+fn build_centroid_neighbors(centroids: &[OKLab]) -> Vec<[u8; 16]> {
+    let n = centroids.len();
+    let mut neighbors = vec![[0u8; 16]; n];
+    const K: usize = 16;
+
+    for i in 0..n {
+        let mut dists: Vec<(u8, f32)> = (0..n)
+            .filter(|&j| j != i)
+            .map(|j| (j as u8, centroids[i].distance_sq(centroids[j])))
+            .collect();
+        dists.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(core::cmp::Ordering::Equal));
+        let count = dists.len().min(K);
+        for k in 0..count {
+            neighbors[i][k] = dists[k].0;
+        }
+    }
+
+    neighbors
+}
+
+/// Find nearest centroid using seed + neighbor refinement (17 checks vs 256).
+#[inline]
+fn find_nearest_seeded(
+    centroids: &[OKLab],
+    color: OKLab,
+    seed: usize,
+    neighbors: &[[u8; 16]],
+) -> usize {
+    let mut best_idx = seed;
+    let mut best_dist = color.distance_sq(centroids[seed]);
+
+    for &nbr in &neighbors[seed] {
+        let ni = nbr as usize;
+        let d = color.distance_sq(centroids[ni]);
+        if d < best_dist {
+            best_dist = d;
+            best_idx = ni;
+        }
+    }
+
+    best_idx
+}
+
+/// Look up nearest centroid seed from 4-bit sRGB cache.
+#[inline]
+fn centroid_cache_lookup(cache: &[u8], r: u8, g: u8, b: u8) -> usize {
+    const SHIFT: usize = 4; // 8 - 4
+    let idx = ((r as usize >> SHIFT) << 8) | ((g as usize >> SHIFT) << 4) | (b as usize >> SHIFT);
+    cache[idx] as usize
 }
 
 // =====================================================================
