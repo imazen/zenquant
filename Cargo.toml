@@ -10,6 +10,7 @@ description = "AQ-informed palette quantizer — perceptual masking meets color 
 rgb = "0.8"
 imgref = "1"
 thiserror = { version = "2", default-features = false }
+linear-srgb = { version = "0.4", default-features = false }
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
@@ -21,7 +22,7 @@ fast-ssim2 = { version = "0.6", features = ["imgref"] }
 
 [features]
 default = ["std"]
-std = []
+std = ["linear-srgb/std"]
 
 [[example]]
 name = "compare"
