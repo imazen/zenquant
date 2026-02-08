@@ -56,7 +56,7 @@ pub fn build_histogram(pixels: &[rgb::RGB<u8>], weights: &[f32]) -> Vec<(OKLab, 
         .map(|p| srgb_to_oklab(p.r, p.g, p.b))
         .collect();
 
-    let bits = if pixels.len() <= 500_000 { 5 } else { 4 };
+    let bits = if pixels.len() <= 500_000 { 6 } else { 4 };
     build_hist_at_depth(&labs, weights, bits)
 }
 
