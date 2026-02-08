@@ -16,8 +16,10 @@ pub enum PaletteSortStrategy {
 /// A quantized color palette with OKLab-space acceleration.
 #[derive(Debug, Clone)]
 pub struct Palette {
-    /// sRGB palette entries, delta-sorted.
+    /// sRGB palette entries, sorted per strategy.
     entries_srgb: Vec<[u8; 3]>,
+    /// RGBA palette entries (same order). Alpha from quantization or 255 for opaque.
+    entries_rgba: Vec<[u8; 4]>,
     /// OKLab values for each palette entry (same order as entries_srgb).
     entries_oklab: Vec<OKLab>,
     /// Transparent index, if any.
@@ -43,6 +45,7 @@ impl Palette {
         if centroids.is_empty() {
             return Self {
                 entries_srgb: Vec::new(),
+                entries_rgba: Vec::new(),
                 entries_oklab: Vec::new(),
                 transparent_index: if has_transparency { Some(0) } else { None },
             };
@@ -63,11 +66,16 @@ impl Palette {
         };
 
         let mut entries_srgb: Vec<[u8; 3]> = sorted.iter().map(|(_, srgb)| *srgb).collect();
+        let mut entries_rgba: Vec<[u8; 4]> = entries_srgb
+            .iter()
+            .map(|[r, g, b]| [*r, *g, *b, 255])
+            .collect();
         let mut entries_oklab: Vec<OKLab> = sorted.iter().map(|(lab, _)| *lab).collect();
 
         let transparent_index = if has_transparency {
             // Reserve index 0 for transparency
             entries_srgb.insert(0, [0, 0, 0]);
+            entries_rgba.insert(0, [0, 0, 0, 0]);
             entries_oklab.insert(0, OKLab::new(0.0, 0.0, 0.0));
             Some(0)
         } else {
@@ -76,6 +84,7 @@ impl Palette {
 
         Self {
             entries_srgb,
+            entries_rgba,
             entries_oklab,
             transparent_index,
         }
@@ -84,6 +93,13 @@ impl Palette {
     /// Get sRGB palette entries.
     pub fn entries(&self) -> &[[u8; 3]] {
         &self.entries_srgb
+    }
+
+    /// Get RGBA palette entries. Alpha is 255 for opaque entries, 0 for the
+    /// transparent index (binary transparency), or the quantized alpha value
+    /// (full alpha mode).
+    pub fn entries_rgba(&self) -> &[[u8; 4]] {
+        &self.entries_rgba
     }
 
     /// Get OKLab palette entries.

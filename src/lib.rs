@@ -204,6 +204,25 @@ impl QuantizeResult {
     pub fn palette_len(&self) -> usize {
         self.palette.len()
     }
+
+    /// Get RGBA palette entries. Each entry has alpha: 255 for opaque,
+    /// 0 for the transparent index, or the quantized alpha value.
+    pub fn palette_rgba(&self) -> &[[u8; 4]] {
+        self.palette.entries_rgba()
+    }
+
+    /// Get the alpha table suitable for a PNG tRNS chunk.
+    ///
+    /// Returns alpha values for each palette index, truncated at the last
+    /// non-255 value. Returns `None` if all entries are fully opaque (no tRNS needed).
+    pub fn alpha_table(&self) -> Option<Vec<u8>> {
+        let rgba = self.palette.entries_rgba();
+        let alphas: Vec<u8> = rgba.iter().map(|e| e[3]).collect();
+
+        // Find last non-255 alpha
+        let last_non_opaque = alphas.iter().rposition(|&a| a != 255);
+        last_non_opaque.map(|pos| alphas[..=pos].to_vec())
+    }
 }
 
 /// Quantize an RGB image to a palette.
