@@ -2,7 +2,7 @@ extern crate alloc;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
-use crate::oklab::{srgb_to_oklab, OKLab};
+use crate::oklab::{OKLab, srgb_to_oklab};
 
 /// A histogram entry: accumulated color, weight, and count for a quantized bucket.
 #[derive(Debug, Clone)]
@@ -117,6 +117,63 @@ pub fn build_histogram_rgba(
     (entries, has_transparent)
 }
 
+/// Detect if an RGB image uses at most `max_colors` unique colors.
+/// Returns the exact palette if so, `None` if more colors exist.
+/// Uses early exit — scans until `max_colors + 1` unique colors found.
+pub(crate) fn detect_exact_palette(
+    pixels: &[rgb::RGB<u8>],
+    max_colors: usize,
+) -> Option<Vec<rgb::RGB<u8>>> {
+    let mut seen = alloc::collections::BTreeSet::new();
+    for p in pixels {
+        let key = (p.r as u32) << 16 | (p.g as u32) << 8 | p.b as u32;
+        seen.insert(key);
+        if seen.len() > max_colors {
+            return None;
+        }
+    }
+    Some(
+        seen.into_iter()
+            .map(|k| rgb::RGB {
+                r: (k >> 16) as u8,
+                g: (k >> 8) as u8,
+                b: k as u8,
+            })
+            .collect(),
+    )
+}
+
+/// Detect if an RGBA image uses at most `max_colors` unique colors (including alpha).
+/// Returns the exact palette and whether any fully-transparent pixels exist.
+pub(crate) fn detect_exact_palette_rgba(
+    pixels: &[rgb::RGBA<u8>],
+    max_colors: usize,
+) -> Option<(Vec<rgb::RGBA<u8>>, bool)> {
+    let mut seen = alloc::collections::BTreeSet::new();
+    let mut has_transparent = false;
+    for p in pixels {
+        if p.a == 0 {
+            has_transparent = true;
+            continue; // transparent pixels don't count toward palette
+        }
+        let key = (p.r as u32) << 24 | (p.g as u32) << 16 | (p.b as u32) << 8 | p.a as u32;
+        seen.insert(key);
+        if seen.len() > max_colors {
+            return None;
+        }
+    }
+    let colors = seen
+        .into_iter()
+        .map(|k| rgb::RGBA {
+            r: (k >> 24) as u8,
+            g: (k >> 16) as u8,
+            b: (k >> 8) as u8,
+            a: k as u8,
+        })
+        .collect();
+    Some((colors, has_transparent))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,7 +251,14 @@ mod tests {
     fn centroid_precision() {
         // Many pixels of the same color — centroid should be close to the input
         let lab = srgb_to_oklab(100, 150, 200);
-        let pixels = vec![rgb::RGB { r: 100, g: 150, b: 200 }; 10000];
+        let pixels = vec![
+            rgb::RGB {
+                r: 100,
+                g: 150,
+                b: 200
+            };
+            10000
+        ];
         let weights = vec![1.0; 10000];
         let hist = build_histogram(&pixels, &weights);
         assert_eq!(hist.len(), 1);

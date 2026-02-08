@@ -235,6 +235,21 @@ pub fn quantize(
     validate_inputs(pixels.len(), width, height, config)?;
 
     let tuning = QuantizeTuning::from_config(config);
+    let max_colors = config.max_colors as usize;
+
+    // Fast path: image already has ≤max_colors unique colors
+    if let Some(exact_colors) = histogram::detect_exact_palette(pixels, max_colors) {
+        let centroids: Vec<oklab::OKLab> = exact_colors
+            .iter()
+            .map(|c| oklab::srgb_to_oklab(c.r, c.g, c.b))
+            .collect();
+        let pal = palette::Palette::from_centroids_sorted(centroids, false, tuning.sort_strategy);
+        let indices = dither::simple_remap(pixels, &pal);
+        return Ok(QuantizeResult {
+            palette: pal,
+            indices,
+        });
+    }
 
     // 1. Compute AQ masking weights
     let weights = masking::compute_masking_weights(pixels, width, height);
@@ -244,7 +259,6 @@ pub fn quantize(
 
     // 3. Median cut with histogram-level k-means refinement
     let refine = config.quality >= 50;
-    let max_colors = config.max_colors as usize;
     let mut centroids = median_cut::median_cut(hist, max_colors, refine);
 
     // 3b. Pixel-level k-means refinement.
@@ -289,6 +303,28 @@ pub fn quantize_rgba(
     validate_inputs(pixels.len(), width, height, config)?;
 
     let tuning = QuantizeTuning::from_config(config);
+    let max_colors = config.max_colors as usize;
+
+    // Fast path: image already has ≤max_colors unique colors
+    if let Some((exact_colors, has_transparent)) =
+        histogram::detect_exact_palette_rgba(pixels, max_colors)
+    {
+        let centroids: Vec<oklab::OKLab> = exact_colors
+            .iter()
+            .map(|c| oklab::srgb_to_oklab(c.r, c.g, c.b))
+            .collect();
+        let pal = palette::Palette::from_centroids_sorted(
+            centroids,
+            has_transparent,
+            tuning.sort_strategy,
+        );
+        let transparent_idx = pal.transparent_index().unwrap_or(0);
+        let indices = dither::simple_remap_rgba(pixels, &pal, transparent_idx);
+        return Ok(QuantizeResult {
+            palette: pal,
+            indices,
+        });
+    }
 
     let weights = masking::compute_masking_weights_rgba(pixels, width, height);
 
@@ -296,12 +332,12 @@ pub fn quantize_rgba(
 
     let refine = config.quality >= 50;
     // Reserve one slot for transparency if needed
-    let max_colors = if has_transparent {
-        (config.max_colors as usize).saturating_sub(1)
+    let opaque_colors = if has_transparent {
+        max_colors.saturating_sub(1)
     } else {
-        config.max_colors as usize
+        max_colors
     };
-    let mut centroids = median_cut::median_cut(hist, max_colors, refine);
+    let mut centroids = median_cut::median_cut(hist, opaque_colors, refine);
 
     if refine {
         if pixels.len() <= 500_000 {
