@@ -185,7 +185,9 @@ fn upscale_bilinear(
 /// Low contrast (smooth) → high weight, high contrast (texture) → low weight.
 /// K is tuned so typical images have mean weight ~0.5.
 fn masking_to_weights(masking: &[f32]) -> Vec<f32> {
-    const K: f32 = 8.0;
+    // K=4.0 provides softer masking than K=8.0 — less aggressive suppression
+    // of dithering in moderately textured regions, better overall quality.
+    const K: f32 = 4.0;
 
     masking
         .iter()

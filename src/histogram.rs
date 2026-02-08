@@ -1,81 +1,50 @@
 extern crate alloc;
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
-use crate::oklab::{OKLab, srgb_to_oklab};
+use crate::oklab::{srgb_to_oklab, OKLab};
 
-/// A histogram entry: accumulated color, weight, and count for a quantized bucket.
+/// A histogram entry: accumulated color, weight, and count for a unique RGB color.
 #[derive(Debug, Clone)]
 pub struct HistEntry {
-    /// Sum of OKLab L values (weighted)
-    pub l_sum: f32,
-    /// Sum of OKLab a values (weighted)
-    pub a_sum: f32,
-    /// Sum of OKLab b values (weighted)
-    pub b_sum: f32,
+    /// OKLab value for this unique color
+    pub lab: OKLab,
     /// Total AQ weight accumulated
     pub weight: f32,
-    /// Number of pixels in this bucket
+    /// Number of pixels with this exact color
     pub count: u32,
 }
 
-impl HistEntry {
-    /// Compute the weighted centroid of this bucket.
-    pub fn centroid(&self) -> OKLab {
-        if self.weight < 1e-10 {
-            return OKLab::new(0.0, 0.0, 0.0);
-        }
-        OKLab::new(
-            self.l_sum / self.weight,
-            self.a_sum / self.weight,
-            self.b_sum / self.weight,
-        )
-    }
-}
-
-/// Quantize an OKLab value to a 12-bit bucket key (4 bits per channel).
-fn quantize_key(lab: OKLab) -> u16 {
-    // L is roughly [0, 1], a and b are roughly [-0.4, 0.4]
-    let l_bin = ((lab.l * 15.0).round() as u16).min(15);
-    let a_bin = (((lab.a + 0.4) * (15.0 / 0.8)).round() as u16).min(15);
-    let b_bin = (((lab.b + 0.4) * (15.0 / 0.8)).round() as u16).min(15);
-    (l_bin << 8) | (a_bin << 4) | b_bin
-}
-
 /// Build a weighted color histogram from RGB pixels and per-pixel AQ weights.
+///
+/// Each unique sRGB color becomes one histogram entry — no quantization loss.
+/// Returns (OKLab centroid, accumulated weight) pairs for median cut.
 pub fn build_histogram(pixels: &[rgb::RGB<u8>], weights: &[f32]) -> Vec<(OKLab, f32)> {
     assert_eq!(pixels.len(), weights.len());
 
-    // Use a simple array for 4096 buckets (12-bit keys)
-    let mut buckets: Vec<Option<HistEntry>> = (0..4096).map(|_| None).collect();
+    // Key on exact RGB triple — no information loss.
+    // Pack into u32: (r << 16) | (g << 8) | b
+    let mut buckets: BTreeMap<u32, HistEntry> = BTreeMap::new();
 
     for (pixel, &weight) in pixels.iter().zip(weights.iter()) {
-        let lab = srgb_to_oklab(pixel.r, pixel.g, pixel.b);
-        let key = quantize_key(lab) as usize;
+        let key = (pixel.r as u32) << 16 | (pixel.g as u32) << 8 | pixel.b as u32;
 
-        match &mut buckets[key] {
-            Some(entry) => {
-                entry.l_sum += lab.l * weight;
-                entry.a_sum += lab.a * weight;
-                entry.b_sum += lab.b * weight;
-                entry.weight += weight;
-                entry.count += 1;
-            }
-            slot @ None => {
-                *slot = Some(HistEntry {
-                    l_sum: lab.l * weight,
-                    a_sum: lab.a * weight,
-                    b_sum: lab.b * weight,
-                    weight,
-                    count: 1,
-                });
-            }
-        }
+        buckets
+            .entry(key)
+            .and_modify(|e| {
+                e.weight += weight;
+                e.count += 1;
+            })
+            .or_insert_with(|| HistEntry {
+                lab: srgb_to_oklab(pixel.r, pixel.g, pixel.b),
+                weight,
+                count: 1,
+            });
     }
 
     buckets
-        .into_iter()
-        .flatten()
-        .map(|e| (e.centroid(), e.weight))
+        .into_values()
+        .map(|e| (e.lab, e.weight))
         .collect()
 }
 
@@ -87,7 +56,7 @@ pub fn build_histogram_rgba(
 ) -> (Vec<(OKLab, f32)>, bool) {
     assert_eq!(pixels.len(), weights.len());
 
-    let mut buckets: Vec<Option<HistEntry>> = (0..4096).map(|_| None).collect();
+    let mut buckets: BTreeMap<u32, HistEntry> = BTreeMap::new();
     let mut has_transparent = false;
 
     for (pixel, &weight) in pixels.iter().zip(weights.iter()) {
@@ -96,33 +65,24 @@ pub fn build_histogram_rgba(
             continue;
         }
 
-        let lab = srgb_to_oklab(pixel.r, pixel.g, pixel.b);
-        let key = quantize_key(lab) as usize;
+        let key = (pixel.r as u32) << 16 | (pixel.g as u32) << 8 | pixel.b as u32;
 
-        match &mut buckets[key] {
-            Some(entry) => {
-                entry.l_sum += lab.l * weight;
-                entry.a_sum += lab.a * weight;
-                entry.b_sum += lab.b * weight;
-                entry.weight += weight;
-                entry.count += 1;
-            }
-            slot @ None => {
-                *slot = Some(HistEntry {
-                    l_sum: lab.l * weight,
-                    a_sum: lab.a * weight,
-                    b_sum: lab.b * weight,
-                    weight,
-                    count: 1,
-                });
-            }
-        }
+        buckets
+            .entry(key)
+            .and_modify(|e| {
+                e.weight += weight;
+                e.count += 1;
+            })
+            .or_insert_with(|| HistEntry {
+                lab: srgb_to_oklab(pixel.r, pixel.g, pixel.b),
+                weight,
+                count: 1,
+            });
     }
 
     let entries: Vec<(OKLab, f32)> = buckets
-        .into_iter()
-        .flatten()
-        .map(|e| (e.centroid(), e.weight))
+        .into_values()
+        .map(|e| (e.lab, e.weight))
         .collect();
 
     (entries, has_transparent)
@@ -176,11 +136,27 @@ mod tests {
         ];
         let weights = vec![1.0; 2];
         let hist = build_histogram(&pixels, &weights);
-        assert!(
-            hist.len() >= 2,
-            "expected at least 2 buckets, got {}",
-            hist.len()
-        );
+        assert_eq!(hist.len(), 2);
+    }
+
+    #[test]
+    fn similar_colors_stay_separate() {
+        // Adjacent RGB values should NOT be merged (unlike old 4-bit quantization)
+        let pixels = vec![
+            rgb::RGB {
+                r: 128,
+                g: 128,
+                b: 128,
+            },
+            rgb::RGB {
+                r: 129,
+                g: 128,
+                b: 128,
+            },
+        ];
+        let weights = vec![1.0; 2];
+        let hist = build_histogram(&pixels, &weights);
+        assert_eq!(hist.len(), 2, "similar colors must stay in separate buckets");
     }
 
     #[test]

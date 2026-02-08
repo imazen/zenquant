@@ -1,4 +1,5 @@
 extern crate alloc;
+use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::oklab::OKLab;
@@ -6,7 +7,7 @@ use crate::oklab::OKLab;
 /// A box of color entries for median cut subdivision.
 #[derive(Debug, Clone)]
 struct ColorBox {
-    entries: Vec<(OKLab, f32)>, // (centroid, accumulated_weight)
+    entries: Vec<(OKLab, f32)>, // (color, accumulated_weight)
 }
 
 impl ColorBox {
@@ -122,10 +123,10 @@ impl ColorBox {
 
 /// Perform weighted median cut quantization.
 ///
-/// Takes histogram entries (OKLab centroid, accumulated weight) and produces
+/// Takes histogram entries (OKLab color, accumulated weight) and produces
 /// up to `max_colors` palette centroids in OKLab space.
 ///
-/// If `refine` is true, performs one round of weighted k-means after median cut.
+/// If `refine` is true, performs k-means refinement after median cut.
 pub fn median_cut(histogram: Vec<(OKLab, f32)>, max_colors: usize, refine: bool) -> Vec<OKLab> {
     if histogram.is_empty() {
         return Vec::new();
@@ -164,57 +165,73 @@ pub fn median_cut(histogram: Vec<(OKLab, f32)>, max_colors: usize, refine: bool)
     let mut palette: Vec<OKLab> = boxes.iter().map(|b| b.centroid()).collect();
 
     if refine {
-        palette = kmeans_refine(palette, &boxes);
+        // Collect all histogram entries for refinement
+        let all_entries: Vec<(OKLab, f32)> =
+            boxes.into_iter().flat_map(|b| b.entries).collect();
+        palette = kmeans_refine(palette, &all_entries);
     }
 
     palette
 }
 
-/// One round of weighted k-means refinement.
-fn kmeans_refine(mut centroids: Vec<OKLab>, boxes: &[ColorBox]) -> Vec<OKLab> {
-    // Collect all entries
-    let all_entries: Vec<&(OKLab, f32)> = boxes.iter().flat_map(|b| &b.entries).collect();
+/// Weighted k-means refinement with convergence checking.
+/// Runs up to 16 iterations, stops early if centroids stabilize.
+fn kmeans_refine(mut centroids: Vec<OKLab>, entries: &[(OKLab, f32)]) -> Vec<OKLab> {
+    const MAX_ITERS: usize = 16;
+    const CONVERGENCE_THRESHOLD: f32 = 1e-7; // max centroid movement² to stop
 
-    // 3 iterations of k-means
-    for _ in 0..3 {
-        let k = centroids.len();
+    let k = centroids.len();
+
+    for _ in 0..MAX_ITERS {
         let mut sums_l = vec![0.0f32; k];
         let mut sums_a = vec![0.0f32; k];
         let mut sums_b = vec![0.0f32; k];
         let mut weights = vec![0.0f32; k];
 
         // Assign each entry to nearest centroid
-        for &(lab, w) in &all_entries {
-            let nearest = centroids
-                .iter()
-                .enumerate()
-                .min_by(|(_, a), (_, b)| {
-                    lab.distance_sq(**a)
-                        .partial_cmp(&lab.distance_sq(**b))
-                        .unwrap_or(core::cmp::Ordering::Equal)
-                })
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-
+        for &(lab, w) in entries {
+            let nearest = find_nearest(&centroids, lab);
             sums_l[nearest] += lab.l * w;
             sums_a[nearest] += lab.a * w;
             sums_b[nearest] += lab.b * w;
             weights[nearest] += w;
         }
 
-        // Recompute centroids
+        // Recompute centroids and track movement
+        let mut max_movement = 0.0f32;
         for i in 0..k {
             if weights[i] > 1e-10 {
-                centroids[i] = OKLab::new(
+                let new_centroid = OKLab::new(
                     sums_l[i] / weights[i],
                     sums_a[i] / weights[i],
                     sums_b[i] / weights[i],
                 );
+                max_movement = max_movement.max(centroids[i].distance_sq(new_centroid));
+                centroids[i] = new_centroid;
             }
+        }
+
+        if max_movement < CONVERGENCE_THRESHOLD {
+            break;
         }
     }
 
     centroids
+}
+
+/// Find the index of the nearest centroid to a given color.
+#[inline]
+fn find_nearest(centroids: &[OKLab], color: OKLab) -> usize {
+    let mut best_idx = 0;
+    let mut best_dist = f32::MAX;
+    for (i, c) in centroids.iter().enumerate() {
+        let d = color.distance_sq(*c);
+        if d < best_dist {
+            best_dist = d;
+            best_idx = i;
+        }
+    }
+    best_idx
 }
 
 #[cfg(test)]
@@ -276,7 +293,7 @@ mod tests {
     }
 
     #[test]
-    fn refinement_doesnt_crash() {
+    fn refinement_improves_centroids() {
         let mut hist = Vec::new();
         for i in 0..50 {
             let l = i as f32 / 50.0;
@@ -285,7 +302,43 @@ mod tests {
                 1.0,
             ));
         }
-        let result = median_cut(hist, 8, true);
-        assert_eq!(result.len(), 8);
+
+        let unrefined = median_cut(hist.clone(), 8, false);
+        let refined = median_cut(hist.clone(), 8, true);
+
+        assert_eq!(unrefined.len(), 8);
+        assert_eq!(refined.len(), 8);
+
+        // Refinement should produce lower total error
+        let err_unrefined = total_error(&hist, &unrefined);
+        let err_refined = total_error(&hist, &refined);
+        assert!(
+            err_refined <= err_unrefined,
+            "refinement should not increase error: unrefined={err_unrefined}, refined={err_refined}"
+        );
+    }
+
+    #[test]
+    fn convergence_stops_early() {
+        // All identical entries — should converge in 1 iteration
+        let hist: Vec<(OKLab, f32)> = (0..100)
+            .map(|_| (OKLab::new(0.5, 0.0, 0.0), 1.0))
+            .collect();
+        let result = median_cut(hist, 4, true);
+        assert!(!result.is_empty());
+    }
+
+    /// Helper: compute total weighted quantization error
+    fn total_error(entries: &[(OKLab, f32)], centroids: &[OKLab]) -> f32 {
+        entries
+            .iter()
+            .map(|&(lab, w)| {
+                let min_dist = centroids
+                    .iter()
+                    .map(|c| lab.distance_sq(*c))
+                    .fold(f32::MAX, f32::min);
+                min_dist * w
+            })
+            .sum()
     }
 }
