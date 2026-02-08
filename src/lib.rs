@@ -118,13 +118,18 @@ pub fn quantize(
     let max_colors = config.max_colors as usize;
     let mut centroids = median_cut::median_cut(hist, max_colors, refine);
 
-    // 3b. Pixel-level refinement for small images with coarse histograms.
-    // When the histogram has fewer entries than max_colors, median cut can't
-    // produce a full palette and k-means can't improve beyond histogram precision.
-    // Refining against actual pixels recovers the lost precision.
-    if refine && centroids.len() < max_colors && pixels.len() <= 1_000_000 {
-        centroids =
-            median_cut::refine_against_pixels(centroids, pixels, &weights, 4);
+    // 3b. Pixel-level k-means refinement.
+    // For small images: refine against full pixel data (high precision).
+    // For large images: subsample pixels for refinement (avoids O(n*k*iter) blowup).
+    if refine {
+        if pixels.len() <= 500_000 {
+            centroids =
+                median_cut::refine_against_pixels(centroids, pixels, &weights, 8);
+        } else {
+            let (sub_pixels, sub_weights) = subsample_pixels(pixels, &weights, width);
+            centroids =
+                median_cut::refine_against_pixels(centroids, &sub_pixels, &sub_weights, 8);
+        }
     }
 
     // 4. Build palette with delta-minimizing sort
@@ -170,9 +175,15 @@ pub fn quantize_rgba(
     };
     let mut centroids = median_cut::median_cut(hist, max_colors, refine);
 
-    if refine && centroids.len() < max_colors && pixels.len() <= 1_000_000 {
-        centroids =
-            median_cut::refine_against_pixels_rgba(centroids, pixels, &weights, 4);
+    if refine {
+        if pixels.len() <= 500_000 {
+            centroids =
+                median_cut::refine_against_pixels_rgba(centroids, pixels, &weights, 8);
+        } else {
+            let (sub_pixels, sub_weights) = subsample_pixels_rgba(pixels, &weights, width);
+            centroids =
+                median_cut::refine_against_pixels_rgba(centroids, &sub_pixels, &sub_weights, 8);
+        }
     }
 
     let pal = palette::Palette::from_centroids(centroids, has_transparent);
@@ -191,6 +202,62 @@ pub fn quantize_rgba(
         palette: pal,
         indices,
     })
+}
+
+/// Subsample RGB pixels for k-means refinement on large images.
+/// Takes every Nth pixel (with corresponding weight) to produce ~250K samples.
+fn subsample_pixels(
+    pixels: &[rgb::RGB<u8>],
+    weights: &[f32],
+    width: usize,
+) -> (Vec<rgb::RGB<u8>>, Vec<f32>) {
+    const TARGET: usize = 250_000;
+    let step = (pixels.len() / TARGET).max(1);
+    let height = pixels.len() / width;
+
+    let mut sub_pixels = Vec::with_capacity(TARGET + width);
+    let mut sub_weights = Vec::with_capacity(TARGET + width);
+
+    // Sample evenly across rows to maintain spatial distribution
+    for y in 0..height {
+        let row_start = y * width;
+        let mut x = (y * 3) % step; // offset per row to avoid column aliasing
+        while x < width {
+            let idx = row_start + x;
+            sub_pixels.push(pixels[idx]);
+            sub_weights.push(weights[idx]);
+            x += step;
+        }
+    }
+
+    (sub_pixels, sub_weights)
+}
+
+/// Subsample RGBA pixels for k-means refinement on large images.
+fn subsample_pixels_rgba(
+    pixels: &[rgb::RGBA<u8>],
+    weights: &[f32],
+    width: usize,
+) -> (Vec<rgb::RGBA<u8>>, Vec<f32>) {
+    const TARGET: usize = 250_000;
+    let step = (pixels.len() / TARGET).max(1);
+    let height = pixels.len() / width;
+
+    let mut sub_pixels = Vec::with_capacity(TARGET + width);
+    let mut sub_weights = Vec::with_capacity(TARGET + width);
+
+    for y in 0..height {
+        let row_start = y * width;
+        let mut x = (y * 3) % step;
+        while x < width {
+            let idx = row_start + x;
+            sub_pixels.push(pixels[idx]);
+            sub_weights.push(weights[idx]);
+            x += step;
+        }
+    }
+
+    (sub_pixels, sub_weights)
 }
 
 fn validate_inputs(
