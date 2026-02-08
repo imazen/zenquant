@@ -1,0 +1,16 @@
+[package]
+name = "zenquant"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+description = "AQ-informed palette quantizer — perceptual masking meets color quantization"
+
+[dependencies]
+rgb = "0.8"
+imgref = "1"
+thiserror = { version = "2", default-features = false }
+
+[features]
+default = ["std"]
+std = []
