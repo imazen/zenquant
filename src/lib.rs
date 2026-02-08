@@ -244,7 +244,12 @@ pub fn quantize(
             .map(|c| oklab::srgb_to_oklab(c.r, c.g, c.b))
             .collect();
         let pal = palette::Palette::from_centroids_sorted(centroids, false, tuning.sort_strategy);
-        let indices = dither::simple_remap(pixels, &pal);
+        let mut indices = dither::simple_remap(pixels, &pal);
+        let pal = if tuning.gif_frequency_reorder {
+            palette::reorder_by_frequency(&pal, &mut indices)
+        } else {
+            pal
+        };
         return Ok(QuantizeResult {
             palette: pal,
             indices,
@@ -275,7 +280,7 @@ pub fn quantize(
     let pal = palette::Palette::from_centroids_sorted(centroids, false, tuning.sort_strategy);
 
     // 5. Dither / remap
-    let indices = dither::dither_image(
+    let mut indices = dither::dither_image(
         pixels,
         width,
         height,
@@ -285,6 +290,13 @@ pub fn quantize(
         config.run_priority,
         tuning.dither_strength,
     );
+
+    // 6. GIF frequency reorder (post-dither)
+    let pal = if tuning.gif_frequency_reorder {
+        palette::reorder_by_frequency(&pal, &mut indices)
+    } else {
+        pal
+    };
 
     Ok(QuantizeResult {
         palette: pal,
@@ -319,7 +331,12 @@ pub fn quantize_rgba(
             tuning.sort_strategy,
         );
         let transparent_idx = pal.transparent_index().unwrap_or(0);
-        let indices = dither::simple_remap_rgba(pixels, &pal, transparent_idx);
+        let mut indices = dither::simple_remap_rgba(pixels, &pal, transparent_idx);
+        let pal = if tuning.gif_frequency_reorder {
+            palette::reorder_by_frequency(&pal, &mut indices)
+        } else {
+            pal
+        };
         return Ok(QuantizeResult {
             palette: pal,
             indices,
@@ -352,7 +369,7 @@ pub fn quantize_rgba(
     let pal =
         palette::Palette::from_centroids_sorted(centroids, has_transparent, tuning.sort_strategy);
 
-    let indices = dither::dither_image_rgba(
+    let mut indices = dither::dither_image_rgba(
         pixels,
         width,
         height,
@@ -362,6 +379,13 @@ pub fn quantize_rgba(
         config.run_priority,
         tuning.dither_strength,
     );
+
+    // GIF frequency reorder (post-dither)
+    let pal = if tuning.gif_frequency_reorder {
+        palette::reorder_by_frequency(&pal, &mut indices)
+    } else {
+        pal
+    };
 
     Ok(QuantizeResult {
         palette: pal,

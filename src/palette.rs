@@ -229,6 +229,63 @@ fn luminance_sort(pairs: &mut [(OKLab, [u8; 3])]) -> Vec<(OKLab, [u8; 3])> {
     pairs.to_vec()
 }
 
+/// Reorder palette entries by descending usage frequency, remapping indices.
+///
+/// Most-common colors get lowest indices, which helps LZW dictionary
+/// construction in GIF. The transparent index (if any) stays at index 0.
+pub(crate) fn reorder_by_frequency(palette: &Palette, indices: &mut [u8]) -> Palette {
+    let transparent_idx = palette.transparent_index();
+    let start = if transparent_idx.is_some() { 1 } else { 0 };
+    let n = palette.len();
+
+    // Count frequency of each palette index
+    let mut freq = vec![0u32; n];
+    for &idx in indices.iter() {
+        freq[idx as usize] += 1;
+    }
+
+    // Build sorted order of non-transparent indices by descending frequency
+    let mut order: Vec<usize> = (start..n).collect();
+    order.sort_by(|&a, &b| freq[b].cmp(&freq[a]));
+
+    // Build old→new mapping
+    let mut old_to_new = vec![0u8; n];
+    if transparent_idx.is_some() {
+        old_to_new[0] = 0; // transparent stays at 0
+    }
+    for (new_pos, &old_idx) in order.iter().enumerate() {
+        old_to_new[old_idx] = (new_pos + start) as u8;
+    }
+
+    // Remap indices
+    for idx in indices.iter_mut() {
+        *idx = old_to_new[*idx as usize];
+    }
+
+    // Build reordered palette
+    let mut new_srgb = Vec::with_capacity(n);
+    let mut new_rgba = Vec::with_capacity(n);
+    let mut new_oklab = Vec::with_capacity(n);
+
+    if transparent_idx.is_some() {
+        new_srgb.push(palette.entries_srgb[0]);
+        new_rgba.push(palette.entries_rgba[0]);
+        new_oklab.push(palette.entries_oklab[0]);
+    }
+    for &old_idx in &order {
+        new_srgb.push(palette.entries_srgb[old_idx]);
+        new_rgba.push(palette.entries_rgba[old_idx]);
+        new_oklab.push(palette.entries_oklab[old_idx]);
+    }
+
+    Palette {
+        entries_srgb: new_srgb,
+        entries_rgba: new_rgba,
+        entries_oklab: new_oklab,
+        transparent_index: transparent_idx,
+    }
+}
+
 /// Compute sum of squared index deltas — metric for compression friendliness.
 pub fn index_delta_score(indices: &[u8]) -> u64 {
     if indices.len() < 2 {
