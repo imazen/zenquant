@@ -56,6 +56,13 @@ fn main() {
                 .run_priority(RunPriority::Balanced),
         ),
         (
+            "q=60",
+            QuantizeConfig::new()
+                .quality(60)
+                .dither(DitherMode::Adaptive)
+                .run_priority(RunPriority::Balanced),
+        ),
+        (
             "q=85",
             QuantizeConfig::new()
                 .quality(85)

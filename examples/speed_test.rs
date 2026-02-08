@@ -70,14 +70,14 @@ fn main() {
                 .run_priority(RunPriority::Balanced),
         ),
         (
-            "zq q=30 full",
+            "zq q=60 (balanced)",
             QuantizeConfig::new()
-                .quality(30)
-                .dither(DitherMode::Full)
+                .quality(60)
+                .dither(DitherMode::Adaptive)
                 .run_priority(RunPriority::Balanced),
         ),
         (
-            "zq q=85 (default)",
+            "zq q=85 (quality)",
             QuantizeConfig::new()
                 .quality(85)
                 .dither(DitherMode::Adaptive)

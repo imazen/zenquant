@@ -262,9 +262,21 @@ pub fn quantize(
         });
     }
 
+    // Pipeline tiers based on quality:
+    //   q < 50:  fast — no masking, no k-means, no Viterbi
+    //   50..75:  balanced — masking + light k-means (2 iters) + Viterbi
+    //   q >= 75: quality — masking + full k-means (8 iters) + Viterbi
+    let use_masking = config.quality >= 50;
+    let kmeans_iters: usize = if config.quality >= 75 {
+        8
+    } else if config.quality >= 50 {
+        2
+    } else {
+        0
+    };
+
     // 1. Compute AQ masking weights (skip for fast mode — uniform weights)
-    let refine = config.quality >= 50;
-    let weights = if refine {
+    let weights = if use_masking {
         masking::compute_masking_weights(pixels, width, height)
     } else {
         vec![1.0f32; pixels.len()]
@@ -274,15 +286,21 @@ pub fn quantize(
     let hist = histogram::build_histogram(pixels, &weights);
 
     // 3. Median cut with histogram-level k-means refinement
-    let mut centroids = median_cut::median_cut(hist, max_colors, refine);
+    let mut centroids = median_cut::median_cut(hist, max_colors, kmeans_iters > 0);
 
     // 3b. Pixel-level k-means refinement.
-    if refine {
+    if kmeans_iters > 0 {
         if pixels.len() <= 500_000 {
-            centroids = median_cut::refine_against_pixels(centroids, pixels, &weights, 8);
+            centroids =
+                median_cut::refine_against_pixels(centroids, pixels, &weights, kmeans_iters);
         } else {
             let (sub_pixels, sub_weights) = subsample_pixels(pixels, &weights, width);
-            centroids = median_cut::refine_against_pixels(centroids, &sub_pixels, &sub_weights, 8);
+            centroids = median_cut::refine_against_pixels(
+                centroids,
+                &sub_pixels,
+                &sub_weights,
+                kmeans_iters,
+            );
         }
     }
 
@@ -307,8 +325,8 @@ pub fn quantize(
         tuning.dither_strength,
     );
 
-    // 5b. Viterbi scanline optimization (quality >= 50 only)
-    let viterbi_lambda = if refine {
+    // 5b. Viterbi scanline optimization (quality >= 50)
+    let viterbi_lambda = if use_masking {
         config.viterbi_lambda.unwrap_or(match config.run_priority {
             RunPriority::Quality => 0.0,
             RunPriority::Balanced => 0.01,
@@ -381,8 +399,15 @@ pub fn quantize_rgba(
         });
     }
 
-    let refine = config.quality >= 50;
-    let weights = if refine {
+    let use_masking = config.quality >= 50;
+    let kmeans_iters: usize = if config.quality >= 75 {
+        8
+    } else if config.quality >= 50 {
+        2
+    } else {
+        0
+    };
+    let weights = if use_masking {
         masking::compute_masking_weights_rgba(pixels, width, height)
     } else {
         vec![1.0f32; pixels.len()]
@@ -396,18 +421,23 @@ pub fn quantize_rgba(
         } else {
             max_colors
         };
-        let mut centroids = median_cut::median_cut_alpha(hist, opaque_colors, refine);
+        let mut centroids = median_cut::median_cut_alpha(hist, opaque_colors, kmeans_iters > 0);
 
-        if refine {
+        if kmeans_iters > 0 {
             if pixels.len() <= 500_000 {
-                centroids = median_cut::refine_against_pixels_alpha(centroids, pixels, &weights, 8);
+                centroids = median_cut::refine_against_pixels_alpha(
+                    centroids,
+                    pixels,
+                    &weights,
+                    kmeans_iters,
+                );
             } else {
                 let (sub_pixels, sub_weights) = subsample_pixels_rgba(pixels, &weights, width);
                 centroids = median_cut::refine_against_pixels_alpha(
                     centroids,
                     &sub_pixels,
                     &sub_weights,
-                    8,
+                    kmeans_iters,
                 );
             }
         }
@@ -418,7 +448,7 @@ pub fn quantize_rgba(
             tuning.sort_strategy,
         );
 
-        let viterbi_lambda = if refine {
+        let viterbi_lambda = if use_masking {
             config.viterbi_lambda.unwrap_or(match config.run_priority {
                 RunPriority::Quality => 0.0,
                 RunPriority::Balanced => 0.01,
@@ -459,15 +489,24 @@ pub fn quantize_rgba(
         } else {
             max_colors
         };
-        let mut centroids = median_cut::median_cut(hist, opaque_colors, refine);
+        let mut centroids = median_cut::median_cut(hist, opaque_colors, kmeans_iters > 0);
 
-        if refine {
+        if kmeans_iters > 0 {
             if pixels.len() <= 500_000 {
-                centroids = median_cut::refine_against_pixels_rgba(centroids, pixels, &weights, 8);
+                centroids = median_cut::refine_against_pixels_rgba(
+                    centroids,
+                    pixels,
+                    &weights,
+                    kmeans_iters,
+                );
             } else {
                 let (sub_pixels, sub_weights) = subsample_pixels_rgba(pixels, &weights, width);
-                centroids =
-                    median_cut::refine_against_pixels_rgba(centroids, &sub_pixels, &sub_weights, 8);
+                centroids = median_cut::refine_against_pixels_rgba(
+                    centroids,
+                    &sub_pixels,
+                    &sub_weights,
+                    kmeans_iters,
+                );
             }
         }
 
@@ -478,7 +517,7 @@ pub fn quantize_rgba(
         );
         pal.build_nn_cache();
 
-        let viterbi_lambda = if refine {
+        let viterbi_lambda = if use_masking {
             config.viterbi_lambda.unwrap_or(match config.run_priority {
                 RunPriority::Quality => 0.0,
                 RunPriority::Balanced => 0.01,
