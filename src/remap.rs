@@ -232,6 +232,11 @@ pub fn viterbi_refine_rgba(
 /// For each pixel, we consider K candidate palette indices. The DP finds the
 /// sequence of candidates that minimizes total cost = sum of quality costs +
 /// transition costs.
+///
+/// Quality cost uses squared distance, which gives Viterbi a strong bias
+/// toward preserving the original dithered choice (it's always a candidate
+/// and usually the cheapest). Only when extending a run saves significant
+/// transition cost will Viterbi override the dithered index.
 fn viterbi_scanline(
     pixels: &[rgb::RGB<u8>],
     weights: &[f32],
@@ -245,11 +250,16 @@ fn viterbi_scanline(
         return;
     }
 
-    // For each pixel, compute candidates and their quality costs
-    // candidates[x] holds up to K candidate indices
+    // For each pixel, compute candidates and their quality costs.
+    // candidates[x] holds up to K candidate indices.
     // quality_costs[x][j] = AQ_weight * distance_sq(pixel, palette[candidate_j])
+    //
+    // The dithered index is given a bonus: its quality cost is zeroed.
+    // This makes Viterbi strongly prefer keeping the dithered choice,
+    // only overriding when the transition cost savings are significant.
     let mut candidates: Vec<Vec<u8>> = Vec::with_capacity(n);
     let mut quality_costs: Vec<Vec<f32>> = Vec::with_capacity(n);
+    let mut dithered_cand_idx: Vec<usize> = Vec::with_capacity(n);
 
     for x in 0..n {
         let lab = srgb_to_oklab(pixels[x].r, pixels[x].g, pixels[x].b);
@@ -257,19 +267,32 @@ fn viterbi_scanline(
 
         // Ensure the current dithered index is always a candidate
         let current_idx = indices[x];
-        if !cands.contains(&current_idx) {
-            // Replace the worst candidate
+        let dith_pos = if let Some(pos) = cands.iter().position(|&c| c == current_idx) {
+            pos
+        } else {
             if cands.len() >= k {
                 cands.pop();
             }
             cands.push(current_idx);
-        }
+            cands.len() - 1
+        };
 
         let costs: Vec<f32> = cands
             .iter()
-            .map(|&c| weights[x] * palette.distance_sq(lab, c))
+            .enumerate()
+            .map(|(j, &c)| {
+                if j == dith_pos {
+                    // Zero cost for keeping the dithered choice — preserves
+                    // error diffusion patterns in smooth regions
+                    0.0
+                } else {
+                    // Cost of switching: quality delta relative to dithered
+                    weights[x] * palette.distance_sq(lab, c)
+                }
+            })
             .collect();
 
+        dithered_cand_idx.push(dith_pos);
         candidates.push(cands);
         quality_costs.push(costs);
     }
@@ -290,7 +313,9 @@ fn viterbi_scanline(
         let mut bp = vec![0u8; k_cur];
 
         let w = weights[x];
-        // Transition cost: lambda * (1 - weight) when indices differ
+        // Transition cost: lambda * (1 - weight) when indices differ.
+        // Smooth regions (high weight) → low transition cost → keep dither patterns.
+        // Textured regions (low weight) → high transition cost → favor runs.
         let trans_cost = lambda * (1.0 - w);
 
         for j in 0..k_cur {

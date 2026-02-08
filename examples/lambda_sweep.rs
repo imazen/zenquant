@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use zenquant::remap::average_run_length;
 use zenquant::{DitherMode, QuantizeConfig, RunPriority};
 
-const LAMBDAS: &[f32] = &[0.0, 0.001, 0.003, 0.005, 0.01];
+const LAMBDAS: &[f32] = &[0.0, 0.001, 0.002, 0.003, 0.005, 0.008, 0.01, 0.02];
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -46,11 +46,25 @@ fn main() {
         paths.len()
     );
 
+    // Pre-load images
+    let images: Vec<(Vec<rgb::RGB<u8>>, Vec<RGB8>, usize, usize)> = paths
+        .iter()
+        .filter_map(|path| {
+            let img = image::open(path).ok()?.to_rgb8();
+            let width = img.width() as usize;
+            let height = img.height() as usize;
+            let pixels: Vec<rgb::RGB<u8>> = img
+                .pixels()
+                .map(|p| rgb::RGB { r: p.0[0], g: p.0[1], b: p.0[2] })
+                .collect();
+            let ref_rgb: Vec<RGB8> = pixels.iter().map(|p| RGB8::new(p.r, p.g, p.b)).collect();
+            Some((pixels, ref_rgb, width, height))
+        })
+        .collect();
+
     // Header
-    print!("{:<10}", "lambda");
-    print!("{:>8} {:>8} {:>8} {:>8}", "BA", "SS2", "deflate", "runs");
-    println!();
-    println!("{}", "-".repeat(42));
+    println!("{:<10} {:>8} {:>8} {:>8} {:>8}", "lambda", "BA", "SS2", "deflate", "runs");
+    println!("{}", "-".repeat(44));
 
     for &lambda in LAMBDAS {
         let mut total_ba = 0.0f64;
@@ -59,24 +73,9 @@ fn main() {
         let mut total_runs = 0.0f64;
         let mut count = 0u32;
 
-        for path in &paths {
-            let img = match image::open(path) {
-                Ok(img) => img.to_rgb8(),
-                Err(_) => continue,
-            };
-
-            let width = img.width() as usize;
-            let height = img.height() as usize;
-            let pixels: Vec<rgb::RGB<u8>> = img
-                .pixels()
-                .map(|p| rgb::RGB {
-                    r: p.0[0],
-                    g: p.0[1],
-                    b: p.0[2],
-                })
-                .collect();
-
-            let ref_rgb: Vec<RGB8> = pixels.iter().map(|p| RGB8::new(p.r, p.g, p.b)).collect();
+        for (pixels, ref_rgb, width, height) in &images {
+            let width = *width;
+            let height = *height;
 
             let config = QuantizeConfig::new()
                 .max_colors(256)
@@ -85,7 +84,7 @@ fn main() {
                 .run_priority(RunPriority::Balanced)
                 .viterbi_lambda(lambda);
 
-            let result = zenquant::quantize(&pixels, width, height, &config).unwrap();
+            let result = zenquant::quantize(pixels, width, height, &config).unwrap();
 
             // Butteraugli
             let test_rgb: Vec<RGB8> = result

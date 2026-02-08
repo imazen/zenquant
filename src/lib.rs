@@ -286,18 +286,9 @@ pub fn quantize(
     let pal = palette::Palette::from_centroids_sorted(centroids, false, tuning.sort_strategy);
 
     // 5. Dither / remap
-    // When Viterbi will run, skip greedy run-bias during dithering so error
-    // diffusion produces clean nearest-color indices for Viterbi to optimize.
-    let will_viterbi = config.viterbi_lambda.unwrap_or(match config.run_priority {
-        RunPriority::Quality => 0.0,
-        RunPriority::Balanced => 0.003,
-        RunPriority::Compression => 0.01,
-    }) > 0.0;
-    let dither_run = if will_viterbi {
-        RunPriority::Quality // let Viterbi handle runs
-    } else {
-        config.run_priority
-    };
+    // Keep greedy run-bias during dithering even when Viterbi will run.
+    // The greedy bias shapes error diffusion favorably, and Viterbi can
+    // further optimize the index sequence post-hoc.
     let mut indices = dither::dither_image(
         pixels,
         width,
@@ -305,15 +296,15 @@ pub fn quantize(
         &weights,
         &pal,
         config.dither,
-        dither_run,
+        config.run_priority,
         tuning.dither_strength,
     );
 
     // 5b. Viterbi scanline optimization
     let viterbi_lambda = config.viterbi_lambda.unwrap_or(match config.run_priority {
         RunPriority::Quality => 0.0,
-        RunPriority::Balanced => 0.003,
-        RunPriority::Compression => 0.01,
+        RunPriority::Balanced => 0.01,
+        RunPriority::Compression => 0.02,
     });
     if viterbi_lambda > 0.0 {
         remap::viterbi_refine(pixels, width, height, &weights, &pal, &mut indices, viterbi_lambda);
@@ -406,14 +397,9 @@ pub fn quantize_rgba(
 
         let viterbi_lambda = config.viterbi_lambda.unwrap_or(match config.run_priority {
             RunPriority::Quality => 0.0,
-            RunPriority::Balanced => 0.003,
-            RunPriority::Compression => 0.01,
+            RunPriority::Balanced => 0.01,
+            RunPriority::Compression => 0.02,
         });
-        let dither_run = if viterbi_lambda > 0.0 {
-            RunPriority::Quality
-        } else {
-            config.run_priority
-        };
         let mut indices = dither::dither_image_rgba_alpha(
             pixels,
             width,
@@ -421,7 +407,7 @@ pub fn quantize_rgba(
             &weights,
             &pal,
             config.dither,
-            dither_run,
+            config.run_priority,
             tuning.dither_strength,
         );
 
@@ -458,14 +444,9 @@ pub fn quantize_rgba(
 
         let viterbi_lambda = config.viterbi_lambda.unwrap_or(match config.run_priority {
             RunPriority::Quality => 0.0,
-            RunPriority::Balanced => 0.003,
-            RunPriority::Compression => 0.01,
+            RunPriority::Balanced => 0.01,
+            RunPriority::Compression => 0.02,
         });
-        let dither_run = if viterbi_lambda > 0.0 {
-            RunPriority::Quality
-        } else {
-            config.run_priority
-        };
         let mut indices = dither::dither_image_rgba(
             pixels,
             width,
@@ -473,7 +454,7 @@ pub fn quantize_rgba(
             &weights,
             &pal,
             config.dither,
-            dither_run,
+            config.run_priority,
             tuning.dither_strength,
         );
 
