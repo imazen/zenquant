@@ -17,13 +17,10 @@ pub enum DitherMode {
     Adaptive,
 }
 
-/// Base dither strength: fraction of the quantization error to diffuse.
-/// 1.0 = standard Floyd-Steinberg, 0.5 = half-strength, 0.0 = no dithering.
-const DITHER_STRENGTH: f32 = 0.5;
-
 /// Apply Floyd-Steinberg error diffusion with AQ modulation.
 ///
-/// Returns palette indices for each pixel.
+/// `dither_strength` controls the fraction of quantization error to diffuse
+/// (0.0 = no dithering, 0.5 = half-strength, 1.0 = standard Floyd-Steinberg).
 pub fn dither_image(
     pixels: &[rgb::RGB<u8>],
     width: usize,
@@ -32,6 +29,7 @@ pub fn dither_image(
     palette: &Palette,
     mode: DitherMode,
     run_priority: RunPriority,
+    dither_strength: f32,
 ) -> Vec<u8> {
     if mode == DitherMode::None {
         return simple_remap(pixels, palette);
@@ -87,9 +85,9 @@ pub fn dither_image(
             let chosen_lab = palette.entries_oklab()[chosen as usize];
 
             // Compute quantization error, scaled by dither strength
-            let err_l = (current.l - chosen_lab.l) * DITHER_STRENGTH;
-            let err_a = (current.a - chosen_lab.a) * DITHER_STRENGTH;
-            let err_b = (current.b - chosen_lab.b) * DITHER_STRENGTH;
+            let err_l = (current.l - chosen_lab.l) * dither_strength;
+            let err_a = (current.a - chosen_lab.a) * dither_strength;
+            let err_b = (current.b - chosen_lab.b) * dither_strength;
 
             // Diffuse error with AQ modulation.
             // Error is generated at reduced strength but *received* with the target pixel's AQ weight.
@@ -145,6 +143,7 @@ pub fn dither_image_rgba(
     palette: &Palette,
     mode: DitherMode,
     run_priority: RunPriority,
+    dither_strength: f32,
 ) -> Vec<u8> {
     let transparent_idx = palette.transparent_index().unwrap_or(0);
 
@@ -205,9 +204,9 @@ pub fn dither_image_rgba(
             prev_index = Some(chosen);
 
             let chosen_lab = palette.entries_oklab()[chosen as usize];
-            let err_l = (current.l - chosen_lab.l) * DITHER_STRENGTH;
-            let err_a = (current.a - chosen_lab.a) * DITHER_STRENGTH;
-            let err_b = (current.b - chosen_lab.b) * DITHER_STRENGTH;
+            let err_l = (current.l - chosen_lab.l) * dither_strength;
+            let err_a = (current.a - chosen_lab.a) * dither_strength;
+            let err_b = (current.b - chosen_lab.b) * dither_strength;
 
             let adaptive = mode == DitherMode::Adaptive;
 
@@ -258,7 +257,7 @@ pub fn dither_image_rgba(
 }
 
 /// Simple nearest-color remap without dithering.
-fn simple_remap(pixels: &[rgb::RGB<u8>], palette: &Palette) -> Vec<u8> {
+pub(crate) fn simple_remap(pixels: &[rgb::RGB<u8>], palette: &Palette) -> Vec<u8> {
     pixels
         .iter()
         .map(|p| {
@@ -268,7 +267,11 @@ fn simple_remap(pixels: &[rgb::RGB<u8>], palette: &Palette) -> Vec<u8> {
         .collect()
 }
 
-fn simple_remap_rgba(pixels: &[rgb::RGBA<u8>], palette: &Palette, transparent_idx: u8) -> Vec<u8> {
+pub(crate) fn simple_remap_rgba(
+    pixels: &[rgb::RGBA<u8>],
+    palette: &Palette,
+    transparent_idx: u8,
+) -> Vec<u8> {
     pixels
         .iter()
         .map(|p| {
@@ -318,6 +321,7 @@ mod tests {
             &palette,
             DitherMode::None,
             RunPriority::Quality,
+            0.5,
         );
         assert_eq!(indices.len(), 64);
         for &idx in &indices {
@@ -338,6 +342,7 @@ mod tests {
             &palette,
             DitherMode::Full,
             RunPriority::Quality,
+            0.5,
         );
         assert_eq!(indices.len(), 64);
         for &idx in &indices {
@@ -366,6 +371,7 @@ mod tests {
             &palette,
             DitherMode::Adaptive,
             RunPriority::Balanced,
+            0.5,
         );
         assert_eq!(indices.len(), width * height);
         for &idx in &indices {

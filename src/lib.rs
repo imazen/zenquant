@@ -18,6 +18,98 @@ pub use remap::RunPriority;
 
 use alloc::vec::Vec;
 
+/// Target output format — controls palette sorting, dither strength, and compression tuning.
+///
+/// Different image formats have fundamentally different compression algorithms,
+/// so the optimal palette ordering and dithering strategy varies per format.
+/// Setting the output format applies sensible defaults that can be overridden
+/// via subsequent builder calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputFormat {
+    /// No format-specific optimization. Full alpha quantization if RGBA.
+    Generic,
+    /// GIF: LZW compression, binary transparency only.
+    /// Uses delta-minimize sort + post-remap frequency reorder.
+    Gif,
+    /// PNG: Deflate + scanline filters, per-index alpha via tRNS.
+    /// Uses luminance sort for spatial locality.
+    Png,
+    /// WebP VP8L: Delta palette encoding + spatial prediction.
+    /// Uses delta-minimize sort. Full RGBA palette.
+    WebpLossless,
+    /// JPEG XL modular: Squeeze wavelet + meta-adaptive entropy.
+    /// Uses delta-minimize sort. Full RGBA palette.
+    JxlModular,
+}
+
+impl Default for OutputFormat {
+    fn default() -> Self {
+        Self::Generic
+    }
+}
+
+/// Internal tuning parameters derived from OutputFormat + user overrides.
+#[derive(Debug, Clone)]
+pub(crate) struct QuantizeTuning {
+    pub(crate) dither_strength: f32,
+    pub(crate) sort_strategy: palette::PaletteSortStrategy,
+    pub(crate) gif_frequency_reorder: bool,
+    pub(crate) alpha_mode: AlphaMode,
+}
+
+/// How to handle alpha in quantization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AlphaMode {
+    /// Binary: alpha==0 → transparent index, else opaque.
+    Binary,
+    /// Full alpha quantization: alpha is a quantizable dimension.
+    Full,
+}
+
+impl QuantizeTuning {
+    pub(crate) fn from_config(config: &QuantizeConfig) -> Self {
+        let (default_dither, sort, gif_reorder, alpha) = match config.output_format {
+            OutputFormat::Generic => (
+                0.5,
+                palette::PaletteSortStrategy::DeltaMinimize,
+                false,
+                AlphaMode::Full,
+            ),
+            OutputFormat::Gif => (
+                0.5,
+                palette::PaletteSortStrategy::DeltaMinimize,
+                true,
+                AlphaMode::Binary,
+            ),
+            OutputFormat::Png => (
+                0.3,
+                palette::PaletteSortStrategy::Luminance,
+                false,
+                AlphaMode::Full,
+            ),
+            OutputFormat::WebpLossless => (
+                0.5,
+                palette::PaletteSortStrategy::DeltaMinimize,
+                false,
+                AlphaMode::Full,
+            ),
+            OutputFormat::JxlModular => (
+                0.4,
+                palette::PaletteSortStrategy::DeltaMinimize,
+                false,
+                AlphaMode::Full,
+            ),
+        };
+
+        Self {
+            dither_strength: config.dither_strength.unwrap_or(default_dither),
+            sort_strategy: sort,
+            gif_frequency_reorder: gif_reorder,
+            alpha_mode: alpha,
+        }
+    }
+}
+
 /// Configuration for palette quantization.
 #[derive(Debug, Clone)]
 pub struct QuantizeConfig {
@@ -30,6 +122,10 @@ pub struct QuantizeConfig {
     pub run_priority: RunPriority,
     /// Dithering mode.
     pub dither: DitherMode,
+    /// Target output format — controls sorting, dither strength, and alpha handling.
+    pub output_format: OutputFormat,
+    /// Override dither strength (0.0–1.0). If None, uses format-specific default.
+    pub dither_strength: Option<f32>,
 }
 
 impl Default for QuantizeConfig {
@@ -39,6 +135,8 @@ impl Default for QuantizeConfig {
             quality: 85,
             run_priority: RunPriority::Balanced,
             dither: DitherMode::Adaptive,
+            output_format: OutputFormat::Generic,
+            dither_strength: None,
         }
     }
 }
@@ -65,6 +163,16 @@ impl QuantizeConfig {
 
     pub fn dither(mut self, mode: DitherMode) -> Self {
         self.dither = mode;
+        self
+    }
+
+    pub fn output_format(mut self, format: OutputFormat) -> Self {
+        self.output_format = format;
+        self
+    }
+
+    pub fn dither_strength(mut self, strength: f32) -> Self {
+        self.dither_strength = Some(strength);
         self
     }
 }
@@ -107,6 +215,8 @@ pub fn quantize(
 ) -> Result<QuantizeResult, QuantizeError> {
     validate_inputs(pixels.len(), width, height, config)?;
 
+    let tuning = QuantizeTuning::from_config(config);
+
     // 1. Compute AQ masking weights
     let weights = masking::compute_masking_weights(pixels, width, height);
 
@@ -119,21 +229,17 @@ pub fn quantize(
     let mut centroids = median_cut::median_cut(hist, max_colors, refine);
 
     // 3b. Pixel-level k-means refinement.
-    // For small images: refine against full pixel data (high precision).
-    // For large images: subsample pixels for refinement (avoids O(n*k*iter) blowup).
     if refine {
         if pixels.len() <= 500_000 {
-            centroids =
-                median_cut::refine_against_pixels(centroids, pixels, &weights, 8);
+            centroids = median_cut::refine_against_pixels(centroids, pixels, &weights, 8);
         } else {
             let (sub_pixels, sub_weights) = subsample_pixels(pixels, &weights, width);
-            centroids =
-                median_cut::refine_against_pixels(centroids, &sub_pixels, &sub_weights, 8);
+            centroids = median_cut::refine_against_pixels(centroids, &sub_pixels, &sub_weights, 8);
         }
     }
 
-    // 4. Build palette with delta-minimizing sort
-    let pal = palette::Palette::from_centroids(centroids, false);
+    // 4. Build palette with format-specific sort
+    let pal = palette::Palette::from_centroids_sorted(centroids, false, tuning.sort_strategy);
 
     // 5. Dither / remap
     let indices = dither::dither_image(
@@ -144,6 +250,7 @@ pub fn quantize(
         &pal,
         config.dither,
         config.run_priority,
+        tuning.dither_strength,
     );
 
     Ok(QuantizeResult {
@@ -162,6 +269,8 @@ pub fn quantize_rgba(
 ) -> Result<QuantizeResult, QuantizeError> {
     validate_inputs(pixels.len(), width, height, config)?;
 
+    let tuning = QuantizeTuning::from_config(config);
+
     let weights = masking::compute_masking_weights_rgba(pixels, width, height);
 
     let (hist, has_transparent) = histogram::build_histogram_rgba(pixels, &weights);
@@ -177,8 +286,7 @@ pub fn quantize_rgba(
 
     if refine {
         if pixels.len() <= 500_000 {
-            centroids =
-                median_cut::refine_against_pixels_rgba(centroids, pixels, &weights, 8);
+            centroids = median_cut::refine_against_pixels_rgba(centroids, pixels, &weights, 8);
         } else {
             let (sub_pixels, sub_weights) = subsample_pixels_rgba(pixels, &weights, width);
             centroids =
@@ -186,7 +294,8 @@ pub fn quantize_rgba(
         }
     }
 
-    let pal = palette::Palette::from_centroids(centroids, has_transparent);
+    let pal =
+        palette::Palette::from_centroids_sorted(centroids, has_transparent, tuning.sort_strategy);
 
     let indices = dither::dither_image_rgba(
         pixels,
@@ -196,6 +305,7 @@ pub fn quantize_rgba(
         &pal,
         config.dither,
         config.run_priority,
+        tuning.dither_strength,
     );
 
     Ok(QuantizeResult {

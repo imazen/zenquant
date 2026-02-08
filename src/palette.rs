@@ -4,6 +4,15 @@ use alloc::vec::Vec;
 
 use crate::oklab::{OKLab, oklab_to_srgb};
 
+/// Strategy for ordering palette entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaletteSortStrategy {
+    /// Greedy nearest-neighbor TSP from darkest entry. Good for delta-coded formats (WebP, JXL).
+    DeltaMinimize,
+    /// Sort by OKLab L (lightness). Good for PNG scanline filters (sub/up predict neighbors).
+    Luminance,
+}
+
 /// A quantized color palette with OKLab-space acceleration.
 #[derive(Debug, Clone)]
 pub struct Palette {
@@ -16,8 +25,21 @@ pub struct Palette {
 }
 
 impl Palette {
-    /// Build a palette from OKLab centroids, applying delta-minimizing sort.
+    /// Build a palette from OKLab centroids with the specified sort strategy.
     pub fn from_centroids(centroids: Vec<OKLab>, has_transparency: bool) -> Self {
+        Self::from_centroids_sorted(
+            centroids,
+            has_transparency,
+            PaletteSortStrategy::DeltaMinimize,
+        )
+    }
+
+    /// Build a palette from OKLab centroids, applying the given sort strategy.
+    pub fn from_centroids_sorted(
+        centroids: Vec<OKLab>,
+        has_transparency: bool,
+        strategy: PaletteSortStrategy,
+    ) -> Self {
         if centroids.is_empty() {
             return Self {
                 entries_srgb: Vec::new(),
@@ -35,8 +57,10 @@ impl Palette {
             })
             .collect();
 
-        // Delta-minimizing sort: greedy nearest-neighbor TSP starting from darkest entry
-        let sorted = delta_minimize_sort(&mut pairs);
+        let sorted = match strategy {
+            PaletteSortStrategy::DeltaMinimize => delta_minimize_sort(&mut pairs),
+            PaletteSortStrategy::Luminance => luminance_sort(&mut pairs),
+        };
 
         let mut entries_srgb: Vec<[u8; 3]> = sorted.iter().map(|(_, srgb)| *srgb).collect();
         let mut entries_oklab: Vec<OKLab> = sorted.iter().map(|(lab, _)| *lab).collect();
@@ -175,6 +199,18 @@ fn delta_minimize_sort(pairs: &mut [(OKLab, [u8; 3])]) -> Vec<(OKLab, [u8; 3])> 
     }
 
     result
+}
+
+/// Luminance sort: order palette entries by OKLab L (lightness), ascending.
+/// Good for PNG where scanline filters (sub, up) predict from spatial neighbors,
+/// and spatially close pixels tend to have similar lightness.
+fn luminance_sort(pairs: &mut [(OKLab, [u8; 3])]) -> Vec<(OKLab, [u8; 3])> {
+    pairs.sort_by(|a, b| {
+        a.0.l
+            .partial_cmp(&b.0.l)
+            .unwrap_or(core::cmp::Ordering::Equal)
+    });
+    pairs.to_vec()
 }
 
 /// Compute sum of squared index deltas — metric for compression friendliness.
