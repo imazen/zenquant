@@ -3,7 +3,7 @@ name = "zenquant"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.92"
-license = "MIT OR Apache-2.0"
+license = "AGPL-3.0-or-later"
 description = "AQ-informed palette quantizer — perceptual masking meets color quantization"
 
 [dependencies]
@@ -19,6 +19,12 @@ quantizr = "1"
 flate2 = "1"
 butteraugli = "0.4"
 fast-ssim2 = { version = "0.6", features = ["imgref"] }
+png = "0.17"
+zengif = { path = "../zengif", features = ["quantizr"] }
+zenwebp = { path = "../zenwebp", default-features = false, features = ["std", "pixel-types"] }
+enough = "0.3"
+imgref = "1"
+codec-corpus = "1"
 
 [features]
 default = ["std"]
