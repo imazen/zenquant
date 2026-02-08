@@ -12,6 +12,10 @@ imgref = "1"
 thiserror = { version = "2", default-features = false }
 linear-srgb = { version = "0.4", default-features = false }
 
+# Optional: zengif QuantizerTrait backend
+zengif = { path = "../zengif", optional = true, default-features = false, features = ["std"] }
+enough = { version = "0.3", optional = true, default-features = false }
+
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
 imagequant = "4"
@@ -29,6 +33,7 @@ codec-corpus = "1"
 [features]
 default = ["std"]
 std = ["linear-srgb/std"]
+zengif-backend = ["dep:zengif", "dep:enough", "std"]
 
 [[example]]
 name = "compare"

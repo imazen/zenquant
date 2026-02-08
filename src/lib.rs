@@ -11,6 +11,8 @@ pub mod median_cut;
 pub mod oklab;
 pub mod palette;
 pub mod remap;
+#[cfg(feature = "zengif-backend")]
+pub mod zengif_backend;
 
 pub use dither::DitherMode;
 pub use error::QuantizeError;
