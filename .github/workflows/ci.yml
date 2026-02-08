@@ -1,0 +1,261 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ==========================================================================
+  # Native x86_64 testing
+  # ==========================================================================
+  test-x64:
+    name: Test x64 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: zenquant
+
+      - name: Clone sibling repos (path deps)
+        run: |
+          git clone --depth 1 https://github.com/imazen/zengif.git zengif
+          git clone --depth 1 https://github.com/imazen/zenwebp.git zenwebp
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: zenquant -> target
+
+      - name: Build
+        working-directory: zenquant
+        run: cargo build --features std
+
+      - name: Test
+        working-directory: zenquant
+        run: cargo test --features std
+
+      - name: Test (no_std + alloc)
+        working-directory: zenquant
+        run: cargo test --no-default-features --lib
+
+  # ==========================================================================
+  # Native aarch64 testing
+  # ==========================================================================
+  test-aarch64:
+    name: Test aarch64 (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04-arm, name: Linux }
+          - { os: macos-latest, name: macOS }
+          - { os: windows-11-arm, name: Windows }
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: zenquant
+
+      - name: Clone sibling repos (path deps)
+        run: |
+          git clone --depth 1 https://github.com/imazen/zengif.git zengif
+          git clone --depth 1 https://github.com/imazen/zenwebp.git zenwebp
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: zenquant -> target
+
+      - name: Test
+        working-directory: zenquant
+        run: cargo test --features std
+
+  # ==========================================================================
+  # Cross-compiled testing (32-bit) via QEMU
+  # ==========================================================================
+  test-cross:
+    name: Cross (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - i686-unknown-linux-gnu
+          - armv7-unknown-linux-gnueabihf
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: zenquant
+
+      - name: Clone sibling repos (path deps)
+        run: |
+          git clone --depth 1 https://github.com/imazen/zengif.git zengif
+          git clone --depth 1 https://github.com/imazen/zenwebp.git zenwebp
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: zenquant -> target
+
+      - name: Build (cross)
+        working-directory: zenquant
+        run: cross build --features std --target ${{ matrix.target }}
+
+      - name: Test (cross/QEMU)
+        working-directory: zenquant
+        run: cross test --features std --target ${{ matrix.target }}
+
+  # ==========================================================================
+  # WASM testing
+  # ==========================================================================
+  test-wasm:
+    name: Test WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: zenquant
+
+      - name: Clone sibling repos (path deps)
+        run: |
+          git clone --depth 1 https://github.com/imazen/zengif.git zengif
+          git clone --depth 1 https://github.com/imazen/zenwebp.git zenwebp
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown,wasm32-wasip1
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: zenquant -> target
+
+      - name: Install wasmtime
+        run: |
+          curl https://wasmtime.dev/install.sh -sSf | bash
+          echo "$HOME/.wasmtime/bin" >> $GITHUB_PATH
+
+      - name: Build (wasm32-unknown-unknown)
+        working-directory: zenquant
+        run: cargo build --target wasm32-unknown-unknown --no-default-features --lib
+
+      - name: Test (wasm32-wasip1)
+        working-directory: zenquant
+        env:
+          CARGO_TARGET_WASM32_WASIP1_RUNNER: "wasmtime --dir=. --"
+        run: cargo test --target wasm32-wasip1 --features std --lib
+
+  # ==========================================================================
+  # Clippy
+  # ==========================================================================
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: zenquant
+
+      - name: Clone sibling repos (path deps)
+        run: |
+          git clone --depth 1 https://github.com/imazen/zengif.git zengif
+          git clone --depth 1 https://github.com/imazen/zenwebp.git zenwebp
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: zenquant -> target
+
+      - name: Clippy
+        working-directory: zenquant
+        run: cargo clippy --all-targets --features std -- -D warnings
+
+  # ==========================================================================
+  # Format check
+  # ==========================================================================
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Format check
+        run: cargo fmt -- --check
+
+  # ==========================================================================
+  # Code coverage
+  # ==========================================================================
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: zenquant
+
+      - name: Clone sibling repos (path deps)
+        run: |
+          git clone --depth 1 https://github.com/imazen/zengif.git zengif
+          git clone --depth 1 https://github.com/imazen/zenwebp.git zenwebp
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: zenquant -> target
+
+      - name: Generate coverage
+        working-directory: zenquant
+        run: cargo llvm-cov --features std --lcov --output-path lcov.info
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: zenquant/lcov.info
+          fail_ci_if_error: false
