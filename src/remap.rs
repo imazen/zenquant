@@ -135,6 +135,205 @@ pub fn remap_pixels_rgba(
     indices
 }
 
+/// Per-scanline Viterbi DP optimization of palette indices.
+///
+/// After dithering produces initial indices, this post-pass finds the globally
+/// optimal index sequence per row that balances quality (color accuracy) and
+/// compression (run-length extension). This is analogous to trellis quantization
+/// in video/JPEG codecs.
+///
+/// `lambda` controls the quality-vs-compression tradeoff:
+/// - 0.0: pure quality (no run extension)
+/// - 0.003: balanced (modest run extension in textured areas)
+/// - 0.01: aggressive compression (long runs where masked by texture)
+pub fn viterbi_refine(
+    pixels: &[rgb::RGB<u8>],
+    width: usize,
+    height: usize,
+    weights: &[f32],
+    palette: &Palette,
+    indices: &mut [u8],
+    lambda: f32,
+) {
+    if width <= 1 || lambda <= 0.0 {
+        return;
+    }
+
+    const K: usize = 4;
+
+    for y in 0..height {
+        let row_start = y * width;
+        let row = &pixels[row_start..row_start + width];
+        let row_weights = &weights[row_start..row_start + width];
+        let row_indices = &mut indices[row_start..row_start + width];
+
+        viterbi_scanline(row, row_weights, palette, row_indices, lambda, K);
+    }
+}
+
+/// Per-scanline Viterbi DP for RGBA images. Transparent pixels are skipped.
+pub fn viterbi_refine_rgba(
+    pixels: &[rgb::RGBA<u8>],
+    width: usize,
+    height: usize,
+    weights: &[f32],
+    palette: &Palette,
+    indices: &mut [u8],
+    lambda: f32,
+) {
+    if width <= 1 || lambda <= 0.0 {
+        return;
+    }
+
+    const K: usize = 4;
+    let transparent_idx = palette.transparent_index().unwrap_or(0);
+
+    for y in 0..height {
+        let row_start = y * width;
+
+        // Find contiguous opaque segments within the row and run Viterbi on each
+        let mut seg_start = None;
+        for x in 0..=width {
+            let is_transparent = x < width && pixels[row_start + x].a == 0;
+            let past_end = x == width;
+
+            if past_end || is_transparent {
+                // End of an opaque segment
+                if let Some(start) = seg_start {
+                    let seg_len = x - start;
+                    if seg_len > 1 {
+                        // Build RGB view for the opaque segment
+                        let seg_pixels: Vec<rgb::RGB<u8>> = (start..x)
+                            .map(|sx| {
+                                let p = &pixels[row_start + sx];
+                                rgb::RGB { r: p.r, g: p.g, b: p.b }
+                            })
+                            .collect();
+                        let seg_weights = &weights[row_start + start..row_start + x];
+                        let seg_indices = &mut indices[row_start + start..row_start + x];
+
+                        viterbi_scanline(&seg_pixels, seg_weights, palette, seg_indices, lambda, K);
+                    }
+                    seg_start = None;
+                }
+
+                if is_transparent {
+                    indices[row_start + x] = transparent_idx;
+                }
+            } else if seg_start.is_none() {
+                seg_start = Some(x);
+            }
+        }
+    }
+}
+
+/// Core Viterbi DP for a single scanline (or opaque segment).
+///
+/// For each pixel, we consider K candidate palette indices. The DP finds the
+/// sequence of candidates that minimizes total cost = sum of quality costs +
+/// transition costs.
+fn viterbi_scanline(
+    pixels: &[rgb::RGB<u8>],
+    weights: &[f32],
+    palette: &Palette,
+    indices: &mut [u8],
+    lambda: f32,
+    k: usize,
+) {
+    let n = pixels.len();
+    if n == 0 {
+        return;
+    }
+
+    // For each pixel, compute candidates and their quality costs
+    // candidates[x] holds up to K candidate indices
+    // quality_costs[x][j] = AQ_weight * distance_sq(pixel, palette[candidate_j])
+    let mut candidates: Vec<Vec<u8>> = Vec::with_capacity(n);
+    let mut quality_costs: Vec<Vec<f32>> = Vec::with_capacity(n);
+
+    for x in 0..n {
+        let lab = srgb_to_oklab(pixels[x].r, pixels[x].g, pixels[x].b);
+        let mut cands = palette.k_nearest(lab, k);
+
+        // Ensure the current dithered index is always a candidate
+        let current_idx = indices[x];
+        if !cands.contains(&current_idx) {
+            // Replace the worst candidate
+            if cands.len() >= k {
+                cands.pop();
+            }
+            cands.push(current_idx);
+        }
+
+        let costs: Vec<f32> = cands
+            .iter()
+            .map(|&c| weights[x] * palette.distance_sq(lab, c))
+            .collect();
+
+        candidates.push(cands);
+        quality_costs.push(costs);
+    }
+
+    // DP tables
+    // dp[j] = minimum total cost to reach candidate j at the current pixel
+    // backptr[x][j] = which candidate index (into candidates[x-1]) was the predecessor
+    let k0 = candidates[0].len();
+    let mut dp: Vec<f32> = quality_costs[0].clone();
+    let mut backptrs: Vec<Vec<u8>> = Vec::with_capacity(n);
+    backptrs.push(vec![0; k0]); // dummy for x=0
+
+    // Forward pass
+    for x in 1..n {
+        let k_cur = candidates[x].len();
+        let k_prev = candidates[x - 1].len();
+        let mut new_dp = vec![f32::MAX; k_cur];
+        let mut bp = vec![0u8; k_cur];
+
+        let w = weights[x];
+        // Transition cost: lambda * (1 - weight) when indices differ
+        let trans_cost = lambda * (1.0 - w);
+
+        for j in 0..k_cur {
+            let q_cost = quality_costs[x][j];
+            let cand_j = candidates[x][j];
+
+            for i in 0..k_prev {
+                let transition = if candidates[x - 1][i] == cand_j {
+                    0.0
+                } else {
+                    trans_cost
+                };
+                let total = dp[i] + q_cost + transition;
+                if total < new_dp[j] {
+                    new_dp[j] = total;
+                    bp[j] = i as u8;
+                }
+            }
+        }
+
+        dp = new_dp;
+        backptrs.push(bp);
+    }
+
+    // Traceback: find the best final state
+    let mut best_j = 0;
+    let mut best_cost = f32::MAX;
+    for (j, &cost) in dp.iter().enumerate() {
+        if cost < best_cost {
+            best_cost = cost;
+            best_j = j;
+        }
+    }
+
+    // Walk backwards
+    indices[n - 1] = candidates[n - 1][best_j];
+    let mut j = best_j;
+    for x in (1..n).rev() {
+        j = backptrs[x][j] as usize;
+        indices[x - 1] = candidates[x - 1][j];
+    }
+}
+
 /// Count the number of runs in an index stream.
 pub fn count_runs(indices: &[u8]) -> usize {
     if indices.is_empty() {

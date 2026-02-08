@@ -277,6 +277,13 @@ pub fn quantize(
     let pal = palette::Palette::from_centroids_sorted(centroids, false, tuning.sort_strategy);
 
     // 5. Dither / remap
+    // When Viterbi will run, skip greedy run-bias during dithering so error
+    // diffusion produces clean nearest-color indices for Viterbi to optimize.
+    let dither_run = if config.run_priority != RunPriority::Quality {
+        RunPriority::Quality // let Viterbi handle runs
+    } else {
+        config.run_priority
+    };
     let mut indices = dither::dither_image(
         pixels,
         width,
@@ -284,9 +291,19 @@ pub fn quantize(
         &weights,
         &pal,
         config.dither,
-        config.run_priority,
+        dither_run,
         tuning.dither_strength,
     );
+
+    // 5b. Viterbi scanline optimization (when run_priority != Quality)
+    if config.run_priority != RunPriority::Quality {
+        let lambda = match config.run_priority {
+            RunPriority::Balanced => 0.003,
+            RunPriority::Compression => 0.01,
+            RunPriority::Quality => unreachable!(),
+        };
+        remap::viterbi_refine(pixels, width, height, &weights, &pal, &mut indices, lambda);
+    }
 
     // 6. GIF frequency reorder (post-dither)
     let pal = if tuning.gif_frequency_reorder {
@@ -373,16 +390,31 @@ pub fn quantize_rgba(
             tuning.sort_strategy,
         );
 
-        let indices = dither::dither_image_rgba_alpha(
+        let dither_run = if config.run_priority != RunPriority::Quality {
+            RunPriority::Quality
+        } else {
+            config.run_priority
+        };
+        let mut indices = dither::dither_image_rgba_alpha(
             pixels,
             width,
             height,
             &weights,
             &pal,
             config.dither,
-            config.run_priority,
+            dither_run,
             tuning.dither_strength,
         );
+
+        // 5b. Viterbi scanline optimization (when run_priority != Quality)
+        if config.run_priority != RunPriority::Quality {
+            let lambda = match config.run_priority {
+                RunPriority::Balanced => 0.003,
+                RunPriority::Compression => 0.01,
+                RunPriority::Quality => unreachable!(),
+            };
+            remap::viterbi_refine_rgba(pixels, width, height, &weights, &pal, &mut indices, lambda);
+        }
 
         (pal, indices)
     } else {
@@ -411,16 +443,31 @@ pub fn quantize_rgba(
             tuning.sort_strategy,
         );
 
-        let indices = dither::dither_image_rgba(
+        let dither_run = if config.run_priority != RunPriority::Quality {
+            RunPriority::Quality
+        } else {
+            config.run_priority
+        };
+        let mut indices = dither::dither_image_rgba(
             pixels,
             width,
             height,
             &weights,
             &pal,
             config.dither,
-            config.run_priority,
+            dither_run,
             tuning.dither_strength,
         );
+
+        // 5b. Viterbi scanline optimization (when run_priority != Quality)
+        if config.run_priority != RunPriority::Quality {
+            let lambda = match config.run_priority {
+                RunPriority::Balanced => 0.003,
+                RunPriority::Compression => 0.01,
+                RunPriority::Quality => unreachable!(),
+            };
+            remap::viterbi_refine_rgba(pixels, width, height, &weights, &pal, &mut indices, lambda);
+        }
 
         (pal, indices)
     };
