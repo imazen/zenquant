@@ -4,47 +4,84 @@ use alloc::vec::Vec;
 
 use crate::oklab::{srgb_to_oklab, OKLab};
 
-/// A histogram entry: accumulated color, weight, and count for a unique RGB color.
+/// A histogram entry: accumulated color, weight, and count for a quantized bucket.
 #[derive(Debug, Clone)]
 pub struct HistEntry {
-    /// OKLab value for this unique color
-    pub lab: OKLab,
+    /// Weighted sum of OKLab L values
+    pub l_sum: f64,
+    /// Weighted sum of OKLab a values
+    pub a_sum: f64,
+    /// Weighted sum of OKLab b values
+    pub b_sum: f64,
     /// Total AQ weight accumulated
-    pub weight: f32,
-    /// Number of pixels with this exact color
+    pub weight: f64,
+    /// Number of pixels in this bucket
     pub count: u32,
+}
+
+impl HistEntry {
+    /// Compute the weighted centroid of this bucket.
+    pub fn centroid(&self) -> OKLab {
+        if self.weight < 1e-10 {
+            return OKLab::new(0.0, 0.0, 0.0);
+        }
+        OKLab::new(
+            (self.l_sum / self.weight) as f32,
+            (self.a_sum / self.weight) as f32,
+            (self.b_sum / self.weight) as f32,
+        )
+    }
+}
+
+/// Quantize an OKLab value to an 18-bit bucket key (6 bits per channel).
+///
+/// 6 bits per channel → 262,144 possible buckets. This is fine-grained enough
+/// to separate visually distinct colors while keeping the histogram manageable
+/// for median cut + k-means (typically a few thousand active entries).
+fn quantize_key(lab: OKLab) -> u32 {
+    // L is roughly [0, 1], a and b are roughly [-0.4, 0.4]
+    let l_bin = ((lab.l * 63.0).round() as u32).min(63);
+    let a_bin = (((lab.a + 0.4) * (63.0 / 0.8)).round() as u32).min(63);
+    let b_bin = (((lab.b + 0.4) * (63.0 / 0.8)).round() as u32).min(63);
+    (l_bin << 12) | (a_bin << 6) | b_bin
 }
 
 /// Build a weighted color histogram from RGB pixels and per-pixel AQ weights.
 ///
-/// Each unique sRGB color becomes one histogram entry — no quantization loss.
-/// Returns (OKLab centroid, accumulated weight) pairs for median cut.
+/// Colors are quantized to 6-bit-per-channel OKLab buckets (262K possible bins,
+/// typically a few thousand active). Weighted centroids are computed in f64 for
+/// accumulation stability.
 pub fn build_histogram(pixels: &[rgb::RGB<u8>], weights: &[f32]) -> Vec<(OKLab, f32)> {
     assert_eq!(pixels.len(), weights.len());
 
-    // Key on exact RGB triple — no information loss.
-    // Pack into u32: (r << 16) | (g << 8) | b
     let mut buckets: BTreeMap<u32, HistEntry> = BTreeMap::new();
 
     for (pixel, &weight) in pixels.iter().zip(weights.iter()) {
-        let key = (pixel.r as u32) << 16 | (pixel.g as u32) << 8 | pixel.b as u32;
+        let lab = srgb_to_oklab(pixel.r, pixel.g, pixel.b);
+        let key = quantize_key(lab);
+        let w64 = weight as f64;
 
         buckets
             .entry(key)
             .and_modify(|e| {
-                e.weight += weight;
+                e.l_sum += lab.l as f64 * w64;
+                e.a_sum += lab.a as f64 * w64;
+                e.b_sum += lab.b as f64 * w64;
+                e.weight += w64;
                 e.count += 1;
             })
             .or_insert_with(|| HistEntry {
-                lab: srgb_to_oklab(pixel.r, pixel.g, pixel.b),
-                weight,
+                l_sum: lab.l as f64 * w64,
+                a_sum: lab.a as f64 * w64,
+                b_sum: lab.b as f64 * w64,
+                weight: w64,
                 count: 1,
             });
     }
 
     buckets
         .into_values()
-        .map(|e| (e.lab, e.weight))
+        .map(|e| (e.centroid(), e.weight as f32))
         .collect()
 }
 
@@ -65,24 +102,31 @@ pub fn build_histogram_rgba(
             continue;
         }
 
-        let key = (pixel.r as u32) << 16 | (pixel.g as u32) << 8 | pixel.b as u32;
+        let lab = srgb_to_oklab(pixel.r, pixel.g, pixel.b);
+        let key = quantize_key(lab);
+        let w64 = weight as f64;
 
         buckets
             .entry(key)
             .and_modify(|e| {
-                e.weight += weight;
+                e.l_sum += lab.l as f64 * w64;
+                e.a_sum += lab.a as f64 * w64;
+                e.b_sum += lab.b as f64 * w64;
+                e.weight += w64;
                 e.count += 1;
             })
             .or_insert_with(|| HistEntry {
-                lab: srgb_to_oklab(pixel.r, pixel.g, pixel.b),
-                weight,
+                l_sum: lab.l as f64 * w64,
+                a_sum: lab.a as f64 * w64,
+                b_sum: lab.b as f64 * w64,
+                weight: w64,
                 count: 1,
             });
     }
 
     let entries: Vec<(OKLab, f32)> = buckets
         .into_values()
-        .map(|e| (e.lab, e.weight))
+        .map(|e| (e.centroid(), e.weight as f32))
         .collect();
 
     (entries, has_transparent)
@@ -140,26 +184,6 @@ mod tests {
     }
 
     #[test]
-    fn similar_colors_stay_separate() {
-        // Adjacent RGB values should NOT be merged (unlike old 4-bit quantization)
-        let pixels = vec![
-            rgb::RGB {
-                r: 128,
-                g: 128,
-                b: 128,
-            },
-            rgb::RGB {
-                r: 129,
-                g: 128,
-                b: 128,
-            },
-        ];
-        let weights = vec![1.0; 2];
-        let hist = build_histogram(&pixels, &weights);
-        assert_eq!(hist.len(), 2, "similar colors must stay in separate buckets");
-    }
-
-    #[test]
     fn rgba_skips_transparent() {
         let pixels = vec![
             rgb::RGBA {
@@ -179,5 +203,34 @@ mod tests {
         let (hist, has_transparent) = build_histogram_rgba(&pixels, &weights);
         assert!(has_transparent);
         assert_eq!(hist.len(), 1);
+    }
+
+    #[test]
+    fn centroid_precision() {
+        // Many pixels of the same color — centroid should be close to the input
+        let lab = srgb_to_oklab(100, 150, 200);
+        let pixels = vec![rgb::RGB { r: 100, g: 150, b: 200 }; 10000];
+        let weights = vec![1.0; 10000];
+        let hist = build_histogram(&pixels, &weights);
+        assert_eq!(hist.len(), 1);
+        let centroid = hist[0].0;
+        assert!(
+            (centroid.l - lab.l).abs() < 0.01,
+            "L mismatch: {} vs {}",
+            centroid.l,
+            lab.l
+        );
+        assert!(
+            (centroid.a - lab.a).abs() < 0.01,
+            "a mismatch: {} vs {}",
+            centroid.a,
+            lab.a
+        );
+        assert!(
+            (centroid.b - lab.b).abs() < 0.01,
+            "b mismatch: {} vs {}",
+            centroid.b,
+            lab.b
+        );
     }
 }
