@@ -225,9 +225,12 @@ fn kmeans_refine(mut centroids: Vec<OKLab>, entries: &[(OKLab, f32)]) -> Vec<OKL
 /// refining against histogram entries alone, since it accounts for the actual
 /// pixel distribution rather than pre-quantized histogram approximations.
 ///
-/// Uses incremental acceleration: the NN grid OKLab values are computed once,
-/// and after the first iteration, the cache and neighbor lists are updated
-/// incrementally rather than rebuilt from scratch.
+/// Uses three acceleration techniques:
+/// 1. **Pre-computed grid**: 4096 sRGB→OKLab values computed once (not per iteration)
+/// 2. **Incremental rebuild**: NN cache and neighbors updated seeded/selectively
+/// 3. **Triangle-inequality skip**: pixels whose distance to their assigned centroid
+///    is less than 1/4 of that centroid's distance to its nearest neighbor are
+///    guaranteed to not change cluster and skip the search entirely.
 pub fn refine_against_pixels(
     mut centroids: Vec<OKLab>,
     pixels: &[rgb::RGB<u8>],
@@ -255,14 +258,20 @@ pub fn refine_against_pixels(
     let mut neighbors = build_centroid_neighbors(&centroids);
     let mut old_centroids = centroids.clone();
 
+    // Per-pixel assignments for triangle-inequality skip on iterations 1+
+    let mut assignments = vec![0u8; pixels.len()];
+
+    // Per-centroid skip threshold: dist_sq(centroid, nearest_other) / 4.
+    // If a pixel is closer than this to its assigned centroid, it can't change.
+    let mut skip_threshold = compute_skip_thresholds(&centroids, &neighbors);
+
     for iter in 0..iterations {
         if iter > 0 {
             // Incremental rebuild: neighbors first (need current centroids),
             // then cache (needs updated neighbors for seeded search).
-            // Neighbors: only rebuild for centroids that moved or whose neighbors moved.
-            // Cache: use previous cache entry as seed + neighbor check (9 checks vs 256).
             rebuild_neighbors_incremental(&centroids, &old_centroids, &mut neighbors);
             rebuild_nn_cache_seeded(&centroids, &grid_labs, &mut nn_cache, &neighbors);
+            skip_threshold = compute_skip_thresholds(&centroids, &neighbors);
         }
 
         let mut sums_l = vec![0.0f64; k];
@@ -272,8 +281,25 @@ pub fn refine_against_pixels(
 
         for (i, (pixel, &weight)) in pixels.iter().zip(weights.iter()).enumerate() {
             let lab = labs[i];
-            let seed = centroid_cache_lookup(&nn_cache, pixel.r, pixel.g, pixel.b);
-            let nearest = find_nearest_seeded(&centroids, lab, seed, &neighbors);
+
+            // Triangle-inequality early exit: if the pixel is closer to its
+            // current centroid than half the distance to the nearest other
+            // centroid, no reassignment is possible.
+            let nearest = if iter > 0 {
+                let prev = assignments[i] as usize;
+                let d = lab.distance_sq(centroids[prev]);
+                if d < skip_threshold[prev] {
+                    prev
+                } else {
+                    let seed = centroid_cache_lookup(&nn_cache, pixel.r, pixel.g, pixel.b);
+                    find_nearest_seeded(&centroids, lab, seed, &neighbors)
+                }
+            } else {
+                let seed = centroid_cache_lookup(&nn_cache, pixel.r, pixel.g, pixel.b);
+                find_nearest_seeded(&centroids, lab, seed, &neighbors)
+            };
+
+            assignments[i] = nearest as u8;
             let w = weight as f64;
             sums_l[nearest] += lab.l as f64 * w;
             sums_a[nearest] += lab.a as f64 * w;
@@ -339,11 +365,14 @@ pub fn refine_against_pixels_rgba(
     let mut nn_cache = build_centroid_nn_cache(&centroids, &grid_labs);
     let mut neighbors = build_centroid_neighbors(&centroids);
     let mut old_centroids = centroids.clone();
+    let mut assignments = vec![0u8; pixels.len()];
+    let mut skip_threshold = compute_skip_thresholds(&centroids, &neighbors);
 
     for iter in 0..iterations {
         if iter > 0 {
             rebuild_neighbors_incremental(&centroids, &old_centroids, &mut neighbors);
             rebuild_nn_cache_seeded(&centroids, &grid_labs, &mut nn_cache, &neighbors);
+            skip_threshold = compute_skip_thresholds(&centroids, &neighbors);
         }
 
         let mut sums_l = vec![0.0f64; k];
@@ -356,8 +385,22 @@ pub fn refine_against_pixels_rgba(
                 continue;
             }
             let lab = labs[i];
-            let seed = centroid_cache_lookup(&nn_cache, pixel.r, pixel.g, pixel.b);
-            let nearest = find_nearest_seeded(&centroids, lab, seed, &neighbors);
+
+            let nearest = if iter > 0 {
+                let prev = assignments[i] as usize;
+                let d = lab.distance_sq(centroids[prev]);
+                if d < skip_threshold[prev] {
+                    prev
+                } else {
+                    let seed = centroid_cache_lookup(&nn_cache, pixel.r, pixel.g, pixel.b);
+                    find_nearest_seeded(&centroids, lab, seed, &neighbors)
+                }
+            } else {
+                let seed = centroid_cache_lookup(&nn_cache, pixel.r, pixel.g, pixel.b);
+                find_nearest_seeded(&centroids, lab, seed, &neighbors)
+            };
+
+            assignments[i] = nearest as u8;
             let w = weight as f64;
             sums_l[nearest] += lab.l as f64 * w;
             sums_a[nearest] += lab.a as f64 * w;
@@ -510,6 +553,23 @@ fn rebuild_neighbors_incremental(
             rebuild_neighbors_for(i, centroids, &mut neighbors[i]);
         }
     }
+}
+
+/// Compute per-centroid skip thresholds for triangle-inequality early exit.
+///
+/// For centroid i, if a pixel's distance² to centroid i is less than
+/// `dist²(i, nearest_other) / 4`, then no other centroid can be closer
+/// (by triangle inequality). The /4 is because we compare squared distances:
+/// `d(p,i) < d(i,j)/2` becomes `d²(p,i) < d²(i,j)/4`.
+fn compute_skip_thresholds(centroids: &[OKLab], neighbors: &[[u8; 16]]) -> Vec<f32> {
+    centroids
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let nearest_other = neighbors[i][0] as usize;
+            c.distance_sq(centroids[nearest_other]) * 0.25
+        })
+        .collect()
 }
 
 /// Find nearest centroid using seed + neighbor refinement (17 checks vs 256).
