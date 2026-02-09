@@ -208,12 +208,10 @@ pub fn dither_image(
                 if dithered_best == undithered_best {
                     dithered_best
                 } else {
-                    let d_dithered = orig_lab.distance_sq(
-                        palette.entries_oklab()[dithered_best as usize],
-                    );
-                    let d_undithered = orig_lab.distance_sq(
-                        palette.entries_oklab()[undithered_best as usize],
-                    );
+                    let d_dithered =
+                        orig_lab.distance_sq(palette.entries_oklab()[dithered_best as usize]);
+                    let d_undithered =
+                        orig_lab.distance_sq(palette.entries_oklab()[undithered_best as usize]);
                     if d_dithered <= d_undithered * 2.0 {
                         dithered_best
                     } else {
@@ -292,18 +290,30 @@ pub fn dither_image(
                 let mut ratio = 1.0f32;
                 // L: allow small overflow [-0.05, 1.05]
                 if dl != 0.0 {
-                    if new_l > 1.05 { ratio = ratio.min((1.05 - v[0]) / dl); }
-                    if new_l < -0.05 { ratio = ratio.min((-0.05 - v[0]) / dl); }
+                    if new_l > 1.05 {
+                        ratio = ratio.min((1.05 - v[0]) / dl);
+                    }
+                    if new_l < -0.05 {
+                        ratio = ratio.min((-0.05 - v[0]) / dl);
+                    }
                 }
                 // a: allow overflow [-0.55, 0.55]
                 if da != 0.0 {
-                    if new_a > 0.55 { ratio = ratio.min((0.55 - v[1]) / da); }
-                    if new_a < -0.55 { ratio = ratio.min((-0.55 - v[1]) / da); }
+                    if new_a > 0.55 {
+                        ratio = ratio.min((0.55 - v[1]) / da);
+                    }
+                    if new_a < -0.55 {
+                        ratio = ratio.min((-0.55 - v[1]) / da);
+                    }
                 }
                 // b: allow overflow [-0.55, 0.55]
                 if db != 0.0 {
-                    if new_b > 0.55 { ratio = ratio.min((0.55 - v[2]) / db); }
-                    if new_b < -0.55 { ratio = ratio.min((-0.55 - v[2]) / db); }
+                    if new_b > 0.55 {
+                        ratio = ratio.min((0.55 - v[2]) / db);
+                    }
+                    if new_b < -0.55 {
+                        ratio = ratio.min((-0.55 - v[2]) / db);
+                    }
                 }
                 ratio = ratio.max(0.0);
                 v[0] += dl * ratio;
@@ -433,12 +443,10 @@ pub fn dither_image_rgba(
                 if dithered_best == undithered_best {
                     dithered_best
                 } else {
-                    let d_dithered = orig_lab.distance_sq(
-                        palette.entries_oklab()[dithered_best as usize],
-                    );
-                    let d_undithered = orig_lab.distance_sq(
-                        palette.entries_oklab()[undithered_best as usize],
-                    );
+                    let d_dithered =
+                        orig_lab.distance_sq(palette.entries_oklab()[dithered_best as usize]);
+                    let d_undithered =
+                        orig_lab.distance_sq(palette.entries_oklab()[undithered_best as usize]);
                     if d_dithered <= d_undithered * 2.0 {
                         dithered_best
                     } else {
@@ -507,16 +515,28 @@ pub fn dither_image_rgba(
                 let new_b = v[2] + db;
                 let mut ratio = 1.0f32;
                 if dl != 0.0 {
-                    if new_l > 1.05 { ratio = ratio.min((1.05 - v[0]) / dl); }
-                    if new_l < -0.05 { ratio = ratio.min((-0.05 - v[0]) / dl); }
+                    if new_l > 1.05 {
+                        ratio = ratio.min((1.05 - v[0]) / dl);
+                    }
+                    if new_l < -0.05 {
+                        ratio = ratio.min((-0.05 - v[0]) / dl);
+                    }
                 }
                 if da != 0.0 {
-                    if new_a > 0.55 { ratio = ratio.min((0.55 - v[1]) / da); }
-                    if new_a < -0.55 { ratio = ratio.min((-0.55 - v[1]) / da); }
+                    if new_a > 0.55 {
+                        ratio = ratio.min((0.55 - v[1]) / da);
+                    }
+                    if new_a < -0.55 {
+                        ratio = ratio.min((-0.55 - v[1]) / da);
+                    }
                 }
                 if db != 0.0 {
-                    if new_b > 0.55 { ratio = ratio.min((0.55 - v[2]) / db); }
-                    if new_b < -0.55 { ratio = ratio.min((-0.55 - v[2]) / db); }
+                    if new_b > 0.55 {
+                        ratio = ratio.min((0.55 - v[2]) / db);
+                    }
+                    if new_b < -0.55 {
+                        ratio = ratio.min((-0.55 - v[2]) / db);
+                    }
                 }
                 ratio = ratio.max(0.0);
                 v[0] += dl * ratio;
@@ -659,12 +679,10 @@ pub fn dither_image_rgba_alpha(
                 if dithered_best == undithered_best {
                     dithered_best
                 } else {
-                    let d_dithered = orig_lab.distance_sq(
-                        palette.entries_oklab()[dithered_best as usize],
-                    );
-                    let d_undithered = orig_lab.distance_sq(
-                        palette.entries_oklab()[undithered_best as usize],
-                    );
+                    let d_dithered =
+                        orig_lab.distance_sq(palette.entries_oklab()[dithered_best as usize]);
+                    let d_undithered =
+                        orig_lab.distance_sq(palette.entries_oklab()[undithered_best as usize]);
                     if d_dithered <= d_undithered * 2.0 {
                         dithered_best
                     } else {
@@ -741,20 +759,36 @@ pub fn dither_image_rgba_alpha(
                 let new_al = v[3] + dal;
                 let mut ratio = 1.0f32;
                 if dl != 0.0 {
-                    if new_l > 1.05 { ratio = ratio.min((1.05 - v[0]) / dl); }
-                    if new_l < -0.05 { ratio = ratio.min((-0.05 - v[0]) / dl); }
+                    if new_l > 1.05 {
+                        ratio = ratio.min((1.05 - v[0]) / dl);
+                    }
+                    if new_l < -0.05 {
+                        ratio = ratio.min((-0.05 - v[0]) / dl);
+                    }
                 }
                 if da != 0.0 {
-                    if new_a > 0.55 { ratio = ratio.min((0.55 - v[1]) / da); }
-                    if new_a < -0.55 { ratio = ratio.min((-0.55 - v[1]) / da); }
+                    if new_a > 0.55 {
+                        ratio = ratio.min((0.55 - v[1]) / da);
+                    }
+                    if new_a < -0.55 {
+                        ratio = ratio.min((-0.55 - v[1]) / da);
+                    }
                 }
                 if db != 0.0 {
-                    if new_b > 0.55 { ratio = ratio.min((0.55 - v[2]) / db); }
-                    if new_b < -0.55 { ratio = ratio.min((-0.55 - v[2]) / db); }
+                    if new_b > 0.55 {
+                        ratio = ratio.min((0.55 - v[2]) / db);
+                    }
+                    if new_b < -0.55 {
+                        ratio = ratio.min((-0.55 - v[2]) / db);
+                    }
                 }
                 if dal != 0.0 {
-                    if new_al > 1.05 { ratio = ratio.min((1.05 - v[3]) / dal); }
-                    if new_al < -0.05 { ratio = ratio.min((-0.05 - v[3]) / dal); }
+                    if new_al > 1.05 {
+                        ratio = ratio.min((1.05 - v[3]) / dal);
+                    }
+                    if new_al < -0.05 {
+                        ratio = ratio.min((-0.05 - v[3]) / dal);
+                    }
                 }
                 ratio = ratio.max(0.0);
                 v[0] += dl * ratio;
@@ -768,56 +802,128 @@ pub fn dither_image_rgba_alpha(
             if forward {
                 if x + 1 < width && opaque_at(idx + 1) {
                     let w = if adaptive { weights[idx + 1] } else { 1.0 };
-                    diffuse_err(&mut lab_buf, idx + 1, 7.0 / 16.0, err_l, err_a, err_b, err_al, w);
+                    diffuse_err(
+                        &mut lab_buf,
+                        idx + 1,
+                        7.0 / 16.0,
+                        err_l,
+                        err_a,
+                        err_b,
+                        err_al,
+                        w,
+                    );
                 }
                 if y + 1 < height {
                     if x > 0 {
                         let ti = (y + 1) * width + (x - 1);
                         if opaque_at(ti) {
                             let w = if adaptive { weights[ti] } else { 1.0 };
-                            diffuse_err(&mut lab_buf, ti, 3.0 / 16.0, err_l, err_a, err_b, err_al, w);
+                            diffuse_err(
+                                &mut lab_buf,
+                                ti,
+                                3.0 / 16.0,
+                                err_l,
+                                err_a,
+                                err_b,
+                                err_al,
+                                w,
+                            );
                         }
                     }
                     {
                         let ti = (y + 1) * width + x;
                         if opaque_at(ti) {
                             let w = if adaptive { weights[ti] } else { 1.0 };
-                            diffuse_err(&mut lab_buf, ti, 5.0 / 16.0, err_l, err_a, err_b, err_al, w);
+                            diffuse_err(
+                                &mut lab_buf,
+                                ti,
+                                5.0 / 16.0,
+                                err_l,
+                                err_a,
+                                err_b,
+                                err_al,
+                                w,
+                            );
                         }
                     }
                     if x + 1 < width {
                         let ti = (y + 1) * width + (x + 1);
                         if opaque_at(ti) {
                             let w = if adaptive { weights[ti] } else { 1.0 };
-                            diffuse_err(&mut lab_buf, ti, 1.0 / 16.0, err_l, err_a, err_b, err_al, w);
+                            diffuse_err(
+                                &mut lab_buf,
+                                ti,
+                                1.0 / 16.0,
+                                err_l,
+                                err_a,
+                                err_b,
+                                err_al,
+                                w,
+                            );
                         }
                     }
                 }
             } else {
                 if x > 0 && opaque_at(idx - 1) {
                     let w = if adaptive { weights[idx - 1] } else { 1.0 };
-                    diffuse_err(&mut lab_buf, idx - 1, 7.0 / 16.0, err_l, err_a, err_b, err_al, w);
+                    diffuse_err(
+                        &mut lab_buf,
+                        idx - 1,
+                        7.0 / 16.0,
+                        err_l,
+                        err_a,
+                        err_b,
+                        err_al,
+                        w,
+                    );
                 }
                 if y + 1 < height {
                     if x + 1 < width {
                         let ti = (y + 1) * width + (x + 1);
                         if opaque_at(ti) {
                             let w = if adaptive { weights[ti] } else { 1.0 };
-                            diffuse_err(&mut lab_buf, ti, 3.0 / 16.0, err_l, err_a, err_b, err_al, w);
+                            diffuse_err(
+                                &mut lab_buf,
+                                ti,
+                                3.0 / 16.0,
+                                err_l,
+                                err_a,
+                                err_b,
+                                err_al,
+                                w,
+                            );
                         }
                     }
                     {
                         let ti = (y + 1) * width + x;
                         if opaque_at(ti) {
                             let w = if adaptive { weights[ti] } else { 1.0 };
-                            diffuse_err(&mut lab_buf, ti, 5.0 / 16.0, err_l, err_a, err_b, err_al, w);
+                            diffuse_err(
+                                &mut lab_buf,
+                                ti,
+                                5.0 / 16.0,
+                                err_l,
+                                err_a,
+                                err_b,
+                                err_al,
+                                w,
+                            );
                         }
                     }
                     if x > 0 {
                         let ti = (y + 1) * width + (x - 1);
                         if opaque_at(ti) {
                             let w = if adaptive { weights[ti] } else { 1.0 };
-                            diffuse_err(&mut lab_buf, ti, 1.0 / 16.0, err_l, err_a, err_b, err_al, w);
+                            diffuse_err(
+                                &mut lab_buf,
+                                ti,
+                                1.0 / 16.0,
+                                err_l,
+                                err_a,
+                                err_b,
+                                err_al,
+                                w,
+                            );
                         }
                     }
                 }

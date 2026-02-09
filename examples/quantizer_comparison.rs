@@ -191,100 +191,99 @@ fn main() {
                 let recalc = &recalc;
 
                 s.spawn(move || {
-                let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+                    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
 
-                let img = match image::open(path) {
-                    Ok(img) => img.to_rgb8(),
-                    Err(e) => {
-                        eprintln!("[{}/{}] {stem}: skipping ({e})", task_idx + 1, total);
-                        return;
-                    }
-                };
-
-                let width = img.width() as usize;
-                let height = img.height() as usize;
-                let pixels: Vec<rgb::RGB<u8>> = img
-                    .pixels()
-                    .map(|p| rgb::RGB {
-                        r: p.0[0],
-                        g: p.0[1],
-                        b: p.0[2],
-                    })
-                    .collect();
-                let ref_rgb: Vec<RGB8> =
-                    pixels.iter().map(|p| RGB8::new(p.r, p.g, p.b)).collect();
-
-                let img_dir = output_dir.join(&*stem);
-                std::fs::create_dir_all(&img_dir).unwrap();
-                save_truecolor_png(&img_dir.join("original.png"), &pixels, width, height);
-
-                let mut image_result = ImageResult {
-                    name: stem.to_string(),
-                    group: corpus_name.clone(),
-                    width,
-                    height,
-                    quantizers: Vec::new(),
-                };
-
-                // Load cache
-                let cache_path = img_dir.join("cache.json");
-                let mut cache = load_cache(&cache_path);
-                let mut log = format!("[{}/{}] {corpus_name}/{stem}", task_idx + 1, total);
-
-                for &qname in QUANTIZER_NAMES {
-                    let should_recalc =
-                        recalc_all || recalc.iter().any(|r| r == qname);
-                    if !should_recalc {
-                        if let Some(cached) = cache.get(qname) {
-                            if img_dir.join(format!("{qname}.png")).exists() {
-                                image_result.quantizers.push(cached.clone());
-                                log.push_str(&format!("  {qname}:cached"));
-                                continue;
-                            }
-                        }
-                    }
-
-                    let t0 = Instant::now();
-                    let result = run_quantizer(qname, &pixels, width, height);
-                    let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
-
-                    let (pal, idx, note) = match result {
-                        Some(r) => r,
-                        None => {
-                            log.push_str(&format!("  {qname}:skip"));
-                            continue;
+                    let img = match image::open(path) {
+                        Ok(img) => img.to_rgb8(),
+                        Err(e) => {
+                            eprintln!("[{}/{}] {stem}: skipping ({e})", task_idx + 1, total);
+                            return;
                         }
                     };
 
-                    save_indexed_png(
-                        &img_dir.join(format!("{qname}.png")),
-                        &pal,
-                        &idx,
+                    let width = img.width() as usize;
+                    let height = img.height() as usize;
+                    let pixels: Vec<rgb::RGB<u8>> = img
+                        .pixels()
+                        .map(|p| rgb::RGB {
+                            r: p.0[0],
+                            g: p.0[1],
+                            b: p.0[2],
+                        })
+                        .collect();
+                    let ref_rgb: Vec<RGB8> =
+                        pixels.iter().map(|p| RGB8::new(p.r, p.g, p.b)).collect();
+
+                    let img_dir = output_dir.join(&*stem);
+                    std::fs::create_dir_all(&img_dir).unwrap();
+                    save_truecolor_png(&img_dir.join("original.png"), &pixels, width, height);
+
+                    let mut image_result = ImageResult {
+                        name: stem.to_string(),
+                        group: corpus_name.clone(),
                         width,
                         height,
-                    );
-                    let metrics = compute_metrics(&ref_rgb, &pal, &idx, width, height);
-                    let sizes = measure_format_sizes(&pal, &idx, width, height);
-                    let qr = QuantizerResult {
-                        name: qname.into(),
-                        butteraugli: metrics.0,
-                        ssimulacra2: metrics.1,
-                        dssim: metrics.2,
-                        png_bytes: sizes.0,
-                        gif_bytes: sizes.1,
-                        time_ms: elapsed_ms,
-                        note,
+                        quantizers: Vec::new(),
                     };
-                    cache.insert(qname.to_string(), qr.clone());
-                    image_result.quantizers.push(qr);
-                    log.push_str(&format!("  {qname}:{:.0}ms", elapsed_ms));
-                }
 
-                save_cache(&cache_path, &cache);
-                eprintln!("{log}");
+                    // Load cache
+                    let cache_path = img_dir.join("cache.json");
+                    let mut cache = load_cache(&cache_path);
+                    let mut log = format!("[{}/{}] {corpus_name}/{stem}", task_idx + 1, total);
 
-                results.lock().unwrap().push(image_result);
-            });
+                    for &qname in QUANTIZER_NAMES {
+                        let should_recalc = recalc_all || recalc.iter().any(|r| r == qname);
+                        if !should_recalc {
+                            if let Some(cached) = cache.get(qname) {
+                                if img_dir.join(format!("{qname}.png")).exists() {
+                                    image_result.quantizers.push(cached.clone());
+                                    log.push_str(&format!("  {qname}:cached"));
+                                    continue;
+                                }
+                            }
+                        }
+
+                        let t0 = Instant::now();
+                        let result = run_quantizer(qname, &pixels, width, height);
+                        let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+                        let (pal, idx, note) = match result {
+                            Some(r) => r,
+                            None => {
+                                log.push_str(&format!("  {qname}:skip"));
+                                continue;
+                            }
+                        };
+
+                        save_indexed_png(
+                            &img_dir.join(format!("{qname}.png")),
+                            &pal,
+                            &idx,
+                            width,
+                            height,
+                        );
+                        let metrics = compute_metrics(&ref_rgb, &pal, &idx, width, height);
+                        let sizes = measure_format_sizes(&pal, &idx, width, height);
+                        let qr = QuantizerResult {
+                            name: qname.into(),
+                            butteraugli: metrics.0,
+                            ssimulacra2: metrics.1,
+                            dssim: metrics.2,
+                            png_bytes: sizes.0,
+                            gif_bytes: sizes.1,
+                            time_ms: elapsed_ms,
+                            note,
+                        };
+                        cache.insert(qname.to_string(), qr.clone());
+                        image_result.quantizers.push(qr);
+                        log.push_str(&format!("  {qname}:{:.0}ms", elapsed_ms));
+                    }
+
+                    save_cache(&cache_path, &cache);
+                    eprintln!("{log}");
+
+                    results.lock().unwrap().push(image_result);
+                });
             }
         });
     }
@@ -334,9 +333,7 @@ fn load_cache(path: &Path) -> HashMap<String, QuantizerResult> {
                 + start;
             entry[start..end].parse().ok()
         };
-        let parse_usize = |key: &str| -> Option<usize> {
-            parse_f64(key).map(|v| v as usize)
-        };
+        let parse_usize = |key: &str| -> Option<usize> { parse_f64(key).map(|v| v as usize) };
 
         if let (Some(name), Some(ba), Some(ss2), Some(dssim), Some(png), Some(gif), Some(ms)) = (
             parse_str("name"),
@@ -438,7 +435,11 @@ fn run_quantizer(
                 .max_colors(256)
                 ._dither_strength(0.3);
             let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
-            Some((r.palette().to_vec(), r.indices().to_vec(), "d0.3 (explicit)"))
+            Some((
+                r.palette().to_vec(),
+                r.indices().to_vec(),
+                "d0.3 (explicit)",
+            ))
         }
         "zq-best-d50" => {
             let cfg = QuantizeConfig::new(OutputFormat::Png)
@@ -460,7 +461,11 @@ fn run_quantizer(
                 ._dither_strength(0.1)
                 ._run_priority_quality();
             let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
-            Some((r.palette().to_vec(), r.indices().to_vec(), "d0.1 quality-runs"))
+            Some((
+                r.palette().to_vec(),
+                r.indices().to_vec(),
+                "d0.1 quality-runs",
+            ))
         }
         "zq-best-q-d30" => {
             let cfg = QuantizeConfig::new(OutputFormat::Png)
@@ -468,7 +473,11 @@ fn run_quantizer(
                 ._dither_strength(0.3)
                 ._run_priority_quality();
             let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
-            Some((r.palette().to_vec(), r.indices().to_vec(), "d0.3 quality-runs"))
+            Some((
+                r.palette().to_vec(),
+                r.indices().to_vec(),
+                "d0.3 quality-runs",
+            ))
         }
         "zq-best-q-d50" => {
             let cfg = QuantizeConfig::new(OutputFormat::Png)
@@ -476,7 +485,11 @@ fn run_quantizer(
                 ._dither_strength(0.5)
                 ._run_priority_quality();
             let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
-            Some((r.palette().to_vec(), r.indices().to_vec(), "d0.5 quality-runs"))
+            Some((
+                r.palette().to_vec(),
+                r.indices().to_vec(),
+                "d0.5 quality-runs",
+            ))
         }
         "zq-best-q-d60" => {
             let cfg = QuantizeConfig::new(OutputFormat::Png)
@@ -484,7 +497,11 @@ fn run_quantizer(
                 ._dither_strength(0.6)
                 ._run_priority_quality();
             let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
-            Some((r.palette().to_vec(), r.indices().to_vec(), "d0.6 quality-runs"))
+            Some((
+                r.palette().to_vec(),
+                r.indices().to_vec(),
+                "d0.6 quality-runs",
+            ))
         }
         "zq-best-q-d90" => {
             let cfg = QuantizeConfig::new(OutputFormat::Png)
@@ -492,7 +509,11 @@ fn run_quantizer(
                 ._dither_strength(0.9)
                 ._run_priority_quality();
             let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
-            Some((r.palette().to_vec(), r.indices().to_vec(), "d0.9 quality-runs"))
+            Some((
+                r.palette().to_vec(),
+                r.indices().to_vec(),
+                "d0.9 quality-runs",
+            ))
         }
         "zq-best-q-d100" => {
             let cfg = QuantizeConfig::new(OutputFormat::Png)
@@ -500,7 +521,11 @@ fn run_quantizer(
                 ._dither_strength(1.0)
                 ._run_priority_quality();
             let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
-            Some((r.palette().to_vec(), r.indices().to_vec(), "d1.0 quality-runs"))
+            Some((
+                r.palette().to_vec(),
+                r.indices().to_vec(),
+                "d1.0 quality-runs",
+            ))
         }
         "iq-s1-d50" => {
             let (p, i) = run_imagequant(pixels, width, height, 1, 100, 0.5);
