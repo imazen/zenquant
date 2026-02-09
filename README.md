@@ -4,13 +4,11 @@ AQ-informed palette quantizer — perceptual masking meets color quantization.
 
 ## Credits
 
-This project was informed by prior work in palette quantization:
+- **[libimagequant](https://github.com/ImageOptim/libimagequant)** (GPL-3.0) — Prior art in perceptual palette quantization. Informed our approach to adaptive masking and k-means refinement, though zenquant uses butteraugli-derived AQ and a different histogram strategy.
 
-- **[libimagequant](https://github.com/ImageOptim/libimagequant)** (GPL-3.0) — The gold standard for perceptual palette quantization. Our approach to adaptive quantization masking and k-means refinement was influenced by libimagequant's algorithms, though our implementation uses a different masking model (butteraugli-derived AQ) and histogram strategy.
+- **[quantizr](https://github.com/nicoshev/quantizr)** (MIT) — Reference for Rust median-cut patterns.
 
-- **[quantizr](https://github.com/nicoshev/quantizr)** (MIT) — A clean Rust median-cut quantizer. Used as a reference for Rust palette quantization patterns.
-
-- **Claude** (Anthropic) — AI-assisted development. Not all code manually reviewed — review critical paths before production use.
+- **Claude** (Anthropic) — AI-assisted development. Not all code manually reviewed.
 
 ## License
 
