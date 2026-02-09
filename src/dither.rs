@@ -159,19 +159,25 @@ pub fn dither_image(
 
     let mut indices = vec![0u8; pixels.len()];
 
+    // High-dither features only activate above this threshold.
+    // Below it, use simple F-S to preserve the tuned low-strength behavior.
+    let high_dither = dither_strength > 0.4;
+
     // Edge-aware dither map: reduces error generation near edges.
-    let dither_map = compute_dither_map(&lab_buf, width, height);
+    let dither_map = if high_dither {
+        compute_dither_map(&lab_buf, width, height)
+    } else {
+        vec![1.0f32; pixels.len()]
+    };
 
     // Error magnitude threshold — errors beyond this get damped.
-    // Scaled by dither_strength so higher dither levels allow proportionally
-    // larger errors before damping kicks in.
     let max_err_sq = 0.002 * dither_strength;
 
     let adaptive = mode == DitherMode::Adaptive;
 
     for y in 0..height {
-        // Serpentine: even rows L→R, odd rows R→L
-        let forward = y % 2 == 0;
+        // Serpentine: even rows L→R, odd rows R→L (high dither only)
+        let forward = !high_dither || y % 2 == 0;
         let mut prev_index: Option<u8> = None;
 
         let x_iter: Box<dyn Iterator<Item = usize>> = if forward {
@@ -190,29 +196,28 @@ pub fn dither_image(
             let seed = palette.nearest_cached(p.r, p.g, p.b);
             let dithered_best = palette.nearest_seeded(current, seed);
 
-            // Undithered fallback: if error diffusion pushed us to a palette
-            // entry much farther from the *original* pixel than the naive
-            // nearest match, the dithering created a discordant speckle.
-            // Only reject when the dithered choice is >2x worse.
-            let undithered_best = palette.nearest_seeded(orig_lab, seed);
-            let best = if dithered_best == undithered_best {
-                dithered_best
-            } else {
-                let d_dithered = orig_lab.distance_sq(
-                    palette.entries_oklab()[dithered_best as usize],
-                );
-                let d_undithered = orig_lab.distance_sq(
-                    palette.entries_oklab()[undithered_best as usize],
-                );
-                // Allow the dithered choice unless it's >2x farther from the
-                // original than the undithered choice. This permits normal
-                // dithering between nearby palette entries while blocking
-                // gross hue shifts.
-                if d_dithered <= d_undithered * 2.0 {
+            // Undithered fallback (high dither only): if error diffusion
+            // pushed us to a palette entry much farther from the *original*
+            // pixel than the naive nearest match, reject it.
+            let best = if high_dither {
+                let undithered_best = palette.nearest_seeded(orig_lab, seed);
+                if dithered_best == undithered_best {
                     dithered_best
                 } else {
-                    undithered_best
+                    let d_dithered = orig_lab.distance_sq(
+                        palette.entries_oklab()[dithered_best as usize],
+                    );
+                    let d_undithered = orig_lab.distance_sq(
+                        palette.entries_oklab()[undithered_best as usize],
+                    );
+                    if d_dithered <= d_undithered * 2.0 {
+                        dithered_best
+                    } else {
+                        undithered_best
+                    }
                 }
+            } else {
+                dithered_best
             };
             let best_lab = palette.entries_oklab()[best as usize];
 
@@ -250,13 +255,15 @@ pub fn dither_image(
             let mut err_a = (current.a - chosen_lab.a) * scale;
             let mut err_b = (current.b - chosen_lab.b) * scale;
 
-            // Error magnitude reduction: damp large errors to prevent
-            // runaway accumulation that creates visible noise patterns.
-            let err_mag = err_l * err_l + err_a * err_a + err_b * err_b;
-            if err_mag > max_err_sq {
-                err_l *= 0.75;
-                err_a *= 0.75;
-                err_b *= 0.75;
+            // Error magnitude reduction (high dither only): damp large
+            // errors to prevent runaway accumulation.
+            if high_dither {
+                let err_mag = err_l * err_l + err_a * err_a + err_b * err_b;
+                if err_mag > max_err_sq {
+                    err_l *= 0.75;
+                    err_a *= 0.75;
+                    err_b *= 0.75;
+                }
             }
 
             // Diffuse error with AQ modulation and gamut clamping.
@@ -350,6 +357,7 @@ pub fn dither_image_rgba(
     let run_bias = run_priority.bias();
     let max_err_sq = 0.002 * dither_strength;
     let adaptive = mode == DitherMode::Adaptive;
+    let high_dither = dither_strength > 0.4;
 
     let mut lab_buf: Vec<[f32; 3]> = pixels
         .iter()
@@ -360,10 +368,14 @@ pub fn dither_image_rgba(
         .collect();
 
     let mut indices = vec![0u8; pixels.len()];
-    let dither_map = compute_dither_map(&lab_buf, width, height);
+    let dither_map = if high_dither {
+        compute_dither_map(&lab_buf, width, height)
+    } else {
+        vec![1.0f32; pixels.len()]
+    };
 
     for y in 0..height {
-        let forward = y % 2 == 0;
+        let forward = !high_dither || y % 2 == 0;
         let mut prev_index: Option<u8> = None;
 
         let x_iter: Box<dyn Iterator<Item = usize>> = if forward {
@@ -387,21 +399,25 @@ pub fn dither_image_rgba(
             let seed = palette.nearest_cached(p.r, p.g, p.b);
             let dithered_best = palette.nearest_seeded(current, seed);
 
-            let undithered_best = palette.nearest_seeded(orig_lab, seed);
-            let best = if dithered_best == undithered_best {
-                dithered_best
-            } else {
-                let d_dithered = orig_lab.distance_sq(
-                    palette.entries_oklab()[dithered_best as usize],
-                );
-                let d_undithered = orig_lab.distance_sq(
-                    palette.entries_oklab()[undithered_best as usize],
-                );
-                if d_dithered <= d_undithered * 2.0 {
+            let best = if high_dither {
+                let undithered_best = palette.nearest_seeded(orig_lab, seed);
+                if dithered_best == undithered_best {
                     dithered_best
                 } else {
-                    undithered_best
+                    let d_dithered = orig_lab.distance_sq(
+                        palette.entries_oklab()[dithered_best as usize],
+                    );
+                    let d_undithered = orig_lab.distance_sq(
+                        palette.entries_oklab()[undithered_best as usize],
+                    );
+                    if d_dithered <= d_undithered * 2.0 {
+                        dithered_best
+                    } else {
+                        undithered_best
+                    }
                 }
+            } else {
+                dithered_best
             };
             let best_lab = palette.entries_oklab()[best as usize];
 
@@ -436,11 +452,13 @@ pub fn dither_image_rgba(
             let mut err_a = (current.a - chosen_lab.a) * scale;
             let mut err_b = (current.b - chosen_lab.b) * scale;
 
-            let err_mag = err_l * err_l + err_a * err_a + err_b * err_b;
-            if err_mag > max_err_sq {
-                err_l *= 0.75;
-                err_a *= 0.75;
-                err_b *= 0.75;
+            if high_dither {
+                let err_mag = err_l * err_l + err_a * err_a + err_b * err_b;
+                if err_mag > max_err_sq {
+                    err_l *= 0.75;
+                    err_a *= 0.75;
+                    err_b *= 0.75;
+                }
             }
 
             let diffuse_err = |buf: &mut [[f32; 3]],
@@ -544,6 +562,7 @@ pub fn dither_image_rgba_alpha(
     let run_bias = run_priority.bias();
     let max_err_sq = 0.002 * dither_strength;
     let adaptive = mode == DitherMode::Adaptive;
+    let high_dither = dither_strength > 0.4;
 
     // Working buffer: [L, a, b, alpha]
     let mut lab_buf: Vec<[f32; 4]> = pixels
@@ -556,10 +575,14 @@ pub fn dither_image_rgba_alpha(
         .collect();
 
     let mut indices = vec![0u8; pixels.len()];
-    let dither_map = compute_dither_map_4(&lab_buf, width, height);
+    let dither_map = if high_dither {
+        compute_dither_map_4(&lab_buf, width, height)
+    } else {
+        vec![1.0f32; pixels.len()]
+    };
 
     for y in 0..height {
-        let forward = y % 2 == 0;
+        let forward = !high_dither || y % 2 == 0;
         let mut prev_index: Option<u8> = None;
 
         let x_iter: Box<dyn Iterator<Item = usize>> = if forward {
@@ -585,21 +608,25 @@ pub fn dither_image_rgba_alpha(
             let orig_alpha = p.a as f32 / 255.0;
             let dithered_best = palette.nearest_with_alpha(current, current_alpha);
 
-            let undithered_best = palette.nearest_with_alpha(orig_lab, orig_alpha);
-            let best = if dithered_best == undithered_best {
-                dithered_best
-            } else {
-                let d_dithered = orig_lab.distance_sq(
-                    palette.entries_oklab()[dithered_best as usize],
-                );
-                let d_undithered = orig_lab.distance_sq(
-                    palette.entries_oklab()[undithered_best as usize],
-                );
-                if d_dithered <= d_undithered * 2.0 {
+            let best = if high_dither {
+                let undithered_best = palette.nearest_with_alpha(orig_lab, orig_alpha);
+                if dithered_best == undithered_best {
                     dithered_best
                 } else {
-                    undithered_best
+                    let d_dithered = orig_lab.distance_sq(
+                        palette.entries_oklab()[dithered_best as usize],
+                    );
+                    let d_undithered = orig_lab.distance_sq(
+                        palette.entries_oklab()[undithered_best as usize],
+                    );
+                    if d_dithered <= d_undithered * 2.0 {
+                        dithered_best
+                    } else {
+                        undithered_best
+                    }
                 }
+            } else {
+                dithered_best
             };
             let best_lab = palette.entries_oklab()[best as usize];
 
@@ -638,12 +665,14 @@ pub fn dither_image_rgba_alpha(
             let mut err_b = (current.b - chosen_lab.b) * scale;
             let mut err_al = (current_alpha - chosen_alpha) * scale;
 
-            let err_mag = err_l * err_l + err_a * err_a + err_b * err_b;
-            if err_mag > max_err_sq {
-                err_l *= 0.75;
-                err_a *= 0.75;
-                err_b *= 0.75;
-                err_al *= 0.75;
+            if high_dither {
+                let err_mag = err_l * err_l + err_a * err_a + err_b * err_b;
+                if err_mag > max_err_sq {
+                    err_l *= 0.75;
+                    err_a *= 0.75;
+                    err_b *= 0.75;
+                    err_al *= 0.75;
+                }
             }
 
             let diffuse_err = |buf: &mut [[f32; 4]],

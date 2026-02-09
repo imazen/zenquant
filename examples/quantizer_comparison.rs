@@ -29,8 +29,12 @@ const QUANTIZER_NAMES: &[&str] = &[
     "zq-fast",
     "zq-balanced",
     "zq-best",
+    "zq-best-d10",
+    "zq-best-d30",
     "zq-best-d50",
     "zq-best-d60",
+    "zq-best-q-d10",
+    "zq-best-q-d30",
     "zq-best-q-d50",
     "zq-best-q-d60",
     "zq-best-q-d90",
@@ -422,6 +426,20 @@ fn run_quantizer(
             let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
             Some((r.palette().to_vec(), r.indices().to_vec(), "d0.3 (default)"))
         }
+        "zq-best-d10" => {
+            let cfg = QuantizeConfig::new(OutputFormat::Png)
+                .max_colors(256)
+                ._dither_strength(0.1);
+            let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
+            Some((r.palette().to_vec(), r.indices().to_vec(), "d0.1"))
+        }
+        "zq-best-d30" => {
+            let cfg = QuantizeConfig::new(OutputFormat::Png)
+                .max_colors(256)
+                ._dither_strength(0.3);
+            let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
+            Some((r.palette().to_vec(), r.indices().to_vec(), "d0.3 (explicit)"))
+        }
         "zq-best-d50" => {
             let cfg = QuantizeConfig::new(OutputFormat::Png)
                 .max_colors(256)
@@ -435,6 +453,22 @@ fn run_quantizer(
                 ._dither_strength(0.6);
             let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
             Some((r.palette().to_vec(), r.indices().to_vec(), "d0.6"))
+        }
+        "zq-best-q-d10" => {
+            let cfg = QuantizeConfig::new(OutputFormat::Png)
+                .max_colors(256)
+                ._dither_strength(0.1)
+                ._run_priority_quality();
+            let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
+            Some((r.palette().to_vec(), r.indices().to_vec(), "d0.1 quality-runs"))
+        }
+        "zq-best-q-d30" => {
+            let cfg = QuantizeConfig::new(OutputFormat::Png)
+                .max_colors(256)
+                ._dither_strength(0.3)
+                ._run_priority_quality();
+            let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
+            Some((r.palette().to_vec(), r.indices().to_vec(), "d0.3 quality-runs"))
         }
         "zq-best-q-d50" => {
             let cfg = QuantizeConfig::new(OutputFormat::Png)
