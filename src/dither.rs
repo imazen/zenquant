@@ -280,9 +280,35 @@ pub fn dither_image(
                                w_mod: f32| {
                 let f = fraction * w_mod;
                 let v = &mut buf[target_idx];
-                v[0] = (v[0] + el * f).clamp(0.0, 1.0);
-                v[1] = (v[1] + ea * f).clamp(-0.5, 0.5);
-                v[2] = (v[2] + eb * f).clamp(-0.5, 0.5);
+                // Proportional overflow control: scale the entire error vector
+                // so all channels stay within gamut + small overflow margin.
+                // Preserves error direction (critical for hue consistency).
+                let dl = el * f;
+                let da = ea * f;
+                let db = eb * f;
+                let new_l = v[0] + dl;
+                let new_a = v[1] + da;
+                let new_b = v[2] + db;
+                let mut ratio = 1.0f32;
+                // L: allow small overflow [-0.05, 1.05]
+                if dl != 0.0 {
+                    if new_l > 1.05 { ratio = ratio.min((1.05 - v[0]) / dl); }
+                    if new_l < -0.05 { ratio = ratio.min((-0.05 - v[0]) / dl); }
+                }
+                // a: allow overflow [-0.55, 0.55]
+                if da != 0.0 {
+                    if new_a > 0.55 { ratio = ratio.min((0.55 - v[1]) / da); }
+                    if new_a < -0.55 { ratio = ratio.min((-0.55 - v[1]) / da); }
+                }
+                // b: allow overflow [-0.55, 0.55]
+                if db != 0.0 {
+                    if new_b > 0.55 { ratio = ratio.min((0.55 - v[2]) / db); }
+                    if new_b < -0.55 { ratio = ratio.min((-0.55 - v[2]) / db); }
+                }
+                ratio = ratio.max(0.0);
+                v[0] += dl * ratio;
+                v[1] += da * ratio;
+                v[2] += db * ratio;
             };
 
             // Serpentine Floyd-Steinberg kernel:
@@ -473,9 +499,29 @@ pub fn dither_image_rgba(
                                w_mod: f32| {
                 let f = fraction * w_mod;
                 let v = &mut buf[ti];
-                v[0] = (v[0] + el * f).clamp(0.0, 1.0);
-                v[1] = (v[1] + ea * f).clamp(-0.5, 0.5);
-                v[2] = (v[2] + eb * f).clamp(-0.5, 0.5);
+                let dl = el * f;
+                let da = ea * f;
+                let db = eb * f;
+                let new_l = v[0] + dl;
+                let new_a = v[1] + da;
+                let new_b = v[2] + db;
+                let mut ratio = 1.0f32;
+                if dl != 0.0 {
+                    if new_l > 1.05 { ratio = ratio.min((1.05 - v[0]) / dl); }
+                    if new_l < -0.05 { ratio = ratio.min((-0.05 - v[0]) / dl); }
+                }
+                if da != 0.0 {
+                    if new_a > 0.55 { ratio = ratio.min((0.55 - v[1]) / da); }
+                    if new_a < -0.55 { ratio = ratio.min((-0.55 - v[1]) / da); }
+                }
+                if db != 0.0 {
+                    if new_b > 0.55 { ratio = ratio.min((0.55 - v[2]) / db); }
+                    if new_b < -0.55 { ratio = ratio.min((-0.55 - v[2]) / db); }
+                }
+                ratio = ratio.max(0.0);
+                v[0] += dl * ratio;
+                v[1] += da * ratio;
+                v[2] += db * ratio;
             };
 
             let opaque_at = |px: usize| pixels[px].a > 0;
@@ -685,10 +731,36 @@ pub fn dither_image_rgba_alpha(
                                w_mod: f32| {
                 let f = fraction * w_mod;
                 let v = &mut buf[ti];
-                v[0] = (v[0] + el * f).clamp(0.0, 1.0);
-                v[1] = (v[1] + ea * f).clamp(-0.5, 0.5);
-                v[2] = (v[2] + eb * f).clamp(-0.5, 0.5);
-                v[3] = (v[3] + eal * f).clamp(0.0, 1.0);
+                let dl = el * f;
+                let da = ea * f;
+                let db = eb * f;
+                let dal = eal * f;
+                let new_l = v[0] + dl;
+                let new_a = v[1] + da;
+                let new_b = v[2] + db;
+                let new_al = v[3] + dal;
+                let mut ratio = 1.0f32;
+                if dl != 0.0 {
+                    if new_l > 1.05 { ratio = ratio.min((1.05 - v[0]) / dl); }
+                    if new_l < -0.05 { ratio = ratio.min((-0.05 - v[0]) / dl); }
+                }
+                if da != 0.0 {
+                    if new_a > 0.55 { ratio = ratio.min((0.55 - v[1]) / da); }
+                    if new_a < -0.55 { ratio = ratio.min((-0.55 - v[1]) / da); }
+                }
+                if db != 0.0 {
+                    if new_b > 0.55 { ratio = ratio.min((0.55 - v[2]) / db); }
+                    if new_b < -0.55 { ratio = ratio.min((-0.55 - v[2]) / db); }
+                }
+                if dal != 0.0 {
+                    if new_al > 1.05 { ratio = ratio.min((1.05 - v[3]) / dal); }
+                    if new_al < -0.05 { ratio = ratio.min((-0.05 - v[3]) / dal); }
+                }
+                ratio = ratio.max(0.0);
+                v[0] += dl * ratio;
+                v[1] += da * ratio;
+                v[2] += db * ratio;
+                v[3] += dal * ratio;
             };
 
             let opaque_at = |px: usize| pixels[px].a > 0;
