@@ -254,16 +254,6 @@ fn output_format_webp_lossless() {
 }
 
 #[test]
-fn output_format_jxl_modular() {
-    let pixels = gradient_8x8();
-    let config = QuantizeConfig::new()
-        .max_colors(16)
-        .output_format(OutputFormat::JxlModular);
-    let result = zenquant::quantize(&pixels, 8, 8, &config).unwrap();
-    assert!(result.palette_len() <= 16);
-}
-
-#[test]
 fn all_formats_produce_valid_results() {
     let pixels = gradient_8x8();
     for format in &[
@@ -271,7 +261,6 @@ fn all_formats_produce_valid_results() {
         OutputFormat::Gif,
         OutputFormat::Png,
         OutputFormat::WebpLossless,
-        OutputFormat::JxlModular,
     ] {
         let config = QuantizeConfig::new().max_colors(16).output_format(*format);
         let result = zenquant::quantize(&pixels, 8, 8, &config).unwrap();

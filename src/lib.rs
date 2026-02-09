@@ -64,9 +64,6 @@ pub enum OutputFormat {
     /// WebP VP8L: Delta palette encoding + spatial prediction.
     /// Uses delta-minimize sort. Full RGBA palette.
     WebpLossless,
-    /// JPEG XL modular: Squeeze wavelet + meta-adaptive entropy.
-    /// Uses delta-minimize sort. Full RGBA palette.
-    JxlModular,
 }
 
 /// Internal tuning parameters derived from OutputFormat + user overrides.
@@ -123,13 +120,6 @@ impl QuantizeTuning {
                 false,
                 AlphaMode::Full,
                 2.0, // WebP entropy coding also benefits from runs
-            ),
-            OutputFormat::JxlModular => (
-                0.4,
-                palette::PaletteSortStrategy::DeltaMinimize,
-                false,
-                AlphaMode::Full,
-                1.5,
             ),
         };
 
