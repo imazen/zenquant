@@ -15,12 +15,116 @@ pub enum DitherMode {
     Adaptive,
 }
 
+/// Compute a per-pixel dither ratio based on local edge contrast.
+///
+/// Pixels near edges (high contrast to neighbors) get reduced dither strength
+/// to prevent error diffusion from bleeding across color boundaries. Smooth
+/// areas keep full dither strength for clean gradient rendering.
+fn compute_dither_map(lab_buf: &[[f32; 3]], width: usize, height: usize) -> Vec<f32> {
+    let len = width * height;
+    let mut map = vec![1.0f32; len];
+
+    // Thresholds in squared OKLab distance.
+    // Below edge_low: fully smooth, ratio = 1.0
+    // Above edge_high: hard edge, ratio = min_ratio
+    let edge_low: f32 = 0.003;
+    let edge_high: f32 = 0.05;
+    let min_ratio: f32 = 0.2;
+    let range = edge_high - edge_low;
+
+    for y in 0..height {
+        for x in 0..width {
+            let idx = y * width + x;
+            let [l, a, b] = lab_buf[idx];
+            let mut max_dist_sq: f32 = 0.0;
+
+            // Check 4 cardinal neighbors
+            if x > 0 {
+                let [nl, na, nb] = lab_buf[idx - 1];
+                let d = (l - nl) * (l - nl) + (a - na) * (a - na) + (b - nb) * (b - nb);
+                max_dist_sq = max_dist_sq.max(d);
+            }
+            if x + 1 < width {
+                let [nl, na, nb] = lab_buf[idx + 1];
+                let d = (l - nl) * (l - nl) + (a - na) * (a - na) + (b - nb) * (b - nb);
+                max_dist_sq = max_dist_sq.max(d);
+            }
+            if y > 0 {
+                let [nl, na, nb] = lab_buf[idx - width];
+                let d = (l - nl) * (l - nl) + (a - na) * (a - na) + (b - nb) * (b - nb);
+                max_dist_sq = max_dist_sq.max(d);
+            }
+            if y + 1 < height {
+                let [nl, na, nb] = lab_buf[idx + width];
+                let d = (l - nl) * (l - nl) + (a - na) * (a - na) + (b - nb) * (b - nb);
+                max_dist_sq = max_dist_sq.max(d);
+            }
+
+            if max_dist_sq > edge_low {
+                let t = ((max_dist_sq - edge_low) / range).min(1.0);
+                map[idx] = 1.0 - t * (1.0 - min_ratio);
+            }
+        }
+    }
+
+    map
+}
+
+/// 4-channel variant of dither map for RGBA alpha-aware dithering.
+fn compute_dither_map_4(lab_buf: &[[f32; 4]], width: usize, height: usize) -> Vec<f32> {
+    let len = width * height;
+    let mut map = vec![1.0f32; len];
+
+    let edge_low: f32 = 0.003;
+    let edge_high: f32 = 0.05;
+    let min_ratio: f32 = 0.2;
+    let range = edge_high - edge_low;
+
+    for y in 0..height {
+        for x in 0..width {
+            let idx = y * width + x;
+            let [l, a, b, _] = lab_buf[idx];
+            let mut max_dist_sq: f32 = 0.0;
+
+            if x > 0 {
+                let [nl, na, nb, _] = lab_buf[idx - 1];
+                let d = (l - nl) * (l - nl) + (a - na) * (a - na) + (b - nb) * (b - nb);
+                max_dist_sq = max_dist_sq.max(d);
+            }
+            if x + 1 < width {
+                let [nl, na, nb, _] = lab_buf[idx + 1];
+                let d = (l - nl) * (l - nl) + (a - na) * (a - na) + (b - nb) * (b - nb);
+                max_dist_sq = max_dist_sq.max(d);
+            }
+            if y > 0 {
+                let [nl, na, nb, _] = lab_buf[idx - width];
+                let d = (l - nl) * (l - nl) + (a - na) * (a - na) + (b - nb) * (b - nb);
+                max_dist_sq = max_dist_sq.max(d);
+            }
+            if y + 1 < height {
+                let [nl, na, nb, _] = lab_buf[idx + width];
+                let d = (l - nl) * (l - nl) + (a - na) * (a - na) + (b - nb) * (b - nb);
+                max_dist_sq = max_dist_sq.max(d);
+            }
+
+            if max_dist_sq > edge_low {
+                let t = ((max_dist_sq - edge_low) / range).min(1.0);
+                map[idx] = 1.0 - t * (1.0 - min_ratio);
+            }
+        }
+    }
+
+    map
+}
+
 /// Apply serpentine Floyd-Steinberg error diffusion with AQ modulation.
 ///
 /// `dither_strength` controls the fraction of quantization error to diffuse
 /// (0.0 = no dithering, 0.5 = half-strength, 1.0 = standard Floyd-Steinberg).
 ///
 /// Improvements over naive Floyd-Steinberg:
+/// - Edge-aware dither map: pixels near edges generate less error, preventing
+///   error diffusion from bleeding across color boundaries.
 /// - Serpentine scanning: alternates L→R and R→L each row, preventing
 ///   directional banding artifacts visible at higher dither strengths.
 /// - Error magnitude reduction: when accumulated error exceeds a threshold,
@@ -54,6 +158,9 @@ pub fn dither_image(
         .collect();
 
     let mut indices = vec![0u8; pixels.len()];
+
+    // Edge-aware dither map: reduces error generation near edges.
+    let dither_map = compute_dither_map(&lab_buf, width, height);
 
     // Error magnitude threshold — errors beyond this get damped.
     // Scaled by dither_strength so higher dither levels allow proportionally
@@ -135,10 +242,13 @@ pub fn dither_image(
 
             let chosen_lab = palette.entries_oklab()[chosen as usize];
 
-            // Compute quantization error, scaled by dither strength
-            let mut err_l = (current.l - chosen_lab.l) * dither_strength;
-            let mut err_a = (current.a - chosen_lab.a) * dither_strength;
-            let mut err_b = (current.b - chosen_lab.b) * dither_strength;
+            // Compute quantization error, scaled by dither strength and
+            // edge-aware dither map. Edge pixels generate less error to
+            // prevent bleeding across color boundaries.
+            let scale = dither_strength * dither_map[idx];
+            let mut err_l = (current.l - chosen_lab.l) * scale;
+            let mut err_a = (current.a - chosen_lab.a) * scale;
+            let mut err_b = (current.b - chosen_lab.b) * scale;
 
             // Error magnitude reduction: damp large errors to prevent
             // runaway accumulation that creates visible noise patterns.
@@ -157,11 +267,11 @@ pub fn dither_image(
                                ea: f32,
                                eb: f32,
                                w_mod: f32| {
-                let scale = fraction * w_mod;
+                let f = fraction * w_mod;
                 let v = &mut buf[target_idx];
-                v[0] = (v[0] + el * scale).clamp(0.0, 1.0);
-                v[1] = (v[1] + ea * scale).clamp(-0.5, 0.5);
-                v[2] = (v[2] + eb * scale).clamp(-0.5, 0.5);
+                v[0] = (v[0] + el * f).clamp(0.0, 1.0);
+                v[1] = (v[1] + ea * f).clamp(-0.5, 0.5);
+                v[2] = (v[2] + eb * f).clamp(-0.5, 0.5);
             };
 
             // Serpentine Floyd-Steinberg kernel:
@@ -190,7 +300,6 @@ pub fn dither_image(
                     }
                 }
             } else {
-                // Reverse: "right" is actually left (x - 1)
                 if x > 0 {
                     let w = if adaptive { weights[idx - 1] } else { 1.0 };
                     diffuse_err(&mut lab_buf, idx - 1, 7.0 / 16.0, err_l, err_a, err_b, w);
@@ -251,6 +360,7 @@ pub fn dither_image_rgba(
         .collect();
 
     let mut indices = vec![0u8; pixels.len()];
+    let dither_map = compute_dither_map(&lab_buf, width, height);
 
     for y in 0..height {
         let forward = y % 2 == 0;
@@ -321,9 +431,10 @@ pub fn dither_image_rgba(
             prev_index = Some(chosen);
 
             let chosen_lab = palette.entries_oklab()[chosen as usize];
-            let mut err_l = (current.l - chosen_lab.l) * dither_strength;
-            let mut err_a = (current.a - chosen_lab.a) * dither_strength;
-            let mut err_b = (current.b - chosen_lab.b) * dither_strength;
+            let scale = dither_strength * dither_map[idx];
+            let mut err_l = (current.l - chosen_lab.l) * scale;
+            let mut err_a = (current.a - chosen_lab.a) * scale;
+            let mut err_b = (current.b - chosen_lab.b) * scale;
 
             let err_mag = err_l * err_l + err_a * err_a + err_b * err_b;
             if err_mag > max_err_sq {
@@ -339,11 +450,11 @@ pub fn dither_image_rgba(
                                ea: f32,
                                eb: f32,
                                w_mod: f32| {
-                let scale = fraction * w_mod;
+                let f = fraction * w_mod;
                 let v = &mut buf[ti];
-                v[0] = (v[0] + el * scale).clamp(0.0, 1.0);
-                v[1] = (v[1] + ea * scale).clamp(-0.5, 0.5);
-                v[2] = (v[2] + eb * scale).clamp(-0.5, 0.5);
+                v[0] = (v[0] + el * f).clamp(0.0, 1.0);
+                v[1] = (v[1] + ea * f).clamp(-0.5, 0.5);
+                v[2] = (v[2] + eb * f).clamp(-0.5, 0.5);
             };
 
             let opaque_at = |px: usize| pixels[px].a > 0;
@@ -445,6 +556,7 @@ pub fn dither_image_rgba_alpha(
         .collect();
 
     let mut indices = vec![0u8; pixels.len()];
+    let dither_map = compute_dither_map_4(&lab_buf, width, height);
 
     for y in 0..height {
         let forward = y % 2 == 0;
@@ -520,10 +632,11 @@ pub fn dither_image_rgba_alpha(
             let chosen_lab = palette.entries_oklab()[chosen as usize];
             let chosen_alpha = palette.entries_rgba()[chosen as usize][3] as f32 / 255.0;
 
-            let mut err_l = (current.l - chosen_lab.l) * dither_strength;
-            let mut err_a = (current.a - chosen_lab.a) * dither_strength;
-            let mut err_b = (current.b - chosen_lab.b) * dither_strength;
-            let mut err_al = (current_alpha - chosen_alpha) * dither_strength;
+            let scale = dither_strength * dither_map[idx];
+            let mut err_l = (current.l - chosen_lab.l) * scale;
+            let mut err_a = (current.a - chosen_lab.a) * scale;
+            let mut err_b = (current.b - chosen_lab.b) * scale;
+            let mut err_al = (current_alpha - chosen_alpha) * scale;
 
             let err_mag = err_l * err_l + err_a * err_a + err_b * err_b;
             if err_mag > max_err_sq {
@@ -541,12 +654,12 @@ pub fn dither_image_rgba_alpha(
                                eb: f32,
                                eal: f32,
                                w_mod: f32| {
-                let scale = fraction * w_mod;
+                let f = fraction * w_mod;
                 let v = &mut buf[ti];
-                v[0] = (v[0] + el * scale).clamp(0.0, 1.0);
-                v[1] = (v[1] + ea * scale).clamp(-0.5, 0.5);
-                v[2] = (v[2] + eb * scale).clamp(-0.5, 0.5);
-                v[3] = (v[3] + eal * scale).clamp(0.0, 1.0);
+                v[0] = (v[0] + el * f).clamp(0.0, 1.0);
+                v[1] = (v[1] + ea * f).clamp(-0.5, 0.5);
+                v[2] = (v[2] + eb * f).clamp(-0.5, 0.5);
+                v[3] = (v[3] + eal * f).clamp(0.0, 1.0);
             };
 
             let opaque_at = |px: usize| pixels[px].a > 0;
