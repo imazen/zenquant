@@ -224,6 +224,10 @@ fn kmeans_refine(mut centroids: Vec<OKLab>, entries: &[(OKLab, f32)]) -> Vec<OKL
 /// centroids from pixel-to-centroid assignments. This is more accurate than
 /// refining against histogram entries alone, since it accounts for the actual
 /// pixel distribution rather than pre-quantized histogram approximations.
+///
+/// Uses incremental acceleration: the NN grid OKLab values are computed once,
+/// and after the first iteration, the cache and neighbor lists are updated
+/// incrementally rather than rebuilt from scratch.
 pub fn refine_against_pixels(
     mut centroids: Vec<OKLab>,
     pixels: &[rgb::RGB<u8>],
@@ -243,10 +247,23 @@ pub fn refine_against_pixels(
         .map(|p| srgb_to_oklab(p.r, p.g, p.b))
         .collect();
 
-    for _ in 0..iterations {
-        // Build acceleration structures from current centroids
-        let nn_cache = build_centroid_nn_cache(&centroids);
-        let neighbors = build_centroid_neighbors(&centroids);
+    // Pre-compute grid OKLab values once (4096 entries, avoids 4096 srgb_to_oklab per iteration)
+    let grid_labs = precompute_nn_grid();
+
+    // Persistent acceleration structures, reused across iterations
+    let mut nn_cache = build_centroid_nn_cache(&centroids, &grid_labs);
+    let mut neighbors = build_centroid_neighbors(&centroids);
+    let mut old_centroids = centroids.clone();
+
+    for iter in 0..iterations {
+        if iter > 0 {
+            // Incremental rebuild: neighbors first (need current centroids),
+            // then cache (needs updated neighbors for seeded search).
+            // Neighbors: only rebuild for centroids that moved or whose neighbors moved.
+            // Cache: use previous cache entry as seed + neighbor check (9 checks vs 256).
+            rebuild_neighbors_incremental(&centroids, &old_centroids, &mut neighbors);
+            rebuild_nn_cache_seeded(&centroids, &grid_labs, &mut nn_cache, &neighbors);
+        }
 
         let mut sums_l = vec![0.0f64; k];
         let mut sums_a = vec![0.0f64; k];
@@ -263,6 +280,9 @@ pub fn refine_against_pixels(
             sums_b[nearest] += lab.b as f64 * w;
             total_w[nearest] += w;
         }
+
+        // Save centroids before update (for incremental neighbor rebuild next iter)
+        old_centroids.copy_from_slice(&centroids);
 
         let mut max_movement = 0.0f32;
         for i in 0..k {
@@ -312,10 +332,19 @@ pub fn refine_against_pixels_rgba(
         })
         .collect();
 
-    for _ in 0..iterations {
-        // Build acceleration structures from current centroids
-        let nn_cache = build_centroid_nn_cache(&centroids);
-        let neighbors = build_centroid_neighbors(&centroids);
+    // Pre-compute grid OKLab values once (4096 entries)
+    let grid_labs = precompute_nn_grid();
+
+    // Persistent acceleration structures, reused across iterations
+    let mut nn_cache = build_centroid_nn_cache(&centroids, &grid_labs);
+    let mut neighbors = build_centroid_neighbors(&centroids);
+    let mut old_centroids = centroids.clone();
+
+    for iter in 0..iterations {
+        if iter > 0 {
+            rebuild_neighbors_incremental(&centroids, &old_centroids, &mut neighbors);
+            rebuild_nn_cache_seeded(&centroids, &grid_labs, &mut nn_cache, &neighbors);
+        }
 
         let mut sums_l = vec![0.0f64; k];
         let mut sums_a = vec![0.0f64; k];
@@ -335,6 +364,9 @@ pub fn refine_against_pixels_rgba(
             sums_b[nearest] += lab.b as f64 * w;
             total_w[nearest] += w;
         }
+
+        // Save centroids before update (for incremental neighbor rebuild next iter)
+        old_centroids.copy_from_slice(&centroids);
 
         let mut max_movement = 0.0f32;
         for i in 0..k {
@@ -376,55 +408,108 @@ fn find_nearest(centroids: &[OKLab], color: OKLab) -> usize {
 // Seeded nearest-neighbor acceleration for k-means
 // =====================================================================
 
-/// Build a 4-bit sRGB→centroid cache (16×16×16 = 4KB).
-/// Lower resolution than Palette's 5-bit cache, but sufficient for seeded
-/// search where the seed only needs to be approximate.
-fn build_centroid_nn_cache(centroids: &[OKLab]) -> Vec<u8> {
+/// Pre-compute OKLab values for the 4-bit sRGB grid (16×16×16 = 4096 entries).
+/// Called once before the k-means loop to avoid recomputing cube roots every iteration.
+fn precompute_nn_grid() -> Vec<OKLab> {
     use crate::oklab::srgb_to_oklab;
 
     const BITS: usize = 4;
-    const SIZE: usize = 1 << BITS; // 16
-    const TOTAL: usize = SIZE * SIZE * SIZE; // 4096
-    let shift = 8 - BITS; // 4
+    const SIZE: usize = 1 << BITS;
+    const TOTAL: usize = SIZE * SIZE * SIZE;
+    let shift = 8 - BITS;
 
-    let mut cache = vec![0u8; TOTAL];
-
+    let mut grid = Vec::with_capacity(TOTAL);
     for r_idx in 0..SIZE {
         for g_idx in 0..SIZE {
             for b_idx in 0..SIZE {
                 let r = ((r_idx << shift) | (1 << (shift - 1))) as u8;
                 let g = ((g_idx << shift) | (1 << (shift - 1))) as u8;
                 let b = ((b_idx << shift) | (1 << (shift - 1))) as u8;
-                let lab = srgb_to_oklab(r, g, b);
-                let idx = find_nearest(centroids, lab);
-                let flat = (r_idx << (2 * BITS)) | (g_idx << BITS) | b_idx;
-                cache[flat] = idx as u8;
+                grid.push(srgb_to_oklab(r, g, b));
             }
         }
     }
+    grid
+}
 
+/// Build a 4-bit sRGB→centroid cache (16×16×16 = 4KB) using brute-force search.
+/// Used for the first k-means iteration (no previous cache to seed from).
+fn build_centroid_nn_cache(centroids: &[OKLab], grid_labs: &[OKLab]) -> Vec<u8> {
+    let mut cache = vec![0u8; grid_labs.len()];
+    for (i, lab) in grid_labs.iter().enumerate() {
+        cache[i] = find_nearest(centroids, *lab) as u8;
+    }
     cache
 }
 
-/// Compute 16 nearest neighbors for each centroid.
+/// Rebuild the NN cache using the previous cache as seed + neighbor refinement.
+/// 4096 × 17 distance checks instead of 4096 × 256 brute-force.
+fn rebuild_nn_cache_seeded(
+    centroids: &[OKLab],
+    grid_labs: &[OKLab],
+    cache: &mut [u8],
+    neighbors: &[[u8; 16]],
+) {
+    for (i, lab) in grid_labs.iter().enumerate() {
+        let seed = cache[i] as usize;
+        cache[i] = find_nearest_seeded(centroids, *lab, seed, neighbors) as u8;
+    }
+}
+
+/// Compute 16 nearest neighbors for each centroid (brute-force, first iteration).
 fn build_centroid_neighbors(centroids: &[OKLab]) -> Vec<[u8; 16]> {
     let n = centroids.len();
     let mut neighbors = vec![[0u8; 16]; n];
-    const K: usize = 16;
 
-    for i in 0..n {
-        let mut dists: Vec<(u8, f32)> = (0..n)
-            .filter(|&j| j != i)
-            .map(|j| (j as u8, centroids[i].distance_sq(centroids[j])))
-            .collect();
-        dists.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(core::cmp::Ordering::Equal));
-        let count = dists.len().min(K);
-        for k in 0..count {
-            neighbors[i][k] = dists[k].0;
-        }
+    for (i, nbr) in neighbors.iter_mut().enumerate().take(n) {
+        rebuild_neighbors_for(i, centroids, nbr);
     }
 
     neighbors
+}
+
+/// Rebuild neighbor list for a single centroid.
+fn rebuild_neighbors_for(i: usize, centroids: &[OKLab], out: &mut [u8; 16]) {
+    let n = centroids.len();
+    const K: usize = 16;
+
+    let mut dists: Vec<(u8, f32)> = (0..n)
+        .filter(|&j| j != i)
+        .map(|j| (j as u8, centroids[i].distance_sq(centroids[j])))
+        .collect();
+    dists.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(core::cmp::Ordering::Equal));
+    let count = dists.len().min(K);
+    for k in 0..count {
+        out[k] = dists[k].0;
+    }
+}
+
+/// Incrementally rebuild neighbor lists only for centroids that moved or whose
+/// neighbors moved. Returns the updated neighbors in-place.
+fn rebuild_neighbors_incremental(
+    centroids: &[OKLab],
+    old_centroids: &[OKLab],
+    neighbors: &mut [[u8; 16]],
+) {
+    let k = centroids.len();
+    let neighbor_count = (k - 1).min(16);
+
+    // Which centroids moved more than a small threshold?
+    let moved: Vec<bool> = (0..k)
+        .map(|i| old_centroids[i].distance_sq(centroids[i]) > 1e-5)
+        .collect();
+
+    for i in 0..k {
+        // Rebuild if this centroid moved, or any of its current neighbors moved
+        let needs_rebuild = moved[i]
+            || neighbors[i][..neighbor_count]
+                .iter()
+                .any(|&n| moved[n as usize]);
+
+        if needs_rebuild {
+            rebuild_neighbors_for(i, centroids, &mut neighbors[i]);
+        }
+    }
 }
 
 /// Find nearest centroid using seed + neighbor refinement (17 checks vs 256).

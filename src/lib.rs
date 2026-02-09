@@ -48,7 +48,9 @@ macro_rules! dev_modules {
         )*
     };
 }
-dev_modules!(dither, histogram, masking, median_cut, oklab, palette, remap);
+dev_modules!(
+    dither, histogram, masking, median_cut, oklab, palette, remap
+);
 pub mod error;
 
 pub use error::QuantizeError;
