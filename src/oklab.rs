@@ -79,35 +79,6 @@ fn linear_to_srgb(c: f32) -> u8 {
 // Matrix constants are from the OKLab reference implementation — keep author's
 // original values, let the compiler truncate to f32.
 
-/// Batch convert sRGB pixels to OKLab.
-/// The LUT lookup + matrix multiply pattern auto-vectorizes well.
-#[allow(clippy::excessive_precision)]
-pub fn srgb_to_oklab_batch(pixels: &[rgb::RGB<u8>], out: &mut Vec<OKLab>) {
-    out.clear();
-    out.reserve(pixels.len());
-    let conv = linear_srgb::lut::SrgbConverter::new();
-
-    for p in pixels {
-        let r = conv.srgb_u8_to_linear(p.r);
-        let g = conv.srgb_u8_to_linear(p.g);
-        let b = conv.srgb_u8_to_linear(p.b);
-
-        let l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b;
-        let m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b;
-        let s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b;
-
-        let l_ = l.cbrt();
-        let m_ = m.cbrt();
-        let s_ = s.cbrt();
-
-        out.push(OKLab {
-            l: 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
-            a: 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
-            b: 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_,
-        });
-    }
-}
-
 /// Convert sRGB (0..255 per channel) to OKLab.
 #[allow(clippy::excessive_precision)]
 pub fn srgb_to_oklab(r: u8, g: u8, b: u8) -> OKLab {

@@ -34,6 +34,7 @@ pub struct Palette {
 
 impl Palette {
     /// Build a palette from OKLab centroids with the specified sort strategy.
+    #[cfg(test)]
     pub fn from_centroids(centroids: Vec<OKLab>, has_transparency: bool) -> Self {
         Self::from_centroids_sorted(
             centroids,
@@ -216,6 +217,7 @@ impl Palette {
     }
 
     /// Whether the palette is empty.
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.entries_srgb.is_empty()
     }
@@ -295,6 +297,7 @@ impl Palette {
 
     /// Find the K nearest palette indices for an OKLab color.
     /// Returns up to K indices sorted by distance (nearest first).
+    #[cfg(test)]
     pub fn k_nearest(&self, color: OKLab, k: usize) -> Vec<u8> {
         let start = if self.transparent_index.is_some() {
             1
@@ -472,18 +475,6 @@ impl Palette {
         } else {
             let lab = crate::oklab::srgb_to_oklab(r, g, b);
             self.nearest(lab)
-        }
-    }
-
-    /// Fast nearest-neighbor using the sRGB cache with OKLab→sRGB conversion.
-    /// Falls back to brute-force if cache isn't built.
-    #[inline]
-    pub fn nearest_fast(&self, color: OKLab) -> u8 {
-        if self.nn_cache.is_some() {
-            let (r, g, b) = oklab_to_srgb(color);
-            self.nearest_cached(r, g, b)
-        } else {
-            self.nearest(color)
         }
     }
 

@@ -32,6 +32,7 @@ impl RunPriority {
 /// The AQ weights modulate the run-extension threshold:
 /// - Smooth regions (high weight): lower threshold → prefer quality
 /// - Textured regions (low weight): higher threshold → prefer runs
+#[cfg(test)]
 pub fn remap_pixels(
     pixels: &[rgb::RGB<u8>],
     weights: &[f32],
@@ -62,60 +63,6 @@ pub fn remap_pixels(
             let threshold = bias * max_acceptable * (1.1 - w);
 
             if let Some(prev) = prev_index.filter(|p| candidates.contains(p)) {
-                let prev_dist = palette.distance_sq(lab, prev);
-                if prev_dist < best_dist + threshold {
-                    indices[i] = prev;
-                    prev_index = Some(prev);
-                    continue;
-                }
-            }
-
-            indices[i] = best;
-        }
-
-        prev_index = Some(indices[i]);
-    }
-
-    indices
-}
-
-/// Map RGBA pixels to palette indices. Transparent pixels get the transparent index.
-pub fn remap_pixels_rgba(
-    pixels: &[rgb::RGBA<u8>],
-    weights: &[f32],
-    palette: &Palette,
-    run_priority: RunPriority,
-) -> Vec<u8> {
-    let bias = run_priority.bias();
-    let k = if bias > 0.0 { 4 } else { 1 };
-    let transparent_idx = palette.transparent_index().unwrap_or(0);
-
-    let mut indices = vec![0u8; pixels.len()];
-    let mut prev_index: Option<u8> = None;
-
-    for (i, pixel) in pixels.iter().enumerate() {
-        if pixel.a == 0 {
-            indices[i] = transparent_idx;
-            prev_index = Some(transparent_idx);
-            continue;
-        }
-
-        let lab = srgb_to_oklab(pixel.r, pixel.g, pixel.b);
-
-        if bias == 0.0 {
-            indices[i] = palette.nearest(lab);
-        } else {
-            let candidates = palette.k_nearest(lab, k);
-            let best = candidates[0];
-            let best_dist = palette.distance_sq(lab, best);
-
-            let w = weights[i];
-            let max_acceptable = best_dist * 2.0;
-            let threshold = bias * max_acceptable * (1.1 - w);
-
-            if let Some(prev) =
-                prev_index.filter(|&p| p != transparent_idx && candidates.contains(&p))
-            {
                 let prev_dist = palette.distance_sq(lab, prev);
                 if prev_dist < best_dist + threshold {
                     indices[i] = prev;

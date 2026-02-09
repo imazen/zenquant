@@ -1,3 +1,36 @@
+//! AQ-informed color quantization for indexed image formats.
+//!
+//! zenquant reduces truecolor images to 256-color palettes using perceptual
+//! masking (butteraugli-inspired AQ weights), OKLab color space, and optional
+//! Viterbi DP for run-length–friendly index ordering.
+//!
+//! # Quick start
+//!
+//! ```
+//! use zenquant::{QuantizeConfig, OutputFormat};
+//!
+//! # let pixels = vec![rgb::RGB::new(128u8, 64, 32); 64];
+//! let config = QuantizeConfig::new(OutputFormat::Png);
+//! let result = zenquant::quantize(&pixels, 8, 8, &config).unwrap();
+//!
+//! let palette = result.palette();   // &[[u8; 3]]
+//! let indices = result.indices();   // &[u8]
+//! ```
+//!
+//! # Features
+//!
+//! - **Perceptual masking**: concentrates palette entries where human vision
+//!   is most sensitive (smooth gradients, skin tones) rather than wasting
+//!   entries on noisy textures.
+//! - **OKLab color space**: all clustering happens in a perceptually uniform
+//!   space, so "nearest color" actually looks nearest.
+//! - **Format-aware tuning**: palette sorting and dither strength are
+//!   optimized per output format (GIF, PNG, WebP lossless).
+//! - **Shared palettes**: [`build_palette`] and [`build_palette_rgba`] build
+//!   a single palette from multiple frames, then [`QuantizeResult::remap`]
+//!   maps each frame against it.
+//! - **`no_std` + `alloc`**: works in WASM and embedded contexts.
+
 #![forbid(unsafe_code)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -44,7 +77,7 @@ pub mod _dev {
 use alloc::vec::Vec;
 
 /// Quality preset — controls k-means iterations, AQ masking, and Viterbi optimization.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Quality {
     /// Fast mode — no masking or k-means refinement. Roughly 30ms per 512x512 image.
@@ -52,13 +85,8 @@ pub enum Quality {
     /// Balanced — AQ masking + 2 k-means iterations + greedy run extension.
     Balanced,
     /// Best quality — AQ masking + 8 k-means iterations + Viterbi DP.
+    #[default]
     Best,
-}
-
-impl Default for Quality {
-    fn default() -> Self {
-        Self::Best
-    }
 }
 
 /// Target output format — controls palette sorting, dither strength, and compression tuning.
