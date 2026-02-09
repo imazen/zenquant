@@ -36,14 +36,20 @@
 
 extern crate alloc;
 
-pub(crate) mod dither;
+// When _dev is enabled, expose internal modules as pub for profiling examples.
+// Otherwise keep them pub(crate).
+macro_rules! dev_modules {
+    ($($mod:ident),* $(,)?) => {
+        $(
+            #[cfg(feature = "_dev")]
+            pub mod $mod;
+            #[cfg(not(feature = "_dev"))]
+            pub(crate) mod $mod;
+        )*
+    };
+}
+dev_modules!(dither, histogram, masking, median_cut, oklab, palette, remap);
 pub mod error;
-pub(crate) mod histogram;
-pub(crate) mod masking;
-pub(crate) mod median_cut;
-pub(crate) mod oklab;
-pub(crate) mod palette;
-pub(crate) mod remap;
 
 pub use error::QuantizeError;
 pub use imgref::{Img, ImgRef, ImgVec};
@@ -60,18 +66,12 @@ pub mod _internals {
     pub use crate::remap::{RunPriority, average_run_length};
 }
 
-// Internal modules re-exposed for profiling/debugging examples.
-// Gated behind the `_dev` feature — not part of the public API.
+// When _dev is enabled, re-export internal modules via _dev for backwards compat
+// with profiling examples that use `zenquant::_dev::module`.
 #[cfg(feature = "_dev")]
 #[doc(hidden)]
 pub mod _dev {
-    pub use crate::dither;
-    pub use crate::histogram;
-    pub use crate::masking;
-    pub use crate::median_cut;
-    pub use crate::oklab;
-    pub use crate::palette;
-    pub use crate::remap;
+    pub use crate::{dither, histogram, masking, median_cut, oklab, palette, remap};
 }
 
 use alloc::vec::Vec;
