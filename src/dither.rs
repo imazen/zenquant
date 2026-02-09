@@ -159,16 +159,15 @@ pub fn dither_image(
 
     let mut indices = vec![0u8; pixels.len()];
 
-    // High-dither features only activate above this threshold.
-    // Below it, use simple F-S to preserve the tuned low-strength behavior.
-    let high_dither = dither_strength > 0.4;
+    // Feature gates by dither strength:
+    // - Serpentine + dither map: always on (strictly better algorithms)
+    // - Undithered fallback: > 0.4 (prevents hue-shift speckles at high strength)
+    // - Error damping: > 0.3 (prevents runaway accumulation)
+    let use_fallback = dither_strength > 0.4;
+    let use_damping = dither_strength > 0.3;
 
     // Edge-aware dither map: reduces error generation near edges.
-    let dither_map = if high_dither {
-        compute_dither_map(&lab_buf, width, height)
-    } else {
-        vec![1.0f32; pixels.len()]
-    };
+    let dither_map = compute_dither_map(&lab_buf, width, height);
 
     // Error magnitude threshold — errors beyond this get damped.
     let max_err_sq = 0.002 * dither_strength;
@@ -176,8 +175,8 @@ pub fn dither_image(
     let adaptive = mode == DitherMode::Adaptive;
 
     for y in 0..height {
-        // Serpentine: even rows L→R, odd rows R→L (high dither only)
-        let forward = !high_dither || y % 2 == 0;
+        // Serpentine: even rows L→R, odd rows R→L
+        let forward = y % 2 == 0;
         let mut prev_index: Option<u8> = None;
 
         let x_iter: Box<dyn Iterator<Item = usize>> = if forward {
@@ -204,7 +203,7 @@ pub fn dither_image(
             // Undithered fallback (high dither only): if error diffusion
             // pushed us to a palette entry much farther from the *original*
             // pixel than the naive nearest match, reject it.
-            let best = if high_dither {
+            let best = if use_fallback {
                 let undithered_best = palette.nearest_seeded(orig_lab, seed);
                 if dithered_best == undithered_best {
                     dithered_best
@@ -260,9 +259,9 @@ pub fn dither_image(
             let mut err_a = (current.a - chosen_lab.a) * scale;
             let mut err_b = (current.b - chosen_lab.b) * scale;
 
-            // Error magnitude reduction (high dither only): damp large
-            // errors to prevent runaway accumulation.
-            if high_dither {
+            // Error magnitude reduction: damp large errors to prevent
+            // runaway accumulation (gated at dither_strength > 0.3).
+            if use_damping {
                 let err_mag = err_l * err_l + err_a * err_a + err_b * err_b;
                 if err_mag > max_err_sq {
                     err_l *= 0.75;
@@ -362,7 +361,8 @@ pub fn dither_image_rgba(
     let run_bias = run_priority.bias();
     let max_err_sq = 0.002 * dither_strength;
     let adaptive = mode == DitherMode::Adaptive;
-    let high_dither = dither_strength > 0.4;
+    let use_fallback = dither_strength > 0.4;
+    let use_damping = dither_strength > 0.3;
 
     let mut lab_buf: Vec<[f32; 3]> = pixels
         .iter()
@@ -373,14 +373,10 @@ pub fn dither_image_rgba(
         .collect();
 
     let mut indices = vec![0u8; pixels.len()];
-    let dither_map = if high_dither {
-        compute_dither_map(&lab_buf, width, height)
-    } else {
-        vec![1.0f32; pixels.len()]
-    };
+    let dither_map = compute_dither_map(&lab_buf, width, height);
 
     for y in 0..height {
-        let forward = !high_dither || y % 2 == 0;
+        let forward = y % 2 == 0;
         let mut prev_index: Option<u8> = None;
 
         let x_iter: Box<dyn Iterator<Item = usize>> = if forward {
@@ -406,7 +402,7 @@ pub fn dither_image_rgba(
             let seed2 = palette.nearest_cached(adj_r, adj_g, adj_b);
             let dithered_best = palette.nearest_seeded_2(current, seed, seed2);
 
-            let best = if high_dither {
+            let best = if use_fallback {
                 let undithered_best = palette.nearest_seeded(orig_lab, seed);
                 if dithered_best == undithered_best {
                     dithered_best
@@ -459,7 +455,7 @@ pub fn dither_image_rgba(
             let mut err_a = (current.a - chosen_lab.a) * scale;
             let mut err_b = (current.b - chosen_lab.b) * scale;
 
-            if high_dither {
+            if use_damping {
                 let err_mag = err_l * err_l + err_a * err_a + err_b * err_b;
                 if err_mag > max_err_sq {
                     err_l *= 0.75;
@@ -569,7 +565,8 @@ pub fn dither_image_rgba_alpha(
     let run_bias = run_priority.bias();
     let max_err_sq = 0.002 * dither_strength;
     let adaptive = mode == DitherMode::Adaptive;
-    let high_dither = dither_strength > 0.4;
+    let use_fallback = dither_strength > 0.4;
+    let use_damping = dither_strength > 0.3;
 
     // Working buffer: [L, a, b, alpha]
     let mut lab_buf: Vec<[f32; 4]> = pixels
@@ -582,14 +579,10 @@ pub fn dither_image_rgba_alpha(
         .collect();
 
     let mut indices = vec![0u8; pixels.len()];
-    let dither_map = if high_dither {
-        compute_dither_map_4(&lab_buf, width, height)
-    } else {
-        vec![1.0f32; pixels.len()]
-    };
+    let dither_map = compute_dither_map_4(&lab_buf, width, height);
 
     for y in 0..height {
-        let forward = !high_dither || y % 2 == 0;
+        let forward = y % 2 == 0;
         let mut prev_index: Option<u8> = None;
 
         let x_iter: Box<dyn Iterator<Item = usize>> = if forward {
@@ -615,7 +608,7 @@ pub fn dither_image_rgba_alpha(
             let orig_alpha = p.a as f32 / 255.0;
             let dithered_best = palette.nearest_with_alpha(current, current_alpha);
 
-            let best = if high_dither {
+            let best = if use_fallback {
                 let undithered_best = palette.nearest_with_alpha(orig_lab, orig_alpha);
                 if dithered_best == undithered_best {
                     dithered_best
@@ -672,7 +665,7 @@ pub fn dither_image_rgba_alpha(
             let mut err_b = (current.b - chosen_lab.b) * scale;
             let mut err_al = (current_alpha - chosen_alpha) * scale;
 
-            if high_dither {
+            if use_damping {
                 let err_mag = err_l * err_l + err_a * err_a + err_b * err_b;
                 if err_mag > max_err_sq {
                     err_l *= 0.75;

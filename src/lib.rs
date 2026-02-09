@@ -142,7 +142,7 @@ impl QuantizeTuning {
                 3.0, // GIF's LZW rewards long runs heavily
             ),
             OutputFormat::Png => (
-                0.3,
+                0.5,
                 palette::PaletteSortStrategy::Luminance,
                 false,
                 AlphaMode::Full,
