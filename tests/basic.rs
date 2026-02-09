@@ -620,3 +620,55 @@ fn gradient_8x8() -> Vec<rgb::RGB<u8>> {
     }
     pixels
 }
+
+#[test]
+fn remap_preserves_palette() {
+    let pixels1 = gradient_8x8();
+    // A different gradient for frame 2
+    let pixels2: Vec<rgb::RGB<u8>> = (0..64)
+        .map(|i| rgb::RGB {
+            r: (i * 4) as u8,
+            g: 128,
+            b: (255 - i * 4) as u8,
+        })
+        .collect();
+
+    let config = QuantizeConfig::new().quality(85);
+    let result1 = zenquant::quantize(&pixels1, 8, 8, &config).unwrap();
+    let result2 = result1.remap(&pixels2, 8, 8, &config).unwrap();
+
+    // Palette must be byte-identical
+    assert_eq!(result1.palette(), result2.palette());
+    assert_eq!(result1.palette_len(), result2.palette_len());
+    // Indices should differ (different input pixels)
+    assert_ne!(result1.indices(), result2.indices());
+}
+
+#[test]
+fn remap_rgba_preserves_palette() {
+    let pixels1: Vec<rgb::RGBA<u8>> = (0..64)
+        .map(|i| rgb::RGBA {
+            r: (i * 4) as u8,
+            g: 128,
+            b: 64,
+            a: if i == 0 { 0 } else { 255 },
+        })
+        .collect();
+    let pixels2: Vec<rgb::RGBA<u8>> = (0..64)
+        .map(|i| rgb::RGBA {
+            r: 128,
+            g: (i * 4) as u8,
+            b: 64,
+            a: if i == 63 { 0 } else { 255 },
+        })
+        .collect();
+
+    let config = QuantizeConfig::new()
+        .quality(85)
+        .output_format(OutputFormat::Gif);
+    let result1 = zenquant::quantize_rgba(&pixels1, 8, 8, &config).unwrap();
+    let result2 = result1.remap_rgba(&pixels2, 8, 8, &config).unwrap();
+
+    assert_eq!(result1.palette(), result2.palette());
+    assert_eq!(result1.transparent_index(), result2.transparent_index());
+}

@@ -284,6 +284,83 @@ impl QuantizeResult {
         let last_non_opaque = alphas.iter().rposition(|&a| a != 255);
         last_non_opaque.map(|pos| alphas[..=pos].to_vec())
     }
+
+    /// Remap an RGB image against this result's palette.
+    ///
+    /// Skips palette construction — uses the existing palette and applies
+    /// dithering + run optimization from `config`. The palette order is
+    /// preserved (no frequency reorder), making this suitable for animation
+    /// frames that share a palette.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use zenquant::{QuantizeConfig, OutputFormat, DitherMode};
+    ///
+    /// # let combined: Vec<rgb::RGB<u8>> = vec![];
+    /// # let frame: Vec<rgb::RGB<u8>> = vec![];
+    /// # let (w, h) = (64, 64);
+    /// // Build a shared palette from a representative sample
+    /// let palette_config = QuantizeConfig::new()
+    ///     .output_format(OutputFormat::Png)
+    ///     .dither(DitherMode::None);
+    /// let shared = zenquant::quantize(&combined, w * 2, h, &palette_config).unwrap();
+    ///
+    /// // Remap each frame against the shared palette
+    /// let remap_config = QuantizeConfig::new()
+    ///     .output_format(OutputFormat::Png)
+    ///     .quality(85);
+    /// let frame_result = shared.remap(&frame, w, h, &remap_config).unwrap();
+    /// ```
+    pub fn remap(
+        &self,
+        pixels: &[rgb::RGB<u8>],
+        width: usize,
+        height: usize,
+        config: &QuantizeConfig,
+    ) -> Result<QuantizeResult, QuantizeError> {
+        remap_rgb_impl(&self.palette, pixels, width, height, config)
+    }
+
+    /// Remap an RGBA image against this result's palette.
+    ///
+    /// Skips palette construction — uses the existing palette and applies
+    /// dithering + run optimization from `config`. The palette order is
+    /// preserved (no frequency reorder), making this suitable for GIF
+    /// animation frames that share a global color table.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use zenquant::{QuantizeConfig, OutputFormat, DitherMode};
+    ///
+    /// # let combined: Vec<rgb::RGBA<u8>> = vec![];
+    /// # let frames: Vec<Vec<rgb::RGBA<u8>>> = vec![];
+    /// # let (w, h) = (64usize, 64usize);
+    /// // Build a shared palette from sampled frames
+    /// let palette_config = QuantizeConfig::new()
+    ///     .output_format(OutputFormat::Gif)
+    ///     .dither(DitherMode::None);
+    /// let shared = zenquant::quantize_rgba(&combined, w * 4, h, &palette_config).unwrap();
+    ///
+    /// // Remap each frame with dithering
+    /// let remap_config = QuantizeConfig::new()
+    ///     .output_format(OutputFormat::Gif)
+    ///     .quality(85);
+    /// for frame in &frames {
+    ///     let result = shared.remap_rgba(frame, w, h, &remap_config).unwrap();
+    ///     // result.palette() is identical across all frames
+    /// }
+    /// ```
+    pub fn remap_rgba(
+        &self,
+        pixels: &[rgb::RGBA<u8>],
+        width: usize,
+        height: usize,
+        config: &QuantizeConfig,
+    ) -> Result<QuantizeResult, QuantizeError> {
+        remap_rgba_impl(&self.palette, pixels, width, height, config)
+    }
 }
 
 /// Quantize an RGB image to an indexed palette.
@@ -695,6 +772,167 @@ pub fn quantize_rgba(
         pal
     };
 
+    Ok(QuantizeResult {
+        palette: pal,
+        indices,
+    })
+}
+
+/// Internal: remap RGB pixels against an existing palette.
+fn remap_rgb_impl(
+    source_palette: &palette::Palette,
+    pixels: &[rgb::RGB<u8>],
+    width: usize,
+    height: usize,
+    config: &QuantizeConfig,
+) -> Result<QuantizeResult, QuantizeError> {
+    if width == 0 || height == 0 {
+        return Err(QuantizeError::ZeroDimension);
+    }
+    if pixels.len() != width * height {
+        return Err(QuantizeError::DimensionMismatch {
+            len: pixels.len(),
+            width,
+            height,
+        });
+    }
+
+    let tuning = QuantizeTuning::from_config(config);
+    let use_masking = config.quality >= 50;
+    let use_viterbi = config.quality >= 75;
+
+    let weights = if use_masking {
+        masking::compute_masking_weights(pixels, width, height)
+    } else {
+        vec![1.0f32; pixels.len()]
+    };
+
+    let mut pal = source_palette.clone();
+    if !pal.has_nn_cache() {
+        pal.build_nn_cache();
+    }
+
+    let mut indices = dither::dither_image(
+        pixels,
+        width,
+        height,
+        &weights,
+        &pal,
+        config.dither,
+        config.run_priority,
+        tuning.dither_strength,
+    );
+
+    let run_lambda = if use_masking {
+        config.viterbi_lambda.unwrap_or(match config.run_priority {
+            RunPriority::Quality => 0.0,
+            RunPriority::Balanced => 0.01,
+            RunPriority::Compression => 0.02,
+        }) * tuning.viterbi_lambda_scale
+    } else {
+        config.viterbi_lambda.unwrap_or(0.0)
+    };
+    if run_lambda > 0.0 {
+        if use_viterbi {
+            remap::viterbi_refine(pixels, width, height, &weights, &pal, &mut indices, run_lambda);
+        } else {
+            remap::run_extend_refine(
+                pixels, width, height, &weights, &pal, &mut indices, run_lambda,
+            );
+        }
+    }
+
+    // No frequency reorder — palette order must be stable for shared-palette use.
+    Ok(QuantizeResult {
+        palette: pal,
+        indices,
+    })
+}
+
+/// Internal: remap RGBA pixels against an existing palette.
+fn remap_rgba_impl(
+    source_palette: &palette::Palette,
+    pixels: &[rgb::RGBA<u8>],
+    width: usize,
+    height: usize,
+    config: &QuantizeConfig,
+) -> Result<QuantizeResult, QuantizeError> {
+    if width == 0 || height == 0 {
+        return Err(QuantizeError::ZeroDimension);
+    }
+    if pixels.len() != width * height {
+        return Err(QuantizeError::DimensionMismatch {
+            len: pixels.len(),
+            width,
+            height,
+        });
+    }
+
+    let tuning = QuantizeTuning::from_config(config);
+    let use_masking = config.quality >= 50;
+    let use_viterbi = config.quality >= 75;
+
+    let weights = if use_masking {
+        masking::compute_masking_weights_rgba(pixels, width, height)
+    } else {
+        vec![1.0f32; pixels.len()]
+    };
+
+    let mut pal = source_palette.clone();
+    if !pal.has_nn_cache() {
+        pal.build_nn_cache();
+    }
+
+    // Detect alpha mode from the palette: if any entry has alpha between 1-254,
+    // the palette was built with full alpha quantization.
+    let has_full_alpha = pal.entries_rgba().iter().any(|e| e[3] > 0 && e[3] < 255);
+
+    let mut indices = if has_full_alpha {
+        dither::dither_image_rgba_alpha(
+            pixels,
+            width,
+            height,
+            &weights,
+            &pal,
+            config.dither,
+            config.run_priority,
+            tuning.dither_strength,
+        )
+    } else {
+        dither::dither_image_rgba(
+            pixels,
+            width,
+            height,
+            &weights,
+            &pal,
+            config.dither,
+            config.run_priority,
+            tuning.dither_strength,
+        )
+    };
+
+    let run_lambda = if use_masking {
+        config.viterbi_lambda.unwrap_or(match config.run_priority {
+            RunPriority::Quality => 0.0,
+            RunPriority::Balanced => 0.01,
+            RunPriority::Compression => 0.02,
+        }) * tuning.viterbi_lambda_scale
+    } else {
+        config.viterbi_lambda.unwrap_or(0.0)
+    };
+    if run_lambda > 0.0 {
+        if use_viterbi {
+            remap::viterbi_refine_rgba(
+                pixels, width, height, &weights, &pal, &mut indices, run_lambda,
+            );
+        } else {
+            remap::run_extend_refine_rgba(
+                pixels, width, height, &weights, &pal, &mut indices, run_lambda,
+            );
+        }
+    }
+
+    // No frequency reorder — palette order must be stable for shared-palette use.
     Ok(QuantizeResult {
         palette: pal,
         indices,
