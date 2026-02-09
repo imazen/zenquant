@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use zenquant::_internals::average_run_length;
-use zenquant::{DitherMode, QuantizeConfig, RunPriority};
+use zenquant::{OutputFormat, QuantizeConfig};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -112,11 +112,7 @@ fn main() {
             &pixels,
             width,
             height,
-            &QuantizeConfig::new()
-                .max_colors(256)
-                .quality(85)
-                .dither(DitherMode::Adaptive)
-                .run_priority(RunPriority::Balanced),
+            &QuantizeConfig::new(OutputFormat::Png).max_colors(256),
         )
         .unwrap();
         let zq_ms = t0.elapsed().as_secs_f64() * 1000.0;

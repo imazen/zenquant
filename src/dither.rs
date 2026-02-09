@@ -11,8 +11,6 @@ use crate::remap::RunPriority;
 pub enum DitherMode {
     /// No dithering — nearest color only.
     None,
-    /// Full Floyd-Steinberg dithering (no AQ modulation).
-    Full,
     /// AQ-adaptive dithering — modulated by masking weights.
     Adaptive,
 }
@@ -499,27 +497,6 @@ mod tests {
             &weights,
             &palette,
             DitherMode::None,
-            RunPriority::Quality,
-            0.5,
-        );
-        assert_eq!(indices.len(), 64);
-        for &idx in &indices {
-            assert!((idx as usize) < palette.len());
-        }
-    }
-
-    #[test]
-    fn full_dither_produces_valid_indices() {
-        let palette = make_test_palette();
-        let pixels = make_gradient(64);
-        let weights = vec![1.0; 64];
-        let indices = dither_image(
-            &pixels,
-            64,
-            1,
-            &weights,
-            &palette,
-            DitherMode::Full,
             RunPriority::Quality,
             0.5,
         );

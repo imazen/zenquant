@@ -1,4 +1,4 @@
-use zenquant::{DitherMode, ImgRef, OutputFormat, QuantizeConfig, QuantizeError, RunPriority};
+use zenquant::{ImgRef, OutputFormat, Quality, QuantizeConfig, QuantizeError};
 
 #[test]
 fn smoke_test_rgb() {
@@ -14,7 +14,7 @@ fn smoke_test_rgb() {
         }
     }
 
-    let config = QuantizeConfig::default();
+    let config = QuantizeConfig::new(OutputFormat::Png);
     let result = zenquant::quantize(&pixels, width, height, &config).unwrap();
 
     assert!(result.palette_len() <= 256);
@@ -43,7 +43,7 @@ fn smoke_test_rgba_with_transparency() {
         }
     }
 
-    let config = QuantizeConfig::default();
+    let config = QuantizeConfig::new(OutputFormat::Png);
     let result = zenquant::quantize_rgba(&pixels, width, height, &config).unwrap();
 
     assert!(result.palette_len() <= 256);
@@ -69,21 +69,27 @@ fn all_config_modes() {
         })
         .collect();
 
-    // Test all combinations
-    for dither in &[DitherMode::None, DitherMode::Full, DitherMode::Adaptive] {
-        for rp in &[
-            RunPriority::Quality,
-            RunPriority::Balanced,
-            RunPriority::Compression,
-        ] {
-            let config = QuantizeConfig::new()
+    // Test dither modes × run priorities via expert methods
+    for no_dither in [true, false] {
+        for rp in ["quality", "balanced", "compression"] {
+            let mut config = QuantizeConfig::new(OutputFormat::Png)
                 .max_colors(8)
-                .quality(75)
-                .dither(*dither)
-                .run_priority(*rp);
+                .quality(Quality::Balanced);
+            if no_dither {
+                config = config._no_dither();
+            }
+            config = match rp {
+                "quality" => config._run_priority_quality(),
+                "compression" => config._run_priority_compression(),
+                _ => config, // balanced is default
+            };
 
             let result = zenquant::quantize(&pixels, width, height, &config).unwrap();
-            assert!(result.palette_len() <= 8, "mode {:?}/{:?}", dither, rp);
+            assert!(
+                result.palette_len() <= 8,
+                "mode dither={}/{rp}",
+                !no_dither
+            );
             assert_eq!(result.indices().len(), 64);
         }
     }
@@ -92,7 +98,7 @@ fn all_config_modes() {
 #[test]
 fn error_zero_dimension() {
     let pixels = vec![rgb::RGB { r: 0, g: 0, b: 0 }];
-    let config = QuantizeConfig::default();
+    let config = QuantizeConfig::new(OutputFormat::Png);
 
     assert!(matches!(
         zenquant::quantize(&pixels, 0, 1, &config),
@@ -107,7 +113,7 @@ fn error_zero_dimension() {
 #[test]
 fn error_dimension_mismatch() {
     let pixels = vec![rgb::RGB { r: 0, g: 0, b: 0 }; 10];
-    let config = QuantizeConfig::default();
+    let config = QuantizeConfig::new(OutputFormat::Png);
 
     assert!(matches!(
         zenquant::quantize(&pixels, 4, 4, &config),
@@ -119,21 +125,22 @@ fn error_dimension_mismatch() {
 fn error_invalid_max_colors() {
     let pixels = vec![rgb::RGB { r: 0, g: 0, b: 0 }; 4];
     assert!(matches!(
-        zenquant::quantize(&pixels, 2, 2, &QuantizeConfig::new().max_colors(1)),
+        zenquant::quantize(
+            &pixels,
+            2,
+            2,
+            &QuantizeConfig::new(OutputFormat::Png).max_colors(1)
+        ),
         Err(QuantizeError::InvalidMaxColors(1))
     ));
     assert!(matches!(
-        zenquant::quantize(&pixels, 2, 2, &QuantizeConfig::new().max_colors(257)),
+        zenquant::quantize(
+            &pixels,
+            2,
+            2,
+            &QuantizeConfig::new(OutputFormat::Png).max_colors(257)
+        ),
         Err(QuantizeError::InvalidMaxColors(257))
-    ));
-}
-
-#[test]
-fn error_invalid_quality() {
-    let pixels = vec![rgb::RGB { r: 0, g: 0, b: 0 }; 4];
-    assert!(matches!(
-        zenquant::quantize(&pixels, 2, 2, &QuantizeConfig::new().quality(101)),
-        Err(QuantizeError::InvalidQuality(101))
     ));
 }
 
@@ -147,7 +154,7 @@ fn single_color_image() {
         };
         64
     ];
-    let config = QuantizeConfig::new().max_colors(4);
+    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(4);
     let result = zenquant::quantize(&pixels, 8, 8, &config).unwrap();
 
     // Should produce a small palette
@@ -175,7 +182,9 @@ fn two_color_image() {
         }
     }
 
-    let config = QuantizeConfig::new().max_colors(2).dither(DitherMode::None);
+    let config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(2)
+        ._no_dither();
     let result = zenquant::quantize(&pixels, 8, 8, &config).unwrap();
     assert_eq!(result.palette_len(), 2);
 
@@ -201,7 +210,9 @@ fn low_quality_no_refinement() {
         })
         .collect();
 
-    let config = QuantizeConfig::new().quality(10).max_colors(16);
+    let config = QuantizeConfig::new(OutputFormat::Png)
+        .quality(Quality::Fast)
+        .max_colors(16);
     let result = zenquant::quantize(&pixels, 16, 16, &config).unwrap();
     assert!(result.palette_len() <= 16);
 }
@@ -211,9 +222,7 @@ fn low_quality_no_refinement() {
 #[test]
 fn output_format_gif() {
     let pixels = gradient_8x8();
-    let config = QuantizeConfig::new()
-        .max_colors(16)
-        .output_format(OutputFormat::Gif);
+    let config = QuantizeConfig::new(OutputFormat::Gif).max_colors(16);
     let result = zenquant::quantize(&pixels, 8, 8, &config).unwrap();
     assert!(result.palette_len() <= 16);
     // GIF uses binary transparency → no alpha_table needed for RGB
@@ -223,9 +232,7 @@ fn output_format_gif() {
 #[test]
 fn output_format_png() {
     let pixels = gradient_8x8();
-    let config = QuantizeConfig::new()
-        .max_colors(16)
-        .output_format(OutputFormat::Png);
+    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(16);
     let result = zenquant::quantize(&pixels, 8, 8, &config).unwrap();
     assert!(result.palette_len() <= 16);
     // PNG uses luminance sort — palette L values should be monotonically increasing
@@ -246,9 +253,7 @@ fn output_format_png() {
 #[test]
 fn output_format_webp_lossless() {
     let pixels = gradient_8x8();
-    let config = QuantizeConfig::new()
-        .max_colors(16)
-        .output_format(OutputFormat::WebpLossless);
+    let config = QuantizeConfig::new(OutputFormat::WebpLossless).max_colors(16);
     let result = zenquant::quantize(&pixels, 8, 8, &config).unwrap();
     assert!(result.palette_len() <= 16);
 }
@@ -257,12 +262,11 @@ fn output_format_webp_lossless() {
 fn all_formats_produce_valid_results() {
     let pixels = gradient_8x8();
     for format in &[
-        OutputFormat::Generic,
         OutputFormat::Gif,
         OutputFormat::Png,
         OutputFormat::WebpLossless,
     ] {
-        let config = QuantizeConfig::new().max_colors(16).output_format(*format);
+        let config = QuantizeConfig::new(*format).max_colors(16);
         let result = zenquant::quantize(&pixels, 8, 8, &config).unwrap();
         assert!(result.palette_len() <= 16, "format {:?}", format);
         assert_eq!(result.indices().len(), 64, "format {:?}", format);
@@ -296,7 +300,9 @@ fn exact_palette_fast_path_rgb() {
         pixels.push(colors[i % 4]);
     }
 
-    let config = QuantizeConfig::new().max_colors(4).dither(DitherMode::None);
+    let config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(4)
+        ._no_dither();
     let result = zenquant::quantize(&pixels, 8, 8, &config).unwrap();
     assert_eq!(result.palette_len(), 4);
 
@@ -349,7 +355,9 @@ fn exact_palette_fast_path_rgba() {
         pixels.push(colors[i % 4]);
     }
 
-    let config = QuantizeConfig::new().max_colors(4).dither(DitherMode::None);
+    let config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(4)
+        ._no_dither();
     let result = zenquant::quantize_rgba(&pixels, 8, 8, &config).unwrap();
     assert!(result.transparent_index().is_some());
     assert!(result.palette_len() <= 4);
@@ -385,7 +393,7 @@ fn exact_palette_too_many_colors_takes_normal_path() {
         pixels.push(rgb::RGB { r: 0, g: 0, b: 0 });
     }
 
-    let config = QuantizeConfig::new().max_colors(256);
+    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(256);
     let result = zenquant::quantize(&pixels, 520, 1, &config).unwrap();
     // Should still produce a valid result, just not lossless
     assert!(result.palette_len() <= 256);
@@ -396,7 +404,7 @@ fn exact_palette_too_many_colors_takes_normal_path() {
 #[test]
 fn palette_rgba_opaque() {
     let pixels = gradient_8x8();
-    let config = QuantizeConfig::new().max_colors(8);
+    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(8);
     let result = zenquant::quantize(&pixels, 8, 8, &config).unwrap();
 
     let rgba = result.palette_rgba();
@@ -421,7 +429,7 @@ fn palette_rgba_with_transparency() {
         });
     }
 
-    let config = QuantizeConfig::new().max_colors(8);
+    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(8);
     let result = zenquant::quantize_rgba(&pixels, 8, 8, &config).unwrap();
 
     let rgba = result.palette_rgba();
@@ -437,7 +445,7 @@ fn palette_rgba_with_transparency() {
 #[test]
 fn alpha_table_opaque_returns_none() {
     let pixels = gradient_8x8();
-    let config = QuantizeConfig::new().max_colors(8);
+    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(8);
     let result = zenquant::quantize(&pixels, 8, 8, &config).unwrap();
     assert!(
         result.alpha_table().is_none(),
@@ -458,7 +466,7 @@ fn alpha_table_with_transparency() {
         });
     }
 
-    let config = QuantizeConfig::new().max_colors(8);
+    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(8);
     let result = zenquant::quantize_rgba(&pixels, 8, 8, &config).unwrap();
 
     let table = result.alpha_table();
@@ -489,10 +497,9 @@ fn gif_frequency_reorder_most_common_gets_low_index() {
         pixels.push(rgb::RGB { r: 0, g: 0, b: 255 });
     }
 
-    let config = QuantizeConfig::new()
+    let config = QuantizeConfig::new(OutputFormat::Gif)
         .max_colors(4)
-        .output_format(OutputFormat::Gif)
-        .dither(DitherMode::None);
+        ._no_dither();
     let result = zenquant::quantize(&pixels, 10, 10, &config).unwrap();
 
     // After frequency reorder, the most common index should be low
@@ -520,10 +527,9 @@ fn gif_frequency_reorder_most_common_gets_low_index() {
 fn dither_strength_override() {
     let pixels = gradient_8x8();
     // Explicitly set dither_strength different from format default
-    let config = QuantizeConfig::new()
+    let config = QuantizeConfig::new(OutputFormat::Png) // default 0.3
         .max_colors(8)
-        .output_format(OutputFormat::Png) // default 0.3
-        .dither_strength(0.8); // override to 0.8
+        ._dither_strength(0.8); // override to 0.8
 
     // Should not panic
     let result = zenquant::quantize(&pixels, 8, 8, &config).unwrap();
@@ -547,10 +553,8 @@ fn semi_transparent_rgba_quantization() {
         });
     }
 
-    // Full alpha mode (Generic/PNG/WebP/JXL)
-    let config = QuantizeConfig::new()
-        .max_colors(16)
-        .output_format(OutputFormat::Generic);
+    // Full alpha mode (PNG uses per-entry alpha)
+    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(16);
     let result = zenquant::quantize_rgba(&pixels, 8, 8, &config).unwrap();
 
     let rgba = result.palette_rgba();
@@ -579,9 +583,7 @@ fn gif_binary_transparency() {
         });
     }
 
-    let config = QuantizeConfig::new()
-        .max_colors(8)
-        .output_format(OutputFormat::Gif);
+    let config = QuantizeConfig::new(OutputFormat::Gif).max_colors(8);
     let result = zenquant::quantize_rgba(&pixels, 8, 8, &config).unwrap();
 
     let rgba = result.palette_rgba();
@@ -622,7 +624,7 @@ fn remap_preserves_palette() {
         })
         .collect();
 
-    let config = QuantizeConfig::new().quality(85);
+    let config = QuantizeConfig::new(OutputFormat::Png);
     let result1 = zenquant::quantize(&pixels1, 8, 8, &config).unwrap();
     let result2 = result1.remap(&pixels2, 8, 8, &config).unwrap();
 
@@ -652,9 +654,7 @@ fn remap_rgba_preserves_palette() {
         })
         .collect();
 
-    let config = QuantizeConfig::new()
-        .quality(85)
-        .output_format(OutputFormat::Gif);
+    let config = QuantizeConfig::new(OutputFormat::Gif);
     let result1 = zenquant::quantize_rgba(&pixels1, 8, 8, &config).unwrap();
     let result2 = result1.remap_rgba(&pixels2, 8, 8, &config).unwrap();
 
@@ -666,16 +666,24 @@ fn remap_rgba_preserves_palette() {
 fn build_palette_rgb_multi_frame() {
     // Two frames with different color distributions
     let frame1_pixels: Vec<rgb::RGB<u8>> = (0..64)
-        .map(|i| rgb::RGB { r: (i * 4) as u8, g: 0, b: 0 })
+        .map(|i| rgb::RGB {
+            r: (i * 4) as u8,
+            g: 0,
+            b: 0,
+        })
         .collect();
     let frame2_pixels: Vec<rgb::RGB<u8>> = (0..48)
-        .map(|i| rgb::RGB { r: 0, g: (i * 5) as u8, b: 0 })
+        .map(|i| rgb::RGB {
+            r: 0,
+            g: (i * 5) as u8,
+            b: 0,
+        })
         .collect();
 
     let f1 = ImgRef::new(&frame1_pixels, 8, 8);
     let f2 = ImgRef::new(&frame2_pixels, 8, 6);
 
-    let config = QuantizeConfig::new().quality(85).output_format(OutputFormat::Png);
+    let config = QuantizeConfig::new(OutputFormat::Png);
     let shared = zenquant::build_palette(&[f1, f2], &config).unwrap();
 
     // Palette should exist and be non-empty
@@ -715,7 +723,7 @@ fn build_palette_rgba_gif_multi_frame() {
     let f1 = ImgRef::new(&frame1_pixels, 8, 8);
     let f2 = ImgRef::new(&frame2_pixels, 8, 6);
 
-    let config = QuantizeConfig::new().quality(85).output_format(OutputFormat::Gif);
+    let config = QuantizeConfig::new(OutputFormat::Gif);
     let shared = zenquant::build_palette_rgba(&[f1, f2], &config).unwrap();
 
     assert!(shared.palette_len() > 0);
@@ -734,7 +742,7 @@ fn build_palette_rgba_gif_multi_frame() {
 
 #[test]
 fn build_palette_empty_frames_errors() {
-    let config = QuantizeConfig::new();
+    let config = QuantizeConfig::new(OutputFormat::Png);
     let result = zenquant::build_palette(&[], &config);
     assert!(result.is_err());
 }
@@ -743,11 +751,15 @@ fn build_palette_empty_frames_errors() {
 fn build_palette_single_frame_matches_quantize() {
     // A single-frame build_palette should produce a similar palette to quantize()
     let pixels: Vec<rgb::RGB<u8>> = (0..256)
-        .map(|i| rgb::RGB { r: i as u8, g: (255 - i) as u8, b: 128 })
+        .map(|i| rgb::RGB {
+            r: i as u8,
+            g: (255 - i) as u8,
+            b: 128,
+        })
         .collect();
     let f = ImgRef::new(&pixels, 16, 16);
 
-    let config = QuantizeConfig::new().quality(85).output_format(OutputFormat::Png);
+    let config = QuantizeConfig::new(OutputFormat::Png);
     let shared = zenquant::build_palette(&[f], &config).unwrap();
     assert!(shared.palette_len() > 0);
     assert!(shared.palette_len() <= 256);

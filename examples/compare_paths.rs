@@ -12,7 +12,7 @@ use rgb::RGB8;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use zenquant::{DitherMode, ImgRef, OutputFormat, QuantizeConfig, RunPriority};
+use zenquant::{ImgRef, OutputFormat, QuantizeConfig};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -48,12 +48,7 @@ fn main() {
         paths.len()
     );
 
-    let config = QuantizeConfig::new()
-        .max_colors(256)
-        .quality(85)
-        .dither(DitherMode::Adaptive)
-        .run_priority(RunPriority::Balanced)
-        .output_format(OutputFormat::Png);
+    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(256);
 
     println!(
         "{:<36} {:>8} {:>8}  {:>8} {:>8}  {:>8} {:>8}",

@@ -14,7 +14,4 @@ pub enum QuantizeError {
 
     #[error("max_colors must be between 2 and 256, got {0}")]
     InvalidMaxColors(u32),
-
-    #[error("quality must be between 0 and 100, got {0}")]
-    InvalidQuality(u32),
 }

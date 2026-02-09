@@ -12,20 +12,19 @@ pub(crate) mod oklab;
 pub(crate) mod palette;
 pub(crate) mod remap;
 
-pub use dither::DitherMode;
 pub use error::QuantizeError;
 pub use imgref::{Img, ImgRef, ImgVec};
-pub use remap::RunPriority;
 pub use rgb::{RGB, RGBA};
 
 // Re-export internal helpers used by tests and benchmarking examples.
 // Not part of the public API — may change without notice.
 #[doc(hidden)]
 pub mod _internals {
+    pub use crate::dither::DitherMode;
     pub use crate::masking::compute_masking_weights;
     pub use crate::oklab::srgb_to_oklab;
     pub use crate::palette::index_delta_score;
-    pub use crate::remap::average_run_length;
+    pub use crate::remap::{RunPriority, average_run_length};
 }
 
 // Internal modules re-exposed for profiling/debugging examples.
@@ -44,17 +43,31 @@ pub mod _dev {
 
 use alloc::vec::Vec;
 
+/// Quality preset — controls k-means iterations, AQ masking, and Viterbi optimization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Quality {
+    /// Fast mode — no masking or k-means refinement. Roughly 30ms per 512x512 image.
+    Fast,
+    /// Balanced — AQ masking + 2 k-means iterations + greedy run extension.
+    Balanced,
+    /// Best quality — AQ masking + 8 k-means iterations + Viterbi DP.
+    Best,
+}
+
+impl Default for Quality {
+    fn default() -> Self {
+        Self::Best
+    }
+}
+
 /// Target output format — controls palette sorting, dither strength, and compression tuning.
 ///
 /// Different image formats have fundamentally different compression algorithms,
 /// so the optimal palette ordering and dithering strategy varies per format.
-/// Setting the output format applies sensible defaults that can be overridden
-/// via subsequent builder calls.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum OutputFormat {
-    /// No format-specific optimization. Full alpha quantization if RGBA.
-    #[default]
-    Generic,
     /// GIF: LZW compression, binary transparency only.
     /// Uses delta-minimize sort + post-remap frequency reorder.
     Gif,
@@ -93,13 +106,6 @@ impl QuantizeTuning {
         //   viterbi_lambda_scale: multiplier on the run-extension lambda
         //     GIF/WebP benefit heavily from longer runs (LZW/entropy coding)
         let (default_dither, sort, gif_reorder, alpha, lambda_scale) = match config.output_format {
-            OutputFormat::Generic => (
-                0.5,
-                palette::PaletteSortStrategy::DeltaMinimize,
-                false,
-                AlphaMode::Full,
-                1.0,
-            ),
             OutputFormat::Gif => (
                 0.35,
                 palette::PaletteSortStrategy::DeltaMinimize,
@@ -134,96 +140,93 @@ impl QuantizeTuning {
 }
 
 /// Configuration for palette quantization.
+///
+/// Create with [`QuantizeConfig::new`], then optionally set quality and max colors.
+///
+/// # Example
+///
+/// ```
+/// use zenquant::{QuantizeConfig, OutputFormat, Quality};
+///
+/// let config = QuantizeConfig::new(OutputFormat::Png)
+///     .quality(Quality::Best)
+///     .max_colors(128);
+/// ```
 #[derive(Debug, Clone)]
 pub struct QuantizeConfig {
-    /// Maximum number of palette colors (2..=256).
-    pub max_colors: u32,
-    /// Quality parameter (0..=100). Higher = more accurate, slower.
-    /// Controls k-means refinement and AQ damping.
-    pub quality: u32,
-    /// Run extension priority.
-    pub run_priority: RunPriority,
-    /// Dithering mode.
-    pub dither: DitherMode,
-    /// Target output format — controls sorting, dither strength, and alpha handling.
-    pub output_format: OutputFormat,
-    /// Override dither strength (0.0–1.0). If None, uses format-specific default.
-    pub dither_strength: Option<f32>,
-    /// Override Viterbi lambda (0.0 = disabled). If None, uses RunPriority default.
-    /// Higher values favor compression over quality.
-    pub viterbi_lambda: Option<f32>,
-}
-
-impl Default for QuantizeConfig {
-    fn default() -> Self {
-        Self {
-            max_colors: 256,
-            quality: 85,
-            run_priority: RunPriority::Balanced,
-            dither: DitherMode::Adaptive,
-            output_format: OutputFormat::Generic,
-            dither_strength: None,
-            viterbi_lambda: None,
-        }
-    }
+    max_colors: u32,
+    quality: Quality,
+    output_format: OutputFormat,
+    // Internal knobs — not part of the public API.
+    run_priority: remap::RunPriority,
+    dither_mode: dither::DitherMode,
+    dither_strength: Option<f32>,
+    viterbi_lambda: Option<f32>,
 }
 
 impl QuantizeConfig {
-    /// Create a new config with default settings (256 colors, quality 85, adaptive dithering).
-    pub fn new() -> Self {
-        Self::default()
+    /// Create a new config for the given output format.
+    ///
+    /// Defaults: 256 colors, [`Quality::Best`], adaptive dithering.
+    pub fn new(format: OutputFormat) -> Self {
+        Self {
+            max_colors: 256,
+            quality: Quality::Best,
+            output_format: format,
+            run_priority: remap::RunPriority::Balanced,
+            dither_mode: dither::DitherMode::Adaptive,
+            dither_strength: None,
+            viterbi_lambda: None,
+        }
     }
 
     /// Maximum palette colors (2–256). Default: 256.
     ///
     /// GIF, PNG, and WebP lossless all support up to 256 palette entries.
-    /// JPEG XL modular supports larger palettes, but indices are stored as
-    /// `u8` so 256 is the current ceiling.
     pub fn max_colors(mut self, n: u32) -> Self {
         self.max_colors = n;
         self
     }
 
-    /// Quality preset (0–100). Controls k-means iterations, AQ masking,
-    /// and Viterbi optimization. Default: 85.
-    ///
-    /// - **0–49:** fast mode — no masking or refinement
-    /// - **50–74:** balanced — masking + 2 k-means iterations + run extension
-    /// - **75–100:** quality — masking + 8 k-means iterations + Viterbi DP
-    pub fn quality(mut self, q: u32) -> Self {
+    /// Quality preset. Default: [`Quality::Best`].
+    pub fn quality(mut self, q: Quality) -> Self {
         self.quality = q;
         self
     }
 
-    /// Compression vs quality tradeoff for index optimization.
-    /// Only affects quality >= 50. Default: `Balanced`.
-    pub fn run_priority(mut self, rp: RunPriority) -> Self {
-        self.run_priority = rp;
+    // --- Hidden expert methods (not public API) ---
+
+    /// Override dither mode. Not part of the public API.
+    #[doc(hidden)]
+    pub fn _no_dither(mut self) -> Self {
+        self.dither_mode = dither::DitherMode::None;
         self
     }
 
-    /// Dithering algorithm. Default: `Adaptive`.
-    pub fn dither(mut self, mode: DitherMode) -> Self {
-        self.dither = mode;
+    /// Set run priority to Quality (no run bias). Not part of the public API.
+    #[doc(hidden)]
+    pub fn _run_priority_quality(mut self) -> Self {
+        self.run_priority = remap::RunPriority::Quality;
         self
     }
 
-    /// Target output format. Tunes palette sort order, dither strength,
-    /// and Viterbi lambda for the format's compression algorithm.
-    /// Default: `Generic` (no format-specific tuning).
-    pub fn output_format(mut self, format: OutputFormat) -> Self {
-        self.output_format = format;
+    /// Set run priority to Compression (aggressive runs). Not part of the public API.
+    #[doc(hidden)]
+    pub fn _run_priority_compression(mut self) -> Self {
+        self.run_priority = remap::RunPriority::Compression;
         self
     }
 
-    /// Override dither strength (0.0–1.0). `None` uses the format default.
-    pub fn dither_strength(mut self, strength: f32) -> Self {
+    /// Override dither strength (0.0–1.0). Not part of the public API.
+    #[doc(hidden)]
+    pub fn _dither_strength(mut self, strength: f32) -> Self {
         self.dither_strength = Some(strength);
         self
     }
 
-    /// Override Viterbi lambda (0.0 disables). `None` uses the `RunPriority` default.
-    pub fn viterbi_lambda(mut self, lambda: f32) -> Self {
+    /// Override Viterbi lambda. Not part of the public API.
+    #[doc(hidden)]
+    pub fn _viterbi_lambda(mut self, lambda: f32) -> Self {
         self.viterbi_lambda = Some(lambda);
         self
     }
@@ -290,22 +293,17 @@ impl QuantizeResult {
     /// # Example
     ///
     /// ```no_run
-    /// use zenquant::{QuantizeConfig, OutputFormat, DitherMode};
+    /// use zenquant::{QuantizeConfig, OutputFormat};
     ///
     /// # let combined: Vec<rgb::RGB<u8>> = vec![];
     /// # let frame: Vec<rgb::RGB<u8>> = vec![];
     /// # let (w, h) = (64, 64);
     /// // Build a shared palette from a representative sample
-    /// let palette_config = QuantizeConfig::new()
-    ///     .output_format(OutputFormat::Png)
-    ///     .dither(DitherMode::None);
-    /// let shared = zenquant::quantize(&combined, w * 2, h, &palette_config).unwrap();
+    /// let config = QuantizeConfig::new(OutputFormat::Png);
+    /// let shared = zenquant::quantize(&combined, w * 2, h, &config).unwrap();
     ///
     /// // Remap each frame against the shared palette
-    /// let remap_config = QuantizeConfig::new()
-    ///     .output_format(OutputFormat::Png)
-    ///     .quality(85);
-    /// let frame_result = shared.remap(&frame, w, h, &remap_config).unwrap();
+    /// let frame_result = shared.remap(&frame, w, h, &config).unwrap();
     /// ```
     pub fn remap(
         &self,
@@ -327,23 +325,18 @@ impl QuantizeResult {
     /// # Example
     ///
     /// ```no_run
-    /// use zenquant::{QuantizeConfig, OutputFormat, DitherMode};
+    /// use zenquant::{QuantizeConfig, OutputFormat};
     ///
     /// # let combined: Vec<rgb::RGBA<u8>> = vec![];
     /// # let frames: Vec<Vec<rgb::RGBA<u8>>> = vec![];
     /// # let (w, h) = (64usize, 64usize);
     /// // Build a shared palette from sampled frames
-    /// let palette_config = QuantizeConfig::new()
-    ///     .output_format(OutputFormat::Gif)
-    ///     .dither(DitherMode::None);
-    /// let shared = zenquant::quantize_rgba(&combined, w * 4, h, &palette_config).unwrap();
+    /// let config = QuantizeConfig::new(OutputFormat::Gif);
+    /// let shared = zenquant::quantize_rgba(&combined, w * 4, h, &config).unwrap();
     ///
-    /// // Remap each frame with dithering
-    /// let remap_config = QuantizeConfig::new()
-    ///     .output_format(OutputFormat::Gif)
-    ///     .quality(85);
+    /// // Remap each frame
     /// for frame in &frames {
-    ///     let result = shared.remap_rgba(frame, w, h, &remap_config).unwrap();
+    ///     let result = shared.remap_rgba(frame, w, h, &config).unwrap();
     ///     // result.palette() is identical across all frames
     /// }
     /// ```
@@ -370,9 +363,7 @@ impl QuantizeResult {
 ///
 /// # let pixels: Vec<rgb::RGB<u8>> = vec![];
 /// # let (width, height) = (64, 64);
-/// let config = QuantizeConfig::new()
-///     .quality(85)
-///     .output_format(OutputFormat::Png);
+/// let config = QuantizeConfig::new(OutputFormat::Png);
 /// let result = zenquant::quantize(&pixels, width, height, &config).unwrap();
 ///
 /// let palette = result.palette();   // &[[u8; 3]] — sRGB palette
@@ -409,16 +400,14 @@ pub fn quantize(
     }
 
     // Pipeline tiers based on quality:
-    //   q < 50:  fast — no masking, no k-means, no Viterbi
-    //   50..75:  balanced — masking + light k-means (2 iters) + Viterbi
-    //   q >= 75: quality — masking + full k-means (8 iters) + Viterbi
-    let use_masking = config.quality >= 50;
-    let kmeans_iters: usize = if config.quality >= 75 {
-        8
-    } else if config.quality >= 50 {
-        2
-    } else {
-        0
+    //   Fast:     no masking, no k-means, no Viterbi
+    //   Balanced: masking + light k-means (2 iters) + run extension
+    //   Best:     masking + full k-means (8 iters) + Viterbi DP
+    let use_masking = matches!(config.quality, Quality::Balanced | Quality::Best);
+    let kmeans_iters: usize = match config.quality {
+        Quality::Best => 8,
+        Quality::Balanced => 2,
+        Quality::Fast => 0,
     };
 
     // 1. Compute AQ masking weights (skip for fast mode — uniform weights)
@@ -466,21 +455,21 @@ pub fn quantize(
         height,
         &weights,
         &pal,
-        config.dither,
+        config.dither_mode,
         config.run_priority,
         tuning.dither_strength,
     );
 
     // 5b. Run optimization
-    //   q >= 75: full Viterbi DP (optimal run extension, ~26ms)
-    //   q 50-74: fast run-extend post-pass (greedy bidirectional, ~1ms)
-    //   q < 50:  none (dither-level greedy run-bias only)
-    let use_viterbi = config.quality >= 75;
+    //   Best:     full Viterbi DP (optimal run extension, ~26ms)
+    //   Balanced: fast run-extend post-pass (greedy bidirectional, ~1ms)
+    //   Fast:     none (dither-level greedy run-bias only)
+    let use_viterbi = matches!(config.quality, Quality::Best);
     let run_lambda = if use_masking {
         config.viterbi_lambda.unwrap_or(match config.run_priority {
-            RunPriority::Quality => 0.0,
-            RunPriority::Balanced => 0.01,
-            RunPriority::Compression => 0.02,
+            remap::RunPriority::Quality => 0.0,
+            remap::RunPriority::Balanced => 0.01,
+            remap::RunPriority::Compression => 0.02,
         }) * tuning.viterbi_lambda_scale
     } else {
         config.viterbi_lambda.unwrap_or(0.0)
@@ -536,9 +525,7 @@ pub fn quantize(
 ///
 /// # let pixels: Vec<rgb::RGBA<u8>> = vec![];
 /// # let (width, height) = (64, 64);
-/// let config = QuantizeConfig::new()
-///     .quality(85)
-///     .output_format(OutputFormat::Gif);
+/// let config = QuantizeConfig::new(OutputFormat::Gif);
 /// let result = zenquant::quantize_rgba(&pixels, width, height, &config).unwrap();
 ///
 /// let palette = result.palette();            // &[[u8; 3]]
@@ -582,14 +569,12 @@ pub fn quantize_rgba(
         });
     }
 
-    let use_masking = config.quality >= 50;
-    let use_viterbi = config.quality >= 75;
-    let kmeans_iters: usize = if config.quality >= 75 {
-        8
-    } else if config.quality >= 50 {
-        2
-    } else {
-        0
+    let use_masking = matches!(config.quality, Quality::Balanced | Quality::Best);
+    let use_viterbi = matches!(config.quality, Quality::Best);
+    let kmeans_iters: usize = match config.quality {
+        Quality::Best => 8,
+        Quality::Balanced => 2,
+        Quality::Fast => 0,
     };
     let weights = if use_masking {
         masking::compute_masking_weights_rgba(pixels, width, height)
@@ -634,9 +619,9 @@ pub fn quantize_rgba(
 
         let viterbi_lambda = if use_masking {
             config.viterbi_lambda.unwrap_or(match config.run_priority {
-                RunPriority::Quality => 0.0,
-                RunPriority::Balanced => 0.01,
-                RunPriority::Compression => 0.02,
+                remap::RunPriority::Quality => 0.0,
+                remap::RunPriority::Balanced => 0.01,
+                remap::RunPriority::Compression => 0.02,
             }) * tuning.viterbi_lambda_scale
         } else {
             config.viterbi_lambda.unwrap_or(0.0)
@@ -647,7 +632,7 @@ pub fn quantize_rgba(
             height,
             &weights,
             &pal,
-            config.dither,
+            config.dither_mode,
             config.run_priority,
             tuning.dither_strength,
         );
@@ -715,9 +700,9 @@ pub fn quantize_rgba(
 
         let viterbi_lambda = if use_masking {
             config.viterbi_lambda.unwrap_or(match config.run_priority {
-                RunPriority::Quality => 0.0,
-                RunPriority::Balanced => 0.01,
-                RunPriority::Compression => 0.02,
+                remap::RunPriority::Quality => 0.0,
+                remap::RunPriority::Balanced => 0.01,
+                remap::RunPriority::Compression => 0.02,
             }) * tuning.viterbi_lambda_scale
         } else {
             config.viterbi_lambda.unwrap_or(0.0)
@@ -728,7 +713,7 @@ pub fn quantize_rgba(
             height,
             &weights,
             &pal,
-            config.dither,
+            config.dither_mode,
             config.run_priority,
             tuning.dither_strength,
         );
@@ -790,7 +775,7 @@ pub fn quantize_rgba(
 /// # let buf2 = vec![rgb::RGB::new(0u8,0,0); 64];
 /// # let frame1 = ImgRef::new(&buf1, 8, 8);
 /// # let frame2 = ImgRef::new(&buf2, 8, 8);
-/// let config = QuantizeConfig::new().output_format(OutputFormat::Png);
+/// let config = QuantizeConfig::new(OutputFormat::Png);
 /// let shared = zenquant::build_palette(&[frame1, frame2], &config).unwrap();
 ///
 /// // Remap each frame against the shared palette
@@ -814,9 +799,6 @@ pub fn build_palette(
     if config.max_colors < 2 || config.max_colors > 256 {
         return Err(QuantizeError::InvalidMaxColors(config.max_colors));
     }
-    if config.quality > 100 {
-        return Err(QuantizeError::InvalidQuality(config.quality));
-    }
 
     let tuning = QuantizeTuning::from_config(config);
     let max_colors = config.max_colors as usize;
@@ -837,13 +819,11 @@ pub fn build_palette(
         });
     }
 
-    let use_masking = config.quality >= 50;
-    let kmeans_iters: usize = if config.quality >= 75 {
-        8
-    } else if config.quality >= 50 {
-        2
-    } else {
-        0
+    let use_masking = matches!(config.quality, Quality::Balanced | Quality::Best);
+    let kmeans_iters: usize = match config.quality {
+        Quality::Best => 8,
+        Quality::Balanced => 2,
+        Quality::Fast => 0,
     };
 
     // Build merged histogram from all frames
@@ -924,7 +904,7 @@ pub fn build_palette(
 /// # let buf2 = vec![rgb::RGBA::new(0u8,0,0,255); 48];
 /// # let frame1 = ImgRef::new(&buf1, 8, 8);
 /// # let frame2 = ImgRef::new(&buf2, 8, 6);
-/// let config = QuantizeConfig::new().output_format(OutputFormat::Gif);
+/// let config = QuantizeConfig::new(OutputFormat::Gif);
 /// let shared = zenquant::build_palette_rgba(&[frame1, frame2], &config).unwrap();
 ///
 /// // Remap each frame against the shared palette
@@ -947,9 +927,6 @@ pub fn build_palette_rgba(
     }
     if config.max_colors < 2 || config.max_colors > 256 {
         return Err(QuantizeError::InvalidMaxColors(config.max_colors));
-    }
-    if config.quality > 100 {
-        return Err(QuantizeError::InvalidQuality(config.quality));
     }
 
     let tuning = QuantizeTuning::from_config(config);
@@ -988,13 +965,11 @@ pub fn build_palette_rgba(
         }
     }
 
-    let use_masking = config.quality >= 50;
-    let kmeans_iters: usize = if config.quality >= 75 {
-        8
-    } else if config.quality >= 50 {
-        2
-    } else {
-        0
+    let use_masking = matches!(config.quality, Quality::Balanced | Quality::Best);
+    let kmeans_iters: usize = match config.quality {
+        Quality::Best => 8,
+        Quality::Balanced => 2,
+        Quality::Fast => 0,
     };
 
     let mut all_pixels: Vec<rgb::RGBA<u8>> = Vec::new();
@@ -1132,8 +1107,8 @@ fn remap_rgb_impl(
         pal.build_nn_cache();
     }
 
-    let use_masking = config.quality >= 50;
-    let use_viterbi = config.quality >= 75;
+    let use_masking = matches!(config.quality, Quality::Balanced | Quality::Best);
+    let use_viterbi = matches!(config.quality, Quality::Best);
 
     let weights = if use_masking {
         masking::compute_masking_weights(pixels, width, height)
@@ -1147,16 +1122,16 @@ fn remap_rgb_impl(
         height,
         &weights,
         &pal,
-        config.dither,
+        config.dither_mode,
         config.run_priority,
         tuning.dither_strength,
     );
 
     let run_lambda = if use_masking {
         config.viterbi_lambda.unwrap_or(match config.run_priority {
-            RunPriority::Quality => 0.0,
-            RunPriority::Balanced => 0.01,
-            RunPriority::Compression => 0.02,
+            remap::RunPriority::Quality => 0.0,
+            remap::RunPriority::Balanced => 0.01,
+            remap::RunPriority::Compression => 0.02,
         }) * tuning.viterbi_lambda_scale
     } else {
         config.viterbi_lambda.unwrap_or(0.0)
@@ -1204,8 +1179,8 @@ fn remap_rgba_impl(
         pal.build_nn_cache();
     }
 
-    let use_masking = config.quality >= 50;
-    let use_viterbi = config.quality >= 75;
+    let use_masking = matches!(config.quality, Quality::Balanced | Quality::Best);
+    let use_viterbi = matches!(config.quality, Quality::Best);
 
     let weights = if use_masking {
         masking::compute_masking_weights_rgba(pixels, width, height)
@@ -1224,7 +1199,7 @@ fn remap_rgba_impl(
             height,
             &weights,
             &pal,
-            config.dither,
+            config.dither_mode,
             config.run_priority,
             tuning.dither_strength,
         )
@@ -1235,7 +1210,7 @@ fn remap_rgba_impl(
             height,
             &weights,
             &pal,
-            config.dither,
+            config.dither_mode,
             config.run_priority,
             tuning.dither_strength,
         )
@@ -1243,9 +1218,9 @@ fn remap_rgba_impl(
 
     let run_lambda = if use_masking {
         config.viterbi_lambda.unwrap_or(match config.run_priority {
-            RunPriority::Quality => 0.0,
-            RunPriority::Balanced => 0.01,
-            RunPriority::Compression => 0.02,
+            remap::RunPriority::Quality => 0.0,
+            remap::RunPriority::Balanced => 0.01,
+            remap::RunPriority::Compression => 0.02,
         }) * tuning.viterbi_lambda_scale
     } else {
         config.viterbi_lambda.unwrap_or(0.0)
@@ -1402,9 +1377,6 @@ fn validate_inputs(
     }
     if config.max_colors < 2 || config.max_colors > 256 {
         return Err(QuantizeError::InvalidMaxColors(config.max_colors));
-    }
-    if config.quality > 100 {
-        return Err(QuantizeError::InvalidQuality(config.quality));
     }
     Ok(())
 }

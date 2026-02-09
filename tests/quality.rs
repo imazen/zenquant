@@ -1,5 +1,5 @@
 use zenquant::_internals::{average_run_length, index_delta_score, srgb_to_oklab};
-use zenquant::{DitherMode, QuantizeConfig, RunPriority};
+use zenquant::{OutputFormat, QuantizeConfig};
 
 /// Compute mean squared error in OKLab space between original pixels and quantized result.
 fn compute_mse(pixels: &[rgb::RGB<u8>], palette: &[[u8; 3]], indices: &[u8]) -> f32 {
@@ -44,15 +44,15 @@ fn noisy_image(width: usize, height: usize) -> Vec<rgb::RGB<u8>> {
 fn compression_mode_has_longer_runs() {
     let pixels = gradient_image(64, 64);
 
-    let quality_config = QuantizeConfig::new()
+    let quality_config = QuantizeConfig::new(OutputFormat::Png)
         .max_colors(32)
-        .dither(DitherMode::None)
-        .run_priority(RunPriority::Quality);
+        ._no_dither()
+        ._run_priority_quality();
 
-    let compression_config = QuantizeConfig::new()
+    let compression_config = QuantizeConfig::new(OutputFormat::Png)
         .max_colors(32)
-        .dither(DitherMode::None)
-        .run_priority(RunPriority::Compression);
+        ._no_dither()
+        ._run_priority_compression();
 
     let quality_result = zenquant::quantize(&pixels, 64, 64, &quality_config).unwrap();
     let compression_result = zenquant::quantize(&pixels, 64, 64, &compression_config).unwrap();
@@ -70,10 +70,10 @@ fn compression_mode_has_longer_runs() {
 fn delta_sort_reduces_index_deltas() {
     let pixels = gradient_image(32, 32);
 
-    let config = QuantizeConfig::new()
+    let config = QuantizeConfig::new(OutputFormat::Png)
         .max_colors(16)
-        .dither(DitherMode::None)
-        .run_priority(RunPriority::Quality);
+        ._no_dither()
+        ._run_priority_quality();
 
     let result = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
     let delta = index_delta_score(result.indices());
@@ -93,15 +93,15 @@ fn delta_sort_reduces_index_deltas() {
 fn more_colors_lower_mse() {
     let pixels = gradient_image(32, 32);
 
-    let config_8 = QuantizeConfig::new()
+    let config_8 = QuantizeConfig::new(OutputFormat::Png)
         .max_colors(8)
-        .dither(DitherMode::None)
-        .run_priority(RunPriority::Quality);
+        ._no_dither()
+        ._run_priority_quality();
 
-    let config_32 = QuantizeConfig::new()
+    let config_32 = QuantizeConfig::new(OutputFormat::Png)
         .max_colors(32)
-        .dither(DitherMode::None)
-        .run_priority(RunPriority::Quality);
+        ._no_dither()
+        ._run_priority_quality();
 
     let result_8 = zenquant::quantize(&pixels, 32, 32, &config_8).unwrap();
     let result_32 = zenquant::quantize(&pixels, 32, 32, &config_32).unwrap();
@@ -144,10 +144,7 @@ fn noisy_image_gets_low_weights() {
 fn gradient_produces_reasonable_quality() {
     let pixels = gradient_image(64, 64);
 
-    let config = QuantizeConfig::new()
-        .max_colors(256)
-        .quality(85)
-        .dither(DitherMode::Adaptive);
+    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(256);
 
     let result = zenquant::quantize(&pixels, 64, 64, &config).unwrap();
     let mse = compute_mse(&pixels, result.palette(), result.indices());

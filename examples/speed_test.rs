@@ -13,7 +13,7 @@ use std::io::Write;
 use std::time::Instant;
 
 use zenquant::_internals::average_run_length;
-use zenquant::{DitherMode, QuantizeConfig, RunPriority};
+use zenquant::{OutputFormat, Quality, QuantizeConfig};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -62,27 +62,9 @@ fn main() {
 
     // Presets to test
     let presets: Vec<(&str, QuantizeConfig)> = vec![
-        (
-            "zq q=30 (fast)",
-            QuantizeConfig::new()
-                .quality(30)
-                .dither(DitherMode::Adaptive)
-                .run_priority(RunPriority::Balanced),
-        ),
-        (
-            "zq q=60 (balanced)",
-            QuantizeConfig::new()
-                .quality(60)
-                .dither(DitherMode::Adaptive)
-                .run_priority(RunPriority::Balanced),
-        ),
-        (
-            "zq q=85 (quality)",
-            QuantizeConfig::new()
-                .quality(85)
-                .dither(DitherMode::Adaptive)
-                .run_priority(RunPriority::Balanced),
-        ),
+        ("zq fast", QuantizeConfig::new(OutputFormat::Png).quality(Quality::Fast)),
+        ("zq balanced", QuantizeConfig::new(OutputFormat::Png).quality(Quality::Balanced)),
+        ("zq best", QuantizeConfig::new(OutputFormat::Png)),
     ];
 
     println!(

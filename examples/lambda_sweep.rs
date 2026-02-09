@@ -13,7 +13,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use zenquant::_internals::average_run_length;
-use zenquant::{DitherMode, QuantizeConfig, RunPriority};
+use zenquant::{OutputFormat, QuantizeConfig};
 
 const LAMBDAS: &[f32] = &[0.0, 0.005, 0.01, 0.02];
 
@@ -81,12 +81,9 @@ fn main() {
             let width = *width;
             let height = *height;
 
-            let config = QuantizeConfig::new()
+            let config = QuantizeConfig::new(OutputFormat::Png)
                 .max_colors(256)
-                .quality(85)
-                .dither(DitherMode::Adaptive)
-                .run_priority(RunPriority::Balanced)
-                .viterbi_lambda(lambda);
+                ._viterbi_lambda(lambda);
 
             let result = zenquant::quantize(pixels, width, height, &config).unwrap();
 

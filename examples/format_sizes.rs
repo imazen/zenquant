@@ -1,6 +1,6 @@
 //! Compare file sizes across PNG, GIF, WebP for all three quantizers.
 
-use zenquant::{DitherMode, OutputFormat, QuantizeConfig, RunPriority};
+use zenquant::{OutputFormat, Quality, QuantizeConfig};
 
 fn main() {
     let image_dir = "/home/lilith/work/codec-corpus/CID22/CID22-512/validation";
@@ -39,14 +39,11 @@ fn main() {
 
         eprint!("{stem}...");
 
-        // zenquant q=60 — quantize once per FORMAT for proper sort strategy
+        // zenquant balanced — quantize once per FORMAT for proper sort strategy
         let s60 = {
-            let png_cfg = QuantizeConfig::new().quality(60).dither(DitherMode::Adaptive)
-                .run_priority(RunPriority::Balanced).output_format(OutputFormat::Png);
-            let gif_cfg = QuantizeConfig::new().quality(60).dither(DitherMode::Adaptive)
-                .run_priority(RunPriority::Balanced).output_format(OutputFormat::Gif);
-            let webp_cfg = QuantizeConfig::new().quality(60).dither(DitherMode::Adaptive)
-                .run_priority(RunPriority::Balanced).output_format(OutputFormat::WebpLossless);
+            let png_cfg = QuantizeConfig::new(OutputFormat::Png).quality(Quality::Balanced);
+            let gif_cfg = QuantizeConfig::new(OutputFormat::Gif).quality(Quality::Balanced);
+            let webp_cfg = QuantizeConfig::new(OutputFormat::WebpLossless).quality(Quality::Balanced);
             let png_r = zenquant::quantize(&pixels, w, h, &png_cfg).unwrap();
             let gif_r = zenquant::quantize(&pixels, w, h, &gif_cfg).unwrap();
             let webp_r = zenquant::quantize(&pixels, w, h, &webp_cfg).unwrap();
@@ -57,14 +54,11 @@ fn main() {
             ]
         };
 
-        // zenquant q=85
+        // zenquant best
         let s85 = {
-            let png_cfg = QuantizeConfig::new().quality(85).dither(DitherMode::Adaptive)
-                .run_priority(RunPriority::Balanced).output_format(OutputFormat::Png);
-            let gif_cfg = QuantizeConfig::new().quality(85).dither(DitherMode::Adaptive)
-                .run_priority(RunPriority::Balanced).output_format(OutputFormat::Gif);
-            let webp_cfg = QuantizeConfig::new().quality(85).dither(DitherMode::Adaptive)
-                .run_priority(RunPriority::Balanced).output_format(OutputFormat::WebpLossless);
+            let png_cfg = QuantizeConfig::new(OutputFormat::Png);
+            let gif_cfg = QuantizeConfig::new(OutputFormat::Gif);
+            let webp_cfg = QuantizeConfig::new(OutputFormat::WebpLossless);
             let png_r = zenquant::quantize(&pixels, w, h, &png_cfg).unwrap();
             let gif_r = zenquant::quantize(&pixels, w, h, &gif_cfg).unwrap();
             let webp_r = zenquant::quantize(&pixels, w, h, &webp_cfg).unwrap();

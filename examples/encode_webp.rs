@@ -23,9 +23,7 @@ fn main() {
         .collect();
 
     // Quantize with WebP-optimized settings
-    let config = QuantizeConfig::new()
-        .quality(85)
-        .output_format(OutputFormat::WebpLossless);
+    let config = QuantizeConfig::new(OutputFormat::WebpLossless);
     let result = zenquant::quantize(&pixels, w, h, &config).unwrap();
 
     // Reconstruct RGBA from palette + indices for zenwebp

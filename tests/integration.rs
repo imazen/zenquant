@@ -176,7 +176,7 @@ mod gif_integration {
             return;
         }
 
-        let config = QuantizeConfig::new().output_format(OutputFormat::Gif);
+        let config = QuantizeConfig::new(OutputFormat::Gif);
 
         for path in &paths {
             let (pixels, w, h) = match load_png_rgb(path) {
@@ -212,7 +212,7 @@ mod gif_integration {
             return;
         }
 
-        let config = QuantizeConfig::new().output_format(OutputFormat::Gif);
+        let config = QuantizeConfig::new(OutputFormat::Gif);
 
         for path in &paths {
             let (pixels, w, h) = match load_png_rgb(path) {
@@ -304,7 +304,7 @@ mod png_integration {
             return;
         }
 
-        let config = QuantizeConfig::new().output_format(OutputFormat::Png);
+        let config = QuantizeConfig::new(OutputFormat::Png);
 
         for path in &paths {
             let (pixels, w, h) = match load_png_rgb(path) {
@@ -346,7 +346,7 @@ mod png_integration {
             return;
         }
 
-        let config = QuantizeConfig::new().output_format(OutputFormat::Png);
+        let config = QuantizeConfig::new(OutputFormat::Png);
 
         for path in &paths {
             let (pixels, w, h) = match load_png_rgb(path) {
@@ -424,7 +424,7 @@ mod png_integration {
                 }
             }
 
-            let config = QuantizeConfig::new().output_format(OutputFormat::Png);
+            let config = QuantizeConfig::new(OutputFormat::Png);
             let result = zenquant::quantize_rgba(&pixels, w as usize, h as usize, &config).unwrap();
 
             let alpha_table = result.alpha_table();
@@ -453,7 +453,7 @@ mod png_integration {
         }
 
         // Test with real pngsuite RGBA images
-        let config = QuantizeConfig::new().output_format(OutputFormat::Png);
+        let config = QuantizeConfig::new(OutputFormat::Png);
         for path in &test_paths {
             let (pixels, w, h) = match load_png_rgba(path) {
                 Some(v) => v,
@@ -511,7 +511,7 @@ mod webp_integration {
             return;
         }
 
-        let config = QuantizeConfig::new().output_format(OutputFormat::WebpLossless);
+        let config = QuantizeConfig::new(OutputFormat::WebpLossless);
 
         for path in &paths {
             let (pixels, w, h) = match load_png_rgb(path) {
@@ -553,7 +553,7 @@ mod webp_integration {
             return;
         }
 
-        let config = QuantizeConfig::new().output_format(OutputFormat::WebpLossless);
+        let config = QuantizeConfig::new(OutputFormat::WebpLossless);
 
         for path in &paths {
             let (pixels, w, h) = match load_png_rgb(path) {
@@ -595,7 +595,7 @@ mod webp_integration {
             return;
         }
 
-        let config = QuantizeConfig::new().output_format(OutputFormat::WebpLossless);
+        let config = QuantizeConfig::new(OutputFormat::WebpLossless);
         let lossless_config = zenwebp::LosslessConfig::new();
 
         for path in &paths {
@@ -664,7 +664,6 @@ mod cross_format {
         }
 
         let formats = [
-            ("Generic", OutputFormat::Generic),
             ("Gif", OutputFormat::Gif),
             ("Png", OutputFormat::Png),
             ("WebpLossless", OutputFormat::WebpLossless),
@@ -684,7 +683,7 @@ mod cross_format {
             );
 
             for &(fmt_name, fmt) in &formats {
-                let config = QuantizeConfig::new().output_format(fmt);
+                let config = QuantizeConfig::new(fmt);
                 let result = zenquant::quantize(&pixels, w as usize, h as usize, &config).unwrap();
                 let deflate = deflate_size(result.indices());
                 let avg_run = zenquant::_internals::average_run_length(result.indices());

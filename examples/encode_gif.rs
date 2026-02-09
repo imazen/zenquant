@@ -24,9 +24,7 @@ fn main() {
         .collect();
 
     // Quantize with GIF-optimized settings (binary transparency, LZW sort)
-    let config = QuantizeConfig::new()
-        .quality(85)
-        .output_format(OutputFormat::Gif);
+    let config = QuantizeConfig::new(OutputFormat::Gif);
     let result = zenquant::quantize_rgba(&pixels, w as usize, h as usize, &config).unwrap();
 
     // Build zengif palette and reconstructed pixels from zenquant result

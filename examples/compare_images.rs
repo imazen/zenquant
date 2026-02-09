@@ -3,8 +3,7 @@
 //! Usage:
 //!   cargo run --example compare_images --release -- [image_dir] [output_dir] [max_images]
 
-use std::path::Path;
-use zenquant::{DitherMode, QuantizeConfig, RunPriority};
+use zenquant::{OutputFormat, Quality, QuantizeConfig};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -57,19 +56,13 @@ fn main() {
 
         eprintln!("Processing {stem} ({w}x{h})...");
 
-        // zenquant q=60 (balanced)
-        let config60 = QuantizeConfig::new()
-            .quality(60)
-            .dither(DitherMode::Adaptive)
-            .run_priority(RunPriority::Balanced);
-        let zq60 = zenquant::quantize(&pixels, w, h, &config60).unwrap();
+        // zenquant balanced
+        let config_bal = QuantizeConfig::new(OutputFormat::Png).quality(Quality::Balanced);
+        let zq60 = zenquant::quantize(&pixels, w, h, &config_bal).unwrap();
 
-        // zenquant q=85 (quality)
-        let config85 = QuantizeConfig::new()
-            .quality(85)
-            .dither(DitherMode::Adaptive)
-            .run_priority(RunPriority::Balanced);
-        let zq85 = zenquant::quantize(&pixels, w, h, &config85).unwrap();
+        // zenquant best quality
+        let config_best = QuantizeConfig::new(OutputFormat::Png);
+        let zq85 = zenquant::quantize(&pixels, w, h, &config_best).unwrap();
 
         // imagequant
         let (iq_pal, iq_idx) = run_imagequant(&pixels, w, h);

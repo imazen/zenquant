@@ -4,7 +4,7 @@
 //!   cargo run --example time_only --release -- [image_dir] [max_images]
 
 use std::time::Instant;
-use zenquant::{DitherMode, QuantizeConfig, RunPriority};
+use zenquant::{OutputFormat, Quality, QuantizeConfig};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -48,27 +48,9 @@ fn main() {
         .collect();
 
     let configs = [
-        (
-            "q=30",
-            QuantizeConfig::new()
-                .quality(30)
-                .dither(DitherMode::Adaptive)
-                .run_priority(RunPriority::Balanced),
-        ),
-        (
-            "q=60",
-            QuantizeConfig::new()
-                .quality(60)
-                .dither(DitherMode::Adaptive)
-                .run_priority(RunPriority::Balanced),
-        ),
-        (
-            "q=85",
-            QuantizeConfig::new()
-                .quality(85)
-                .dither(DitherMode::Adaptive)
-                .run_priority(RunPriority::Balanced),
-        ),
+        ("fast", QuantizeConfig::new(OutputFormat::Png).quality(Quality::Fast)),
+        ("balanced", QuantizeConfig::new(OutputFormat::Png).quality(Quality::Balanced)),
+        ("best", QuantizeConfig::new(OutputFormat::Png)),
     ];
 
     println!("{:<8} {:>8}", "Preset", "avg_ms");

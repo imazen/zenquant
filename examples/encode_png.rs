@@ -22,9 +22,7 @@ fn main() {
         .collect();
 
     // Quantize with PNG-optimized settings
-    let config = QuantizeConfig::new()
-        .quality(85)
-        .output_format(OutputFormat::Png);
+    let config = QuantizeConfig::new(OutputFormat::Png);
     let result = zenquant::quantize(&pixels, w, h, &config).unwrap();
 
     // Write indexed PNG
