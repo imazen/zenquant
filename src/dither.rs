@@ -2,7 +2,7 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::oklab::{OKLab, srgb_to_oklab};
+use crate::oklab::{OKLab, oklab_to_srgb, srgb_to_oklab};
 use crate::palette::Palette;
 use crate::remap::RunPriority;
 
@@ -190,11 +190,16 @@ pub fn dither_image(
             let idx = y * width + x;
             let current = OKLab::new(lab_buf[idx][0], lab_buf[idx][1], lab_buf[idx][2]);
 
-            // Find nearest palette entry to the error-adjusted pixel
+            // Find nearest palette entry to the error-adjusted pixel.
+            // Two-seed search: seed1 from original pixel, seed2 from error-adjusted
+            // pixel converted back to sRGB. This catches palette boundary crossings
+            // where the error-adjusted color is in a different cache cell.
             let p = pixels[idx];
             let orig_lab = srgb_to_oklab(p.r, p.g, p.b);
             let seed = palette.nearest_cached(p.r, p.g, p.b);
-            let dithered_best = palette.nearest_seeded(current, seed);
+            let (adj_r, adj_g, adj_b) = oklab_to_srgb(current);
+            let seed2 = palette.nearest_cached(adj_r, adj_g, adj_b);
+            let dithered_best = palette.nearest_seeded_2(current, seed, seed2);
 
             // Undithered fallback (high dither only): if error diffusion
             // pushed us to a palette entry much farther from the *original*
@@ -397,7 +402,9 @@ pub fn dither_image_rgba(
             let p = pixels[idx];
             let orig_lab = srgb_to_oklab(p.r, p.g, p.b);
             let seed = palette.nearest_cached(p.r, p.g, p.b);
-            let dithered_best = palette.nearest_seeded(current, seed);
+            let (adj_r, adj_g, adj_b) = oklab_to_srgb(current);
+            let seed2 = palette.nearest_cached(adj_r, adj_g, adj_b);
+            let dithered_best = palette.nearest_seeded_2(current, seed, seed2);
 
             let best = if high_dither {
                 let undithered_best = palette.nearest_seeded(orig_lab, seed);

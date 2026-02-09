@@ -269,6 +269,53 @@ impl Palette {
         best_idx as u8
     }
 
+    /// Find nearest palette entry using two seeds + neighbor refinement.
+    /// Checks neighbors of both seeds, deduplicating overlaps.
+    /// Use when the error-adjusted pixel may have crossed a palette boundary
+    /// relative to the original pixel's cache cell.
+    #[inline]
+    pub fn nearest_seeded_2(&self, color: OKLab, seed1: u8, seed2: u8) -> u8 {
+        // Start with seed1
+        let s1 = seed1 as usize;
+        let mut best_idx = s1;
+        let mut best_dist = color.distance_sq(self.entries_oklab[s1]);
+
+        // Check seed1's neighbors
+        let count1 = self.neighbor_counts[s1] as usize;
+        let nbrs1 = &self.neighbors[s1];
+        for &nbr in &nbrs1[..count1] {
+            let ni = nbr as usize;
+            let d = color.distance_sq(self.entries_oklab[ni]);
+            if d < best_dist {
+                best_dist = d;
+                best_idx = ni;
+            }
+        }
+
+        // If seeds differ, also check seed2 and its neighbors
+        if seed2 != seed1 {
+            let s2 = seed2 as usize;
+            let d = color.distance_sq(self.entries_oklab[s2]);
+            if d < best_dist {
+                best_dist = d;
+                best_idx = s2;
+            }
+
+            let count2 = self.neighbor_counts[s2] as usize;
+            let nbrs2 = &self.neighbors[s2];
+            for &nbr in &nbrs2[..count2] {
+                let ni = nbr as usize;
+                let d = color.distance_sq(self.entries_oklab[ni]);
+                if d < best_dist {
+                    best_dist = d;
+                    best_idx = ni;
+                }
+            }
+        }
+
+        best_idx as u8
+    }
+
     /// Compute K=16 nearest neighbors for each palette entry.
     fn compute_neighbors(entries: &[OKLab]) -> (Vec<[u8; 16]>, Vec<u8>) {
         let n = entries.len();
