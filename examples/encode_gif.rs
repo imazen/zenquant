@@ -1,10 +1,10 @@
 //! Quantize an image and encode it as a GIF using zengif.
 //!
-//! Requires the `zengif-backend` feature:
-//!   cargo run --example encode_gif --release --features zengif-backend -- <input.png> [output.gif]
+//! Usage:
+//!   cargo run --example encode_gif --release -- <input.png> [output.gif]
 
 use enough::Unstoppable;
-use zenquant::zengif_backend;
+use zenquant::{OutputFormat, QuantizeConfig};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -17,15 +17,39 @@ fn main() {
     // Load image as RGBA (GIF needs transparency info)
     let img = image::open(input).unwrap().to_rgba8();
     let (w, h) = (img.width() as u16, img.height() as u16);
-    let pixels: Vec<zengif::Rgba> = img
+
+    let pixels: Vec<rgb::RGBA<u8>> = img
         .pixels()
-        .map(|p| zengif::Rgba { r: p.0[0], g: p.0[1], b: p.0[2], a: p.0[3] })
+        .map(|p| rgb::RGBA { r: p.0[0], g: p.0[1], b: p.0[2], a: p.0[3] })
         .collect();
 
     // Quantize with GIF-optimized settings (binary transparency, LZW sort)
-    let frame = zengif_backend::quantize_frame(&pixels, w, h, 85, 0.35).unwrap();
+    let config = QuantizeConfig::new()
+        .quality(85)
+        .output_format(OutputFormat::Gif);
+    let result = zenquant::quantize_rgba(&pixels, w as usize, h as usize, &config).unwrap();
 
-    // Encode with zengif
+    // Build zengif palette and reconstructed pixels from zenquant result
+    let palette_flat: Vec<u8> = result.palette().iter().flat_map(|c| c.iter().copied()).collect();
+    let gif_palette = zengif::Palette::from_rgb_bytes(&palette_flat);
+
+    let transparent_idx = result.transparent_index();
+    let reconstructed: Vec<zengif::Rgba> = result
+        .indices()
+        .iter()
+        .map(|&idx| {
+            if Some(idx) == transparent_idx {
+                zengif::Rgba::TRANSPARENT
+            } else {
+                let c = result.palette()[idx as usize];
+                zengif::Rgba { r: c[0], g: c[1], b: c[2], a: 255 }
+            }
+        })
+        .collect();
+
+    let frame = zengif::FrameInput::with_palette(w, h, 0, reconstructed, gif_palette);
+
+    // Encode with zengif (quantizer config is ignored since we provide a palette)
     let config = zengif::EncoderConfig::new().quantizer(zengif::Quantizer::quantizr());
     let gif_data = zengif::encode_gif(
         vec![frame],
