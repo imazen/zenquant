@@ -33,6 +33,9 @@ zenwebp = { path = "../zenwebp", default-features = false, features = ["std", "p
 enough = "0.3"
 imgref = "1"
 codec-corpus = "1"
+color_quant = "1"
+exoquant = "0.2"
+gif = { version = "0.14", default-features = false, features = ["std"] }
 
 [features]
 default = ["std"]
@@ -53,3 +56,6 @@ required-features = ["_dev"]
 
 [[example]]
 name = "compare_paths"
+
+[[example]]
+name = "quantizer_comparison"
