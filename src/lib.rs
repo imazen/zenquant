@@ -80,7 +80,7 @@ use alloc::vec::Vec;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Quality {
-    /// Fast mode — no masking or k-means refinement. Roughly 30ms per 512x512 image.
+    /// Fast mode — no masking, 1 k-means iteration. Roughly 30ms per 512x512 image.
     Fast,
     /// Balanced — AQ masking + 2 k-means iterations + greedy run extension.
     Balanced,
@@ -428,14 +428,14 @@ pub fn quantize(
     }
 
     // Pipeline tiers based on quality:
-    //   Fast:     no masking, no k-means, no Viterbi
+    //   Fast:     no masking, 1 k-means iter, no Viterbi
     //   Balanced: masking + light k-means (2 iters) + run extension
     //   Best:     masking + full k-means (8 iters) + Viterbi DP
     let use_masking = matches!(config.quality, Quality::Balanced | Quality::Best);
     let kmeans_iters: usize = match config.quality {
         Quality::Best => 8,
         Quality::Balanced => 2,
-        Quality::Fast => 0,
+        Quality::Fast => 1,
     };
 
     // 1. Compute AQ masking weights (skip for fast mode — uniform weights)
@@ -602,7 +602,7 @@ pub fn quantize_rgba(
     let kmeans_iters: usize = match config.quality {
         Quality::Best => 8,
         Quality::Balanced => 2,
-        Quality::Fast => 0,
+        Quality::Fast => 1,
     };
     let weights = if use_masking {
         masking::compute_masking_weights_rgba(pixels, width, height)
@@ -851,7 +851,7 @@ pub fn build_palette(
     let kmeans_iters: usize = match config.quality {
         Quality::Best => 8,
         Quality::Balanced => 2,
-        Quality::Fast => 0,
+        Quality::Fast => 1,
     };
 
     // Build merged histogram from all frames
@@ -997,7 +997,7 @@ pub fn build_palette_rgba(
     let kmeans_iters: usize = match config.quality {
         Quality::Best => 8,
         Quality::Balanced => 2,
-        Quality::Fast => 0,
+        Quality::Fast => 1,
     };
 
     let mut all_pixels: Vec<rgb::RGBA<u8>> = Vec::new();
