@@ -185,6 +185,10 @@ impl QuantizeConfig {
     }
 
     /// Maximum palette colors (2–256). Default: 256.
+    ///
+    /// GIF, PNG, and WebP lossless all support up to 256 palette entries.
+    /// JPEG XL modular supports larger palettes, but indices are stored as
+    /// `u8` so 256 is the current ceiling.
     pub fn max_colors(mut self, n: u32) -> Self {
         self.max_colors = n;
         self
@@ -826,6 +830,23 @@ pub fn build_palette(
 
     let tuning = QuantizeTuning::from_config(config);
     let max_colors = config.max_colors as usize;
+
+    // Fast path: all frames combined have ≤max_colors unique colors
+    let all_exact = detect_exact_palette_multi_rgb(frames, max_colors);
+    if let Some(exact_colors) = all_exact {
+        let centroids: Vec<oklab::OKLab> = exact_colors
+            .iter()
+            .map(|c| oklab::srgb_to_oklab(c.r, c.g, c.b))
+            .collect();
+        let mut pal =
+            palette::Palette::from_centroids_sorted(centroids, false, tuning.sort_strategy);
+        pal.build_nn_cache();
+        return Ok(QuantizeResult {
+            palette: pal,
+            indices: Vec::new(),
+        });
+    }
+
     let use_masking = config.quality >= 50;
     let kmeans_iters: usize = if config.quality >= 75 {
         8
@@ -867,15 +888,23 @@ pub fn build_palette(
     if kmeans_iters > 0 {
         let total = all_pixels.len();
         if total <= 500_000 {
-            centroids =
-                median_cut::refine_against_pixels(centroids, &all_pixels, &all_weights, kmeans_iters);
+            centroids = median_cut::refine_against_pixels(
+                centroids,
+                &all_pixels,
+                &all_weights,
+                kmeans_iters,
+            );
         } else {
             // Subsample uniformly across all frames
             let step = (total / 250_000).max(1);
             let sub_pixels: Vec<rgb::RGB<u8>> = all_pixels.iter().step_by(step).copied().collect();
             let sub_weights: Vec<f32> = all_weights.iter().step_by(step).copied().collect();
-            centroids =
-                median_cut::refine_against_pixels(centroids, &sub_pixels, &sub_weights, kmeans_iters);
+            centroids = median_cut::refine_against_pixels(
+                centroids,
+                &sub_pixels,
+                &sub_weights,
+                kmeans_iters,
+            );
         }
     }
 
@@ -935,6 +964,40 @@ pub fn build_palette_rgba(
 
     let tuning = QuantizeTuning::from_config(config);
     let max_colors = config.max_colors as usize;
+
+    // Fast path: all frames combined have ≤max_colors unique colors
+    let all_exact = detect_exact_palette_multi_rgba(frames, max_colors);
+    if let Some((exact_colors, has_transparent)) = all_exact {
+        if tuning.alpha_mode == AlphaMode::Full {
+            let centroids: Vec<oklab::OKLabA> = exact_colors
+                .iter()
+                .map(|c| oklab::srgb_to_oklab(c.r, c.g, c.b).with_alpha(c.a as f32 / 255.0))
+                .collect();
+            let mut pal =
+                palette::Palette::from_centroids_alpha(centroids, false, tuning.sort_strategy);
+            pal.build_nn_cache();
+            return Ok(QuantizeResult {
+                palette: pal,
+                indices: Vec::new(),
+            });
+        } else {
+            let centroids: Vec<oklab::OKLab> = exact_colors
+                .iter()
+                .map(|c| oklab::srgb_to_oklab(c.r, c.g, c.b))
+                .collect();
+            let mut pal = palette::Palette::from_centroids_sorted(
+                centroids,
+                has_transparent,
+                tuning.sort_strategy,
+            );
+            pal.build_nn_cache();
+            return Ok(QuantizeResult {
+                palette: pal,
+                indices: Vec::new(),
+            });
+        }
+    }
+
     let use_masking = config.quality >= 50;
     let kmeans_iters: usize = if config.quality >= 75 {
         8
@@ -1073,6 +1136,12 @@ fn remap_rgb_impl(
     }
 
     let tuning = QuantizeTuning::from_config(config);
+
+    let mut pal = source_palette.clone();
+    if !pal.has_nn_cache() {
+        pal.build_nn_cache();
+    }
+
     let use_masking = config.quality >= 50;
     let use_viterbi = config.quality >= 75;
 
@@ -1081,11 +1150,6 @@ fn remap_rgb_impl(
     } else {
         vec![1.0f32; pixels.len()]
     };
-
-    let mut pal = source_palette.clone();
-    if !pal.has_nn_cache() {
-        pal.build_nn_cache();
-    }
 
     let mut indices = dither::dither_image(
         pixels,
@@ -1144,6 +1208,12 @@ fn remap_rgba_impl(
     }
 
     let tuning = QuantizeTuning::from_config(config);
+
+    let mut pal = source_palette.clone();
+    if !pal.has_nn_cache() {
+        pal.build_nn_cache();
+    }
+
     let use_masking = config.quality >= 50;
     let use_viterbi = config.quality >= 75;
 
@@ -1152,11 +1222,6 @@ fn remap_rgba_impl(
     } else {
         vec![1.0f32; pixels.len()]
     };
-
-    let mut pal = source_palette.clone();
-    if !pal.has_nn_cache() {
-        pal.build_nn_cache();
-    }
 
     // Detect alpha mode from the palette: if any entry has alpha between 1-254,
     // the palette was built with full alpha quantization.
@@ -1268,6 +1333,65 @@ fn subsample_pixels_rgba(
     }
 
     (sub_pixels, sub_weights)
+}
+
+/// Detect if all RGB frames combined have ≤max_colors unique colors.
+fn detect_exact_palette_multi_rgb(
+    frames: &[ImgRef<'_, rgb::RGB<u8>>],
+    max_colors: usize,
+) -> Option<Vec<rgb::RGB<u8>>> {
+    let mut seen = alloc::collections::BTreeSet::new();
+    for frame in frames {
+        for p in frame.pixels() {
+            let key = (p.r as u32) << 16 | (p.g as u32) << 8 | p.b as u32;
+            seen.insert(key);
+            if seen.len() > max_colors {
+                return None;
+            }
+        }
+    }
+    Some(
+        seen.into_iter()
+            .map(|k| rgb::RGB {
+                r: (k >> 16) as u8,
+                g: (k >> 8) as u8,
+                b: k as u8,
+            })
+            .collect(),
+    )
+}
+
+/// Detect if all RGBA frames combined have ≤max_colors unique opaque colors.
+/// Returns the palette and whether any fully-transparent pixels exist.
+fn detect_exact_palette_multi_rgba(
+    frames: &[ImgRef<'_, rgb::RGBA<u8>>],
+    max_colors: usize,
+) -> Option<(Vec<rgb::RGBA<u8>>, bool)> {
+    let mut seen = alloc::collections::BTreeSet::new();
+    let mut has_transparent = false;
+    for frame in frames {
+        for p in frame.pixels() {
+            if p.a == 0 {
+                has_transparent = true;
+                continue;
+            }
+            let key = (p.r as u32) << 24 | (p.g as u32) << 16 | (p.b as u32) << 8 | p.a as u32;
+            seen.insert(key);
+            if seen.len() > max_colors {
+                return None;
+            }
+        }
+    }
+    let colors = seen
+        .into_iter()
+        .map(|k| rgb::RGBA {
+            r: (k >> 24) as u8,
+            g: (k >> 16) as u8,
+            b: (k >> 8) as u8,
+            a: k as u8,
+        })
+        .collect();
+    Some((colors, has_transparent))
 }
 
 fn validate_inputs(

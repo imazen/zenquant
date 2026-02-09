@@ -42,3 +42,6 @@ required-features = ["_dev"]
 [[example]]
 name = "hist_debug"
 required-features = ["_dev"]
+
+[[example]]
+name = "compare_paths"

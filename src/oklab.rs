@@ -22,6 +22,11 @@ impl OKLab {
         let db = self.b - other.b;
         dl * dl + da * da + db * db
     }
+
+    /// Pair with an alpha value to create an OKLabA.
+    pub const fn with_alpha(self, alpha: f32) -> OKLabA {
+        OKLabA { lab: self, alpha }
+    }
 }
 
 /// OKLab color with alpha channel for RGBA quantization.
