@@ -15,31 +15,38 @@ use butteraugli::ButteraugliParams;
 use fast_ssim2::compute_ssimulacra2;
 use imgref::ImgVec;
 use rgb::RGB8;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use zenquant::{OutputFormat, QuantizeConfig};
+use zenquant::{OutputFormat, Quality, QuantizeConfig};
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 const QUANTIZER_NAMES: &[&str] = &[
-    "zenquant",
-    "imagequant",
+    "zq-fast",
+    "zq-balanced",
+    "zq-best",
+    "iq-s1-d50",
+    "iq-s4-d100",
+    "iq-s1-d100",
     "quantizr",
     "color_quant",
     "exoquant",
 ];
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct ImageResult {
     name: String,
+    group: String,
     width: usize,
     height: usize,
     quantizers: Vec<QuantizerResult>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct QuantizerResult {
     name: String,
     butteraugli: f64,
@@ -47,13 +54,12 @@ struct QuantizerResult {
     dssim: f64,
     png_bytes: usize,
     gif_bytes: usize,
-    webp_bytes: usize,
     time_ms: f64,
     note: &'static str,
 }
 
 struct ReportData {
-    corpus: String,
+    label: String,
     images: Vec<ImageResult>,
 }
 
@@ -61,254 +67,222 @@ struct ReportData {
 // Main
 // ---------------------------------------------------------------------------
 
+fn resolve_corpus(name: &str) -> &'static str {
+    match name {
+        "cid22" => "CID22/CID22-512/training",
+        "clic2025" => "clic2025/final-test",
+        "gb82-sc" => "gb82-sc",
+        _ => {
+            eprintln!("Unknown corpus '{name}'. Use: cid22, clic2025, gb82-sc");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 3 {
-        eprintln!("Usage: quantizer_comparison <corpus> <output_dir> [max_images]");
-        eprintln!("  corpus: cid22, clic2025, gb82-sc");
+        eprintln!(
+            "Usage: quantizer_comparison <corpus[,corpus,...]> <output_dir> [max_images] [--recalc=name,...]"
+        );
+        eprintln!("  corpus: cid22, clic2025, gb82-sc (comma-separated for multiple)");
+        eprintln!("  --recalc=zq-best,zq-balanced  invalidate cache for specific quantizers");
+        eprintln!("  --recalc=all                   ignore all cached results");
         std::process::exit(1);
     }
 
-    let corpus_name = &args[1];
+    let corpus_arg = &args[1];
     let output_dir = PathBuf::from(&args[2]);
     let max_images: usize = args
         .get(3)
         .and_then(|s| s.parse().ok())
         .unwrap_or(usize::MAX);
 
-    let corpus_path = match corpus_name.as_str() {
-        "cid22" => "CID22/CID22-512/training",
-        "clic2025" => "clic2025/final-test",
-        "gb82-sc" => "gb82-sc",
-        other => {
-            eprintln!("Unknown corpus '{other}'. Use: cid22, clic2025, gb82-sc");
-            std::process::exit(1);
-        }
-    };
+    // Parse --recalc flag from any position
+    let recalc: Vec<String> = args
+        .iter()
+        .filter_map(|a| a.strip_prefix("--recalc="))
+        .flat_map(|v| v.split(',').map(|s| s.to_string()))
+        .collect();
+    let recalc_all = recalc.iter().any(|s| s == "all");
 
-    // Download corpus via codec-corpus
-    eprintln!("Fetching corpus '{corpus_name}' ({corpus_path})...");
-    let corpus = codec_corpus::Corpus::new().expect("failed to init codec-corpus");
-    let image_dir = corpus.get(corpus_path).expect("failed to download corpus");
-
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(&image_dir)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", image_dir.display()))
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| {
-            p.extension()
-                .is_some_and(|ext| ext == "png" || ext == "jpg" || ext == "jpeg")
-        })
+    // Parse comma-separated corpus names
+    let corpus_names: Vec<&str> = corpus_arg.split(',').collect();
+    let corpus_specs: Vec<(&str, &str)> = corpus_names
+        .iter()
+        .map(|name| (*name, resolve_corpus(name)))
         .collect();
 
-    paths.sort();
-    paths.truncate(max_images);
-
-    if paths.is_empty() {
-        eprintln!("No images found in {}", image_dir.display());
-        std::process::exit(1);
-    }
-
+    let corpus = codec_corpus::Corpus::new().expect("failed to init codec-corpus");
     std::fs::create_dir_all(&output_dir).expect("cannot create output directory");
 
-    eprintln!(
-        "Comparing {} quantizers on {} images → {}",
-        QUANTIZER_NAMES.len(),
-        paths.len(),
-        output_dir.display()
-    );
-
+    let label = corpus_names.join(", ");
     let mut report = ReportData {
-        corpus: corpus_name.clone(),
+        label: label.clone(),
         images: Vec::new(),
     };
 
-    for (i, path) in paths.iter().enumerate() {
-        let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-        eprintln!("[{}/{}] {stem}...", i + 1, paths.len());
+    // Collect all (corpus_name, path) pairs across corpora
+    let mut all_tasks: Vec<(String, PathBuf)> = Vec::new();
 
-        let img = match image::open(path) {
-            Ok(img) => img.to_rgb8(),
-            Err(e) => {
-                eprintln!("  Skipping: {e}");
-                continue;
-            }
-        };
+    for &(corpus_name, corpus_path) in &corpus_specs {
+        eprintln!("Fetching corpus '{corpus_name}' ({corpus_path})...");
+        let image_dir = corpus.get(corpus_path).expect("failed to download corpus");
 
-        let width = img.width() as usize;
-        let height = img.height() as usize;
-        let pixels: Vec<rgb::RGB<u8>> = img
-            .pixels()
-            .map(|p| rgb::RGB {
-                r: p.0[0],
-                g: p.0[1],
-                b: p.0[2],
+        let mut paths: Vec<PathBuf> = std::fs::read_dir(&image_dir)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", image_dir.display()))
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.extension()
+                    .is_some_and(|ext| ext == "png" || ext == "jpg" || ext == "jpeg")
             })
             .collect();
-        let ref_rgb: Vec<RGB8> = pixels.iter().map(|p| RGB8::new(p.r, p.g, p.b)).collect();
 
-        // Create image subdirectory
-        let img_dir = output_dir.join(&*stem);
-        std::fs::create_dir_all(&img_dir).unwrap();
+        paths.sort();
+        paths.truncate(max_images);
 
-        // Save original as truecolor PNG
-        save_truecolor_png(&img_dir.join("original.png"), &pixels, width, height);
-
-        let mut image_result = ImageResult {
-            name: stem.to_string(),
-            width,
-            height,
-            quantizers: Vec::new(),
-        };
-
-        // --- zenquant ---
-        let t0 = Instant::now();
-        let zq = zenquant::quantize(
-            &pixels,
-            width,
-            height,
-            &QuantizeConfig::new(OutputFormat::Png).max_colors(256),
-        )
-        .unwrap();
-        let zq_ms = t0.elapsed().as_secs_f64() * 1000.0;
-        let zq_pal: Vec<[u8; 3]> = zq.palette().to_vec();
-        let zq_idx: Vec<u8> = zq.indices().to_vec();
-        save_indexed_png(
-            &img_dir.join("zenquant.png"),
-            &zq_pal,
-            &zq_idx,
-            width,
-            height,
-        );
-        let zq_metrics = compute_metrics(&ref_rgb, &zq_pal, &zq_idx, width, height);
-        let zq_sizes = measure_format_sizes(&zq_pal, &zq_idx, width, height);
-        image_result.quantizers.push(QuantizerResult {
-            name: "zenquant".into(),
-            butteraugli: zq_metrics.0,
-            ssimulacra2: zq_metrics.1,
-            dssim: zq_metrics.2,
-            png_bytes: zq_sizes.0,
-            gif_bytes: zq_sizes.1,
-            webp_bytes: zq_sizes.2,
-            time_ms: zq_ms,
-            note: "",
-        });
-        eprint!("  zq:{:.1}ms", zq_ms);
-
-        // --- imagequant ---
-        let t0 = Instant::now();
-        let (iq_pal, iq_idx) = run_imagequant(&pixels, width, height);
-        let iq_ms = t0.elapsed().as_secs_f64() * 1000.0;
-        save_indexed_png(
-            &img_dir.join("imagequant.png"),
-            &iq_pal,
-            &iq_idx,
-            width,
-            height,
-        );
-        let iq_metrics = compute_metrics(&ref_rgb, &iq_pal, &iq_idx, width, height);
-        let iq_sizes = measure_format_sizes(&iq_pal, &iq_idx, width, height);
-        image_result.quantizers.push(QuantizerResult {
-            name: "imagequant".into(),
-            butteraugli: iq_metrics.0,
-            ssimulacra2: iq_metrics.1,
-            dssim: iq_metrics.2,
-            png_bytes: iq_sizes.0,
-            gif_bytes: iq_sizes.1,
-            webp_bytes: iq_sizes.2,
-            time_ms: iq_ms,
-            note: "",
-        });
-        eprint!("  iq:{:.1}ms", iq_ms);
-
-        // --- quantizr ---
-        let t0 = Instant::now();
-        let (qr_pal, qr_idx) = run_quantizr(&pixels, width, height);
-        let qr_ms = t0.elapsed().as_secs_f64() * 1000.0;
-        save_indexed_png(
-            &img_dir.join("quantizr.png"),
-            &qr_pal,
-            &qr_idx,
-            width,
-            height,
-        );
-        let qr_metrics = compute_metrics(&ref_rgb, &qr_pal, &qr_idx, width, height);
-        let qr_sizes = measure_format_sizes(&qr_pal, &qr_idx, width, height);
-        image_result.quantizers.push(QuantizerResult {
-            name: "quantizr".into(),
-            butteraugli: qr_metrics.0,
-            ssimulacra2: qr_metrics.1,
-            dssim: qr_metrics.2,
-            png_bytes: qr_sizes.0,
-            gif_bytes: qr_sizes.1,
-            webp_bytes: qr_sizes.2,
-            time_ms: qr_ms,
-            note: "",
-        });
-        eprint!("  qr:{:.1}ms", qr_ms);
-
-        // --- color_quant ---
-        let t0 = Instant::now();
-        let (cq_pal, cq_idx) = run_color_quant(&pixels, width, height);
-        let cq_ms = t0.elapsed().as_secs_f64() * 1000.0;
-        save_indexed_png(
-            &img_dir.join("color_quant.png"),
-            &cq_pal,
-            &cq_idx,
-            width,
-            height,
-        );
-        let cq_metrics = compute_metrics(&ref_rgb, &cq_pal, &cq_idx, width, height);
-        let cq_sizes = measure_format_sizes(&cq_pal, &cq_idx, width, height);
-        image_result.quantizers.push(QuantizerResult {
-            name: "color_quant".into(),
-            butteraugli: cq_metrics.0,
-            ssimulacra2: cq_metrics.1,
-            dssim: cq_metrics.2,
-            png_bytes: cq_sizes.0,
-            gif_bytes: cq_sizes.1,
-            webp_bytes: cq_sizes.2,
-            time_ms: cq_ms,
-            note: "no dithering",
-        });
-        eprint!("  cq:{:.1}ms", cq_ms);
-
-        // --- exoquant ---
-        let t0 = Instant::now();
-        let exo = run_exoquant(&pixels, width, height);
-        let exo_ms = t0.elapsed().as_secs_f64() * 1000.0;
-        match exo {
-            Some((ex_pal, ex_idx)) => {
-                save_indexed_png(
-                    &img_dir.join("exoquant.png"),
-                    &ex_pal,
-                    &ex_idx,
-                    width,
-                    height,
-                );
-                let ex_metrics = compute_metrics(&ref_rgb, &ex_pal, &ex_idx, width, height);
-                let ex_sizes = measure_format_sizes(&ex_pal, &ex_idx, width, height);
-                image_result.quantizers.push(QuantizerResult {
-                    name: "exoquant".into(),
-                    butteraugli: ex_metrics.0,
-                    ssimulacra2: ex_metrics.1,
-                    dssim: ex_metrics.2,
-                    png_bytes: ex_sizes.0,
-                    gif_bytes: ex_sizes.1,
-                    webp_bytes: ex_sizes.2,
-                    time_ms: exo_ms,
-                    note: "",
-                });
-                eprint!("  exo:{:.1}ms", exo_ms);
-            }
-            None => {
-                eprintln!("  exoquant: skipped (compilation issue?)");
-            }
+        if paths.is_empty() {
+            eprintln!("No images found in {}", image_dir.display());
+            continue;
         }
 
-        eprintln!();
-        report.images.push(image_result);
+        for path in paths {
+            all_tasks.push((corpus_name.to_string(), path));
+        }
     }
+
+    let num_threads: usize = args
+        .iter()
+        .filter_map(|a| a.strip_prefix("--threads="))
+        .next()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(8);
+
+    let total = all_tasks.len();
+    eprintln!(
+        "Processing {} images with {} quantizers, {} threads",
+        total,
+        QUANTIZER_NAMES.len(),
+        num_threads
+    );
+
+    // Process images in parallel
+    let results: Arc<Mutex<Vec<ImageResult>>> = Arc::new(Mutex::new(Vec::new()));
+
+    // Process in chunks of num_threads
+    for chunk_start in (0..total).step_by(num_threads) {
+        let chunk_end = (chunk_start + num_threads).min(total);
+        std::thread::scope(|s| {
+            for task_idx in chunk_start..chunk_end {
+                let (corpus_name, path) = &all_tasks[task_idx];
+                let results = Arc::clone(&results);
+                let output_dir = &output_dir;
+                let recalc = &recalc;
+
+                s.spawn(move || {
+                let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+
+                let img = match image::open(path) {
+                    Ok(img) => img.to_rgb8(),
+                    Err(e) => {
+                        eprintln!("[{}/{}] {stem}: skipping ({e})", task_idx + 1, total);
+                        return;
+                    }
+                };
+
+                let width = img.width() as usize;
+                let height = img.height() as usize;
+                let pixels: Vec<rgb::RGB<u8>> = img
+                    .pixels()
+                    .map(|p| rgb::RGB {
+                        r: p.0[0],
+                        g: p.0[1],
+                        b: p.0[2],
+                    })
+                    .collect();
+                let ref_rgb: Vec<RGB8> =
+                    pixels.iter().map(|p| RGB8::new(p.r, p.g, p.b)).collect();
+
+                let img_dir = output_dir.join(&*stem);
+                std::fs::create_dir_all(&img_dir).unwrap();
+                save_truecolor_png(&img_dir.join("original.png"), &pixels, width, height);
+
+                let mut image_result = ImageResult {
+                    name: stem.to_string(),
+                    group: corpus_name.clone(),
+                    width,
+                    height,
+                    quantizers: Vec::new(),
+                };
+
+                // Load cache
+                let cache_path = img_dir.join("cache.json");
+                let mut cache = load_cache(&cache_path);
+                let mut log = format!("[{}/{}] {corpus_name}/{stem}", task_idx + 1, total);
+
+                for &qname in QUANTIZER_NAMES {
+                    let should_recalc =
+                        recalc_all || recalc.iter().any(|r| r == qname);
+                    if !should_recalc {
+                        if let Some(cached) = cache.get(qname) {
+                            if img_dir.join(format!("{qname}.png")).exists() {
+                                image_result.quantizers.push(cached.clone());
+                                log.push_str(&format!("  {qname}:cached"));
+                                continue;
+                            }
+                        }
+                    }
+
+                    let t0 = Instant::now();
+                    let result = run_quantizer(qname, &pixels, width, height);
+                    let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+                    let (pal, idx, note) = match result {
+                        Some(r) => r,
+                        None => {
+                            log.push_str(&format!("  {qname}:skip"));
+                            continue;
+                        }
+                    };
+
+                    save_indexed_png(
+                        &img_dir.join(format!("{qname}.png")),
+                        &pal,
+                        &idx,
+                        width,
+                        height,
+                    );
+                    let metrics = compute_metrics(&ref_rgb, &pal, &idx, width, height);
+                    let sizes = measure_format_sizes(&pal, &idx, width, height);
+                    let qr = QuantizerResult {
+                        name: qname.into(),
+                        butteraugli: metrics.0,
+                        ssimulacra2: metrics.1,
+                        dssim: metrics.2,
+                        png_bytes: sizes.0,
+                        gif_bytes: sizes.1,
+                        time_ms: elapsed_ms,
+                        note,
+                    };
+                    cache.insert(qname.to_string(), qr.clone());
+                    image_result.quantizers.push(qr);
+                    log.push_str(&format!("  {qname}:{:.0}ms", elapsed_ms));
+                }
+
+                save_cache(&cache_path, &cache);
+                eprintln!("{log}");
+
+                results.lock().unwrap().push(image_result);
+            });
+            }
+        });
+    }
+
+    // Sort results to maintain deterministic order (by group then name)
+    let mut images = Arc::try_unwrap(results).unwrap().into_inner().unwrap();
+    images.sort_by(|a, b| a.group.cmp(&b.group).then(a.name.cmp(&b.name)));
+    report.images = images;
 
     // Generate HTML report
     let html = generate_html(&report);
@@ -321,12 +295,163 @@ fn main() {
 }
 
 // ---------------------------------------------------------------------------
+// Cache
+// ---------------------------------------------------------------------------
+
+fn load_cache(path: &Path) -> HashMap<String, QuantizerResult> {
+    let mut cache = HashMap::new();
+    let data = match std::fs::read_to_string(path) {
+        Ok(d) => d,
+        Err(_) => return cache,
+    };
+
+    // Minimal JSON parser for our cache format: { "name": { fields... }, ... }
+    // Each value is a QuantizerResult serialized as JSON object
+    for entry in data.split(r#""__entry__":"#).skip(1) {
+        // Parse: "name":"...", "butteraugli":..., etc. until "}"
+        let parse_str = |key: &str| -> Option<String> {
+            let marker = format!("\"{key}\":\"");
+            let start = entry.find(&marker)? + marker.len();
+            let end = entry[start..].find('"')? + start;
+            Some(entry[start..end].to_string())
+        };
+        let parse_f64 = |key: &str| -> Option<f64> {
+            let marker = format!("\"{key}\":");
+            let start = entry.find(&marker)? + marker.len();
+            let end = entry[start..]
+                .find(|c: char| c != '.' && c != '-' && !c.is_ascii_digit())
+                .unwrap_or(entry.len() - start)
+                + start;
+            entry[start..end].parse().ok()
+        };
+        let parse_usize = |key: &str| -> Option<usize> {
+            parse_f64(key).map(|v| v as usize)
+        };
+
+        if let (Some(name), Some(ba), Some(ss2), Some(dssim), Some(png), Some(gif), Some(ms)) = (
+            parse_str("name"),
+            parse_f64("butteraugli"),
+            parse_f64("ssimulacra2"),
+            parse_f64("dssim"),
+            parse_usize("png_bytes"),
+            parse_usize("gif_bytes"),
+            parse_f64("time_ms"),
+        ) {
+            let note_str = parse_str("note").unwrap_or_default();
+            let note: &'static str = match note_str.as_str() {
+                "no dithering" => "no dithering",
+                "spd1 q100 d0.5" => "spd1 q100 d0.5",
+                "spd4 q100 d1.0" => "spd4 q100 d1.0",
+                "spd1 q100 d1.0" => "spd1 q100 d1.0",
+                _ => "",
+            };
+            cache.insert(
+                name.clone(),
+                QuantizerResult {
+                    name,
+                    butteraugli: ba,
+                    ssimulacra2: ss2,
+                    dssim,
+                    png_bytes: png,
+                    gif_bytes: gif,
+                    time_ms: ms,
+                    note,
+                },
+            );
+        }
+    }
+    cache
+}
+
+fn save_cache(path: &Path, cache: &HashMap<String, QuantizerResult>) {
+    let mut out = String::from("{");
+    for (i, (_, q)) in cache.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(&format!(
+            r#""__entry__":1,"name":"{}","butteraugli":{:.4},"ssimulacra2":{:.2},"dssim":{:.6},"png_bytes":{},"gif_bytes":{},"time_ms":{:.1},"note":"{}""#,
+            json_escape(&q.name),
+            q.butteraugli,
+            q.ssimulacra2,
+            q.dssim,
+            q.png_bytes,
+            q.gif_bytes,
+            q.time_ms,
+            json_escape(q.note),
+        ));
+    }
+    out.push('}');
+    let _ = std::fs::write(path, out);
+}
+
+// ---------------------------------------------------------------------------
 // Quantizer wrappers
 // ---------------------------------------------------------------------------
 
-fn run_imagequant(pixels: &[rgb::RGB<u8>], width: usize, height: usize) -> (Vec<[u8; 3]>, Vec<u8>) {
+/// Dispatch to the right quantizer by name. Returns (palette, indices, note).
+fn run_quantizer(
+    name: &str,
+    pixels: &[rgb::RGB<u8>],
+    width: usize,
+    height: usize,
+) -> Option<(Vec<[u8; 3]>, Vec<u8>, &'static str)> {
+    match name {
+        "zq-fast" => {
+            let cfg = QuantizeConfig::new(OutputFormat::Png)
+                .quality(Quality::Fast)
+                .max_colors(256);
+            let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
+            Some((r.palette().to_vec(), r.indices().to_vec(), ""))
+        }
+        "zq-balanced" => {
+            let cfg = QuantizeConfig::new(OutputFormat::Png)
+                .quality(Quality::Balanced)
+                .max_colors(256);
+            let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
+            Some((r.palette().to_vec(), r.indices().to_vec(), ""))
+        }
+        "zq-best" => {
+            let cfg = QuantizeConfig::new(OutputFormat::Png).max_colors(256);
+            let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
+            Some((r.palette().to_vec(), r.indices().to_vec(), ""))
+        }
+        "iq-s1-d50" => {
+            let (p, i) = run_imagequant(pixels, width, height, 1, 100, 0.5);
+            Some((p, i, "spd1 q100 d0.5"))
+        }
+        "iq-s4-d100" => {
+            let (p, i) = run_imagequant(pixels, width, height, 4, 100, 1.0);
+            Some((p, i, "spd4 q100 d1.0"))
+        }
+        "iq-s1-d100" => {
+            let (p, i) = run_imagequant(pixels, width, height, 1, 100, 1.0);
+            Some((p, i, "spd1 q100 d1.0"))
+        }
+        "quantizr" => {
+            let (p, i) = run_quantizr(pixels, width, height);
+            Some((p, i, ""))
+        }
+        "color_quant" => {
+            let (p, i) = run_color_quant(pixels, width, height);
+            Some((p, i, "no dithering"))
+        }
+        "exoquant" => run_exoquant(pixels, width, height).map(|(p, i)| (p, i, "")),
+        _ => None,
+    }
+}
+
+fn run_imagequant(
+    pixels: &[rgb::RGB<u8>],
+    width: usize,
+    height: usize,
+    speed: i32,
+    quality: u8,
+    dither: f32,
+) -> (Vec<[u8; 3]>, Vec<u8>) {
     let mut attr = imagequant::Attributes::new();
-    attr.set_quality(0, 80).unwrap();
+    attr.set_quality(0, quality).unwrap();
+    attr.set_speed(speed).unwrap();
 
     let rgba_pixels: Vec<imagequant::RGBA> = pixels
         .iter()
@@ -335,7 +460,7 @@ fn run_imagequant(pixels: &[rgb::RGB<u8>], width: usize, height: usize) -> (Vec<
 
     let mut img = attr.new_image(rgba_pixels, width, height, 0.0).unwrap();
     let mut result = attr.quantize(&mut img).unwrap();
-    result.set_dithering_level(0.5).unwrap();
+    result.set_dithering_level(dither).unwrap();
 
     let (palette, indices) = result.remapped(&mut img).unwrap();
     let palette_rgb: Vec<[u8; 3]> = palette.iter().map(|c| [c.r, c.g, c.b]).collect();
@@ -463,17 +588,16 @@ fn compute_metrics(
 // Format encoding (for size measurement)
 // ---------------------------------------------------------------------------
 
-/// Returns (png_bytes, gif_bytes, webp_bytes)
+/// Returns (png_bytes, gif_bytes)
 fn measure_format_sizes(
     palette: &[[u8; 3]],
     indices: &[u8],
     width: usize,
     height: usize,
-) -> (usize, usize, usize) {
+) -> (usize, usize) {
     let png_bytes = encode_indexed_png_bytes(palette, indices, width, height);
     let gif_bytes = encode_gif_bytes(palette, indices, width, height);
-    let webp_bytes = encode_webp_bytes(palette, indices, width, height);
-    (png_bytes, gif_bytes, webp_bytes)
+    (png_bytes, gif_bytes)
 }
 
 fn encode_indexed_png_bytes(
@@ -506,30 +630,6 @@ fn encode_gif_bytes(palette: &[[u8; 3]], indices: &[u8], width: usize, height: u
         encoder.write_frame(&frame).unwrap();
     }
     buf.len()
-}
-
-fn encode_webp_bytes(palette: &[[u8; 3]], indices: &[u8], width: usize, height: usize) -> usize {
-    // Reconstruct RGBA from palette + indices
-    let mut rgba = Vec::with_capacity(width * height * 4);
-    for &idx in indices {
-        let c = palette[idx as usize];
-        rgba.extend_from_slice(&[c[0], c[1], c[2], 255]);
-    }
-
-    let config = zenwebp::LosslessConfig::new();
-    let result = zenwebp::EncodeRequest::lossless(
-        &config,
-        &rgba,
-        zenwebp::PixelLayout::Rgba8,
-        width as u32,
-        height as u32,
-    )
-    .encode();
-
-    match result {
-        Ok(data) => data.len(),
-        Err(_) => 0,
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -570,10 +670,10 @@ fn print_summary(report: &ReportData) {
 
     eprintln!("\n--- Summary ---");
     eprintln!(
-        "{:<14} {:>7} {:>7} {:>8} {:>8} {:>8} {:>8} {:>7}",
-        "Quantizer", "BA", "SS2", "DSSIM", "PNG", "GIF", "WebP", "ms"
+        "{:<14} {:>7} {:>7} {:>8} {:>8} {:>8} {:>7}",
+        "Quantizer", "BA", "SS2", "DSSIM", "PNG", "GIF", "ms"
     );
-    eprintln!("{}", "-".repeat(72));
+    eprintln!("{}", "-".repeat(64));
 
     // Collect per-quantizer name
     let mut all_names: Vec<String> = Vec::new();
@@ -591,7 +691,6 @@ fn print_summary(report: &ReportData) {
         let mut sum_dssim = 0.0f64;
         let mut sum_png = 0usize;
         let mut sum_gif = 0usize;
-        let mut sum_webp = 0usize;
         let mut sum_ms = 0.0f64;
         let mut count = 0u32;
 
@@ -602,7 +701,6 @@ fn print_summary(report: &ReportData) {
                 sum_dssim += q.dssim;
                 sum_png += q.png_bytes;
                 sum_gif += q.gif_bytes;
-                sum_webp += q.webp_bytes;
                 sum_ms += q.time_ms;
                 count += 1;
             }
@@ -611,14 +709,13 @@ fn print_summary(report: &ReportData) {
         if count > 0 {
             let n = count as f64;
             eprintln!(
-                "{:<14} {:>7.2} {:>7.1} {:>8.5} {:>8.0} {:>8.0} {:>8.0} {:>7.1}",
+                "{:<14} {:>7.2} {:>7.1} {:>8.5} {:>8.0} {:>8.0} {:>7.1}",
                 name,
                 sum_ba / n,
                 sum_ss2 / n,
                 sum_dssim / n,
                 sum_png as f64 / n,
                 sum_gif as f64 / n,
-                sum_webp as f64 / n,
                 sum_ms / n,
             );
         }
@@ -644,8 +741,8 @@ fn json_escape(s: &str) -> String {
 
 fn report_to_json(report: &ReportData) -> String {
     let mut out = String::with_capacity(4096);
-    out.push_str("{\"corpus\":\"");
-    out.push_str(&json_escape(&report.corpus));
+    out.push_str("{\"label\":\"");
+    out.push_str(&json_escape(&report.label));
     out.push_str("\",\"images\":[");
 
     for (i, img) in report.images.iter().enumerate() {
@@ -654,6 +751,8 @@ fn report_to_json(report: &ReportData) -> String {
         }
         out.push_str("{\"name\":\"");
         out.push_str(&json_escape(&img.name));
+        out.push_str("\",\"group\":\"");
+        out.push_str(&json_escape(&img.group));
         out.push_str("\",\"width\":");
         out.push_str(&img.width.to_string());
         out.push_str(",\"height\":");
@@ -676,8 +775,6 @@ fn report_to_json(report: &ReportData) -> String {
             out.push_str(&q.png_bytes.to_string());
             out.push_str(",\"gif_bytes\":");
             out.push_str(&q.gif_bytes.to_string());
-            out.push_str(",\"webp_bytes\":");
-            out.push_str(&q.webp_bytes.to_string());
             out.push_str(",\"time_ms\":");
             out.push_str(&format!("{:.1}", q.time_ms));
             out.push_str(",\"note\":\"");
@@ -730,6 +827,31 @@ body {
 
 .header h1 { font-size: 1.1rem; font-weight: 600; }
 .header .info { font-size: 0.8rem; color: var(--text-muted); }
+
+/* Group filter bar */
+.group-bar {
+  display: flex;
+  gap: 4px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
+  overflow-x: auto;
+}
+
+.group-bar button {
+  padding: 6px 14px;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.group-bar button:hover { background: var(--bg-hover); }
+.group-bar button.active { background: var(--primary); color: white; border-color: var(--primary); }
 
 /* Image selector strip */
 .image-nav {
@@ -1016,6 +1138,8 @@ body {
 .metrics-table td:first-child, .metrics-table th:first-child { text-align: left; }
 .metrics-table tr.active { background: rgba(59, 130, 246, 0.15); }
 .metrics-table .best { color: var(--green); font-weight: 600; }
+.metrics-table th.sorted { color: var(--primary); }
+.metrics-table th { cursor: pointer; }
 
 /* Summary section */
 .summary-toggle {
@@ -1098,6 +1222,31 @@ let sliderPct = 20; // start showing mostly the quantizer (right side)
 let isSliding = false;
 let isPanning = false;
 let panStart = { x: 0, y: 0, scrollLeft: 0, scrollTop: 0 };
+// Sort state for metrics table — persists across image changes
+// key: field name, asc: true = ascending (best first for lower-is-better)
+let metricSort = { key: null, asc: true };
+// Group filter — null means "all"
+let activeGroup = null;
+
+function getGroups() {
+  const seen = new Set();
+  const groups = [];
+  for (const img of DATA.images) {
+    if (!seen.has(img.group)) { seen.add(img.group); groups.push(img.group); }
+  }
+  return groups;
+}
+
+function getFilteredImages() {
+  if (activeGroup === null) return DATA.images;
+  return DATA.images.filter(img => img.group === activeGroup);
+}
+
+function setGroup(g) {
+  activeGroup = g;
+  currentImageIdx = 0;
+  render();
+}
 
 function getDPR() { return window.devicePixelRatio || 1; }
 function getNativeZoom() { return 1 / getDPR(); }
@@ -1138,7 +1287,8 @@ function choiceLabel(img, choiceIdx) {
 // --- Rendering ---
 
 function render() {
-  const img = DATA.images[currentImageIdx];
+  const filtered = getFilteredImages();
+  const img = filtered[currentImageIdx];
   if (!img) return;
 
   // Clamp selected indices to valid range
@@ -1146,14 +1296,17 @@ function render() {
   selected = selected.map(s => Math.min(s, numChoices - 1));
 
   // Header
-  document.getElementById('corpus-name').textContent = DATA.corpus;
-  document.getElementById('image-count').textContent = `${DATA.images.length} images`;
+  document.getElementById('corpus-name').textContent = DATA.label;
+  document.getElementById('image-count').textContent = `${filtered.length} images`;
+
+  // Group bar
+  renderGroupBar();
 
   // Image nav
-  document.getElementById('img-name').textContent = img.name;
-  document.getElementById('img-counter').textContent = `${currentImageIdx + 1} / ${DATA.images.length}`;
+  document.getElementById('img-name').textContent = `${img.group}: ${img.name}`;
+  document.getElementById('img-counter').textContent = `${currentImageIdx + 1} / ${filtered.length}`;
   document.getElementById('btn-prev').disabled = currentImageIdx === 0;
-  document.getElementById('btn-next').disabled = currentImageIdx === DATA.images.length - 1;
+  document.getElementById('btn-next').disabled = currentImageIdx === filtered.length - 1;
 
   // Viewport
   renderViewport(img);
@@ -1166,6 +1319,18 @@ function render() {
 
   // Zoom bar
   renderZoomBar();
+}
+
+function renderGroupBar() {
+  const bar = document.getElementById('group-bar');
+  const groups = getGroups();
+  if (groups.length <= 1) { bar.style.display = 'none'; return; }
+  bar.style.display = '';
+  let html = `<button class="${activeGroup === null ? 'active' : ''}" onclick="setGroup(null)">All</button>`;
+  for (const g of groups) {
+    html += `<button class="${activeGroup === g ? 'active' : ''}" onclick="setGroup('${g}')">${g}</button>`;
+  }
+  bar.innerHTML = html;
 }
 
 function renderViewport(img) {
@@ -1182,13 +1347,12 @@ function renderViewport(img) {
 
   scroll.className = 'viewport-scroll' + (scale === 'fit' ? ' zoom-fit' : ' zoom-pixel');
 
-  // Compute viewport available height — use most of the remaining space
+  // Compute viewport height — leave room for tabs, metrics, and summary below
   const headerH = document.querySelector('.header').offsetHeight;
   const navH = document.querySelector('.image-nav').offsetHeight;
-  const tabsH = document.querySelector('.choice-tabs')?.offsetHeight || 44;
-  const metricsH = 120;
-  const remaining = window.innerHeight - headerH - navH - tabsH - metricsH;
-  const viewportH = Math.max(200, remaining);
+  const belowH = 250; // tabs + metrics + summary toggle + keyboard help
+  const available = window.innerHeight - headerH - navH - belowH;
+  const viewportH = Math.max(200, Math.min(available, window.innerHeight * 0.55));
   scroll.style.height = viewportH + 'px';
 
   // Compute explicit pixel dimensions for all modes
@@ -1227,11 +1391,11 @@ function renderViewport(img) {
       <div class="diff-label">DIFF: ${leftLabel} vs ${rightLabel} (black = identical)</div>
     `;
   } else {
-    // Slider mode
-    const clipRight = 100 - sliderPct;
+    // Slider mode — left image is base, right image clips from the left
+    // so right image is visible to the RIGHT of the slider
     container.innerHTML = `
       <img class="compare-left" src="${leftSrc}" style="${styleAttr}" alt="${leftLabel}" loading="lazy">
-      <img class="compare-right" src="${rightSrc}" style="${styleAttr}clip-path:inset(0 ${clipRight}% 0 0);" alt="${rightLabel}" loading="lazy">
+      <img class="compare-right" src="${rightSrc}" style="${styleAttr}clip-path:inset(0 0 0 ${sliderPct}%);" alt="${rightLabel}" loading="lazy">
       <div class="slider-handle" style="left:${sliderPct}%;"></div>
       <div class="compare-labels">
         <span>${leftLabel}</span>
@@ -1290,40 +1454,75 @@ function renderChoiceTabs(img) {
   tabs.innerHTML = html;
 }
 
+// Column definitions for metrics table
+const METRIC_COLS = [
+  { key: 'butteraugli', label: 'BA', dir: 'asc', fmt: v => v.toFixed(2) },
+  { key: 'ssimulacra2', label: 'SS2', dir: 'desc', fmt: v => v.toFixed(1) },
+  { key: 'dssim', label: 'DSSIM', dir: 'asc', fmt: v => v.toFixed(5) },
+  { key: 'png_bytes', label: 'PNG', dir: 'asc', fmt: v => v > 0 ? (v / 1024).toFixed(1) + 'K' : '-' },
+  { key: 'gif_bytes', label: 'GIF', dir: 'asc', fmt: v => v > 0 ? (v / 1024).toFixed(1) + 'K' : '-' },
+  { key: 'time_ms', label: 'ms', dir: 'asc', fmt: v => v.toFixed(1) },
+];
+
+function sortMetrics(key) {
+  const col = METRIC_COLS.find(c => c.key === key);
+  if (!col) return;
+  if (metricSort.key === key) {
+    // Toggle direction
+    metricSort.asc = !metricSort.asc;
+  } else {
+    // New column — use its natural "best" direction
+    metricSort.key = key;
+    metricSort.asc = col.dir === 'asc';
+  }
+  render();
+}
+
 function renderMetrics(img) {
   const section = document.getElementById('metrics-section');
-
-  // Find best values (BA: lower=better, SS2: higher=better, sizes: lower=better, time: lower=better)
   const qs = img.quantizers;
-  const bestBA = Math.min(...qs.map(q => q.butteraugli));
-  const bestSS2 = Math.max(...qs.map(q => q.ssimulacra2));
-  const bestDSSIM = Math.min(...qs.map(q => q.dssim));
-  const bestPNG = Math.min(...qs.map(q => q.png_bytes));
-  const bestGIF = Math.min(...qs.map(q => q.gif_bytes));
-  const bestWebP = Math.min(...qs.filter(q => q.webp_bytes > 0).map(q => q.webp_bytes));
-  const bestTime = Math.min(...qs.map(q => q.time_ms));
 
-  // Which quantizer indices (0-based into quantizers[]) are selected?
-  // selected[] uses choice indices where 0=original, so quantizer i = choice i+1
+  // Build sorted index array (maps display row → original quantizer index)
+  const indices = qs.map((_, i) => i);
+  if (metricSort.key) {
+    const k = metricSort.key;
+    const asc = metricSort.asc;
+    indices.sort((a, b) => asc ? qs[a][k] - qs[b][k] : qs[b][k] - qs[a][k]);
+  }
+
+  // Find best values
+  const best = {};
+  for (const col of METRIC_COLS) {
+    const vals = qs.map(q => q[col.key]).filter(v => v > 0);
+    best[col.key] = col.dir === 'asc' ? Math.min(...vals) : Math.max(...vals);
+  }
+
+  // Which quantizer indices (0-based) are selected?
   const selQuantIdxs = selected.filter(s => s > 0).map(s => s - 1);
 
-  let html = `<table class="metrics-table">
-    <tr><th>Quantizer</th><th>BA ↓</th><th>SS2 ↑</th><th>DSSIM ↓</th><th>PNG</th><th>GIF</th><th>WebP</th><th>ms</th></tr>`;
+  // Header row with sortable columns
+  let html = '<table class="metrics-table"><tr><th>Quantizer</th>';
+  for (const col of METRIC_COLS) {
+    const arrow = col.dir === 'asc' ? ' \u2193' : ' \u2191';
+    const sorted = metricSort.key === col.key;
+    const sortArrow = sorted ? (metricSort.asc ? ' \u25B2' : ' \u25BC') : '';
+    const cls = sorted ? ' class="sorted"' : '';
+    html += `<th${cls} style="cursor:pointer" onclick="sortMetrics('${col.key}')">${col.label}${arrow}${sortArrow}</th>`;
+  }
+  html += '</tr>';
 
-  const fmtSize = (v) => v > 0 ? (v / 1024).toFixed(1) + 'K' : '-';
-  for (let i = 0; i < qs.length; i++) {
+  // Data rows in sort order
+  for (const i of indices) {
     const q = qs[i];
     const active = selQuantIdxs.includes(i) ? ' active' : '';
-    html += `<tr class="${active}" onclick="toggleChoice(${i + 1})" style="cursor:pointer">
-      <td>${q.name}${q.note ? ' *' : ''}</td>
-      <td class="${q.butteraugli === bestBA ? 'best' : ''}">${q.butteraugli.toFixed(2)}</td>
-      <td class="${q.ssimulacra2 === bestSS2 ? 'best' : ''}">${q.ssimulacra2.toFixed(1)}</td>
-      <td class="${q.dssim === bestDSSIM ? 'best' : ''}">${q.dssim.toFixed(5)}</td>
-      <td class="${q.png_bytes === bestPNG ? 'best' : ''}">${fmtSize(q.png_bytes)}</td>
-      <td class="${q.gif_bytes === bestGIF ? 'best' : ''}">${fmtSize(q.gif_bytes)}</td>
-      <td class="${q.webp_bytes === bestWebP ? 'best' : ''}">${fmtSize(q.webp_bytes)}</td>
-      <td class="${q.time_ms === bestTime ? 'best' : ''}">${q.time_ms.toFixed(1)}</td>
-    </tr>`;
+    html += `<tr class="${active}" onclick="toggleChoice(${i + 1})" style="cursor:pointer">`;
+    html += `<td>${q.name}${q.note ? ' *' : ''}</td>`;
+    for (const col of METRIC_COLS) {
+      const v = q[col.key];
+      const isBest = v === best[col.key] ? ' best' : '';
+      html += `<td class="${isBest}">${col.fmt(v)}</td>`;
+    }
+    html += '</tr>';
   }
   html += '</table>';
   section.innerHTML = html;
@@ -1331,16 +1530,17 @@ function renderMetrics(img) {
 
 function renderSummary() {
   const section = document.getElementById('summary-section');
-  if (DATA.images.length === 0) return;
+  const filtered = getFilteredImages();
+  if (filtered.length === 0) return;
 
   // Collect per-quantizer averages
   const names = [];
   const totals = {};
 
-  for (const img of DATA.images) {
+  for (const img of filtered) {
     for (const q of img.quantizers) {
       if (!totals[q.name]) {
-        totals[q.name] = { ba: 0, ss2: 0, dssim: 0, png: 0, gif: 0, webp: 0, ms: 0, n: 0 };
+        totals[q.name] = { ba: 0, ss2: 0, dssim: 0, png: 0, gif: 0, ms: 0, n: 0 };
         names.push(q.name);
       }
       const t = totals[q.name];
@@ -1349,7 +1549,6 @@ function renderSummary() {
       t.dssim += q.dssim;
       t.png += q.png_bytes;
       t.gif += q.gif_bytes;
-      t.webp += q.webp_bytes;
       t.ms += q.time_ms;
       t.n += 1;
     }
@@ -1364,7 +1563,6 @@ function renderSummary() {
       dssim: t.dssim / t.n,
       png: t.png / t.n,
       gif: t.gif / t.n,
-      webp: t.webp / t.n,
       ms: t.ms / t.n,
     };
   });
@@ -1374,13 +1572,12 @@ function renderSummary() {
   const bestDSSIM = Math.min(...avgs.map(a => a.dssim));
   const bestPNG = Math.min(...avgs.map(a => a.png));
   const bestGIF = Math.min(...avgs.map(a => a.gif));
-  const bestWebP = Math.min(...avgs.filter(a => a.webp > 0).map(a => a.webp));
   const bestTime = Math.min(...avgs.map(a => a.ms));
 
   const fmtSize = (v) => v > 0 ? (v / 1024).toFixed(1) + 'K' : '-';
 
   let html = `<table class="summary-table">
-    <tr><th>Quantizer</th><th>Avg BA ↓</th><th>Avg SS2 ↑</th><th>Avg DSSIM ↓</th><th>Avg PNG</th><th>Avg GIF</th><th>Avg WebP</th><th>Avg ms</th></tr>`;
+    <tr><th>Quantizer</th><th>Avg BA ↓</th><th>Avg SS2 ↑</th><th>Avg DSSIM ↓</th><th>Avg PNG</th><th>Avg GIF</th><th>Avg ms</th></tr>`;
 
   for (const a of avgs) {
     html += `<tr>
@@ -1390,7 +1587,6 @@ function renderSummary() {
       <td class="${a.dssim === bestDSSIM ? 'best' : ''}">${a.dssim.toFixed(5)}</td>
       <td class="${a.png === bestPNG ? 'best' : ''}">${fmtSize(a.png)}</td>
       <td class="${a.gif === bestGIF ? 'best' : ''}">${fmtSize(a.gif)}</td>
-      <td class="${a.webp === bestWebP ? 'best' : ''}">${fmtSize(a.webp)}</td>
       <td class="${a.ms === bestTime ? 'best' : ''}">${a.ms.toFixed(1)}</td>
     </tr>`;
   }
@@ -1404,7 +1600,8 @@ function prevImage() {
   if (currentImageIdx > 0) { currentImageIdx--; render(); }
 }
 function nextImage() {
-  if (currentImageIdx < DATA.images.length - 1) { currentImageIdx++; render(); }
+  const filtered = getFilteredImages();
+  if (currentImageIdx < filtered.length - 1) { currentImageIdx++; render(); }
 }
 
 function toggleChoice(idx) {
@@ -1489,7 +1686,7 @@ function updateSlider(clientX) {
   const handle = container.querySelector('.slider-handle');
   const right = container.querySelector('.compare-right');
   if (handle) handle.style.left = sliderPct + '%';
-  if (right) right.style.clipPath = `inset(0 ${100 - sliderPct}% 0 0)`;
+  if (right) right.style.clipPath = `inset(0 0 0 ${sliderPct}%)`;
 }
 
 document.addEventListener('mousedown', (e) => {
@@ -1559,10 +1756,12 @@ document.addEventListener('keydown', (e) => {
   switch (e.key) {
     case 'ArrowLeft': prevImage(); e.preventDefault(); break;
     case 'ArrowRight': nextImage(); e.preventDefault(); break;
-    // 0 = original, 1-5 = quantizers
-    case '0': case '1': case '2': case '3': case '4': case '5': {
+    // 0 = original, 1-9 = quantizers
+    case '0': case '1': case '2': case '3': case '4': case '5':
+    case '6': case '7': case '8': case '9': {
       const choiceIdx = parseInt(e.key);
-      const img = DATA.images[currentImageIdx];
+      const filtered = getFilteredImages();
+      const img = filtered[currentImageIdx];
       if (img && choiceIdx <= img.quantizers.length) toggleChoice(choiceIdx);
       e.preventDefault();
       break;
@@ -1586,6 +1785,8 @@ window.addEventListener('resize', () => {
   <h1>Quantizer Comparison</h1>
   <span class="info"><span id="corpus-name"></span> &mdash; <span id="image-count"></span></span>
 </div>
+
+<div class="group-bar" id="group-bar" style="display:none"></div>
 
 <div class="image-nav">
   <button id="btn-prev" onclick="prevImage()">&larr;</button>
@@ -1611,7 +1812,7 @@ window.addEventListener('resize', () => {
 <div class="kbd-help">
   <kbd>&larr;</kbd><kbd>&rarr;</kbd> prev/next image &nbsp;
   <kbd>0</kbd> original &nbsp;
-  <kbd>1</kbd>-<kbd>5</kbd> quantizers &nbsp;
+  <kbd>1</kbd>-<kbd>9</kbd> quantizers &nbsp;
   <kbd>f</kbd> fit &nbsp;
   <kbd>n</kbd> native 1:1 &nbsp;
   <kbd>d</kbd> diff
