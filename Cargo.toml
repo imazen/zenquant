@@ -41,6 +41,10 @@ _dev = []
 name = "compare"
 
 [[example]]
+name = "encode_gif"
+required-features = ["zengif-backend"]
+
+[[example]]
 name = "profile_steps"
 required-features = ["_dev"]
 
