@@ -48,8 +48,14 @@ fn main() {
         .collect();
 
     let configs = [
-        ("fast", QuantizeConfig::new(OutputFormat::Png).quality(Quality::Fast)),
-        ("balanced", QuantizeConfig::new(OutputFormat::Png).quality(Quality::Balanced)),
+        (
+            "fast",
+            QuantizeConfig::new(OutputFormat::Png).quality(Quality::Fast),
+        ),
+        (
+            "balanced",
+            QuantizeConfig::new(OutputFormat::Png).quality(Quality::Balanced),
+        ),
         ("best", QuantizeConfig::new(OutputFormat::Png)),
     ];
 

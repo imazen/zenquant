@@ -15,10 +15,7 @@ fn main() {
         .get(2)
         .map(|s| s.as_str())
         .unwrap_or("/mnt/v/output/zenquant/compare");
-    let max_images: usize = args
-        .get(3)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(5);
+    let max_images: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(5);
 
     let mut paths: Vec<std::path::PathBuf> = std::fs::read_dir(image_dir)
         .unwrap_or_else(|e| panic!("cannot read {image_dir}: {e}"))
@@ -71,18 +68,8 @@ fn main() {
         let (qr_pal, qr_idx) = run_quantizr(&pixels, w, h);
 
         // Save individual quantized PNGs
-        save_quantized(
-            &zq60,
-            w,
-            h,
-            &format!("{output_dir}/{stem}_zq60.png"),
-        );
-        save_quantized(
-            &zq85,
-            w,
-            h,
-            &format!("{output_dir}/{stem}_zq85.png"),
-        );
+        save_quantized(&zq60, w, h, &format!("{output_dir}/{stem}_zq60.png"));
+        save_quantized(&zq85, w, h, &format!("{output_dir}/{stem}_zq85.png"));
         save_indexed(
             &iq_pal,
             &iq_idx,
@@ -129,19 +116,27 @@ fn main() {
         // Label each image individually
         let _ = std::process::Command::new("montage")
             .args([
-                "-label", "Original",
+                "-label",
+                "Original",
                 &format!("{output_dir}/{stem}_orig.png"),
-                "-label", "zq q=60 (62ms)",
+                "-label",
+                "zq q=60 (62ms)",
                 &format!("{output_dir}/{stem}_zq60.png"),
-                "-label", "zq q=85 (125ms)",
+                "-label",
+                "zq q=85 (125ms)",
                 &format!("{output_dir}/{stem}_zq85.png"),
-                "-label", "imagequant (42ms)",
+                "-label",
+                "imagequant (42ms)",
                 &format!("{output_dir}/{stem}_iq.png"),
-                "-label", "quantizr (30ms)",
+                "-label",
+                "quantizr (30ms)",
                 &format!("{output_dir}/{stem}_qr.png"),
-                "-tile", "5x1",
-                "-geometry", "+4+4",
-                "-pointsize", "14",
+                "-tile",
+                "5x1",
+                "-geometry",
+                "+4+4",
+                "-pointsize",
+                "14",
                 &montage_path,
             ])
             .status();

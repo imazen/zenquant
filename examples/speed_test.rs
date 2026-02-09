@@ -62,8 +62,14 @@ fn main() {
 
     // Presets to test
     let presets: Vec<(&str, QuantizeConfig)> = vec![
-        ("zq fast", QuantizeConfig::new(OutputFormat::Png).quality(Quality::Fast)),
-        ("zq balanced", QuantizeConfig::new(OutputFormat::Png).quality(Quality::Balanced)),
+        (
+            "zq fast",
+            QuantizeConfig::new(OutputFormat::Png).quality(Quality::Fast),
+        ),
+        (
+            "zq balanced",
+            QuantizeConfig::new(OutputFormat::Png).quality(Quality::Balanced),
+        ),
         ("zq best", QuantizeConfig::new(OutputFormat::Png)),
     ];
 

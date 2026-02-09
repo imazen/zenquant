@@ -8,7 +8,9 @@ use zenquant::{OutputFormat, QuantizeConfig};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let input = args.get(1).expect("usage: encode_gif <input.png> [output.gif]");
+    let input = args
+        .get(1)
+        .expect("usage: encode_gif <input.png> [output.gif]");
     let output = args
         .get(2)
         .cloned()
@@ -20,7 +22,12 @@ fn main() {
 
     let pixels: Vec<rgb::RGBA<u8>> = img
         .pixels()
-        .map(|p| rgb::RGBA { r: p.0[0], g: p.0[1], b: p.0[2], a: p.0[3] })
+        .map(|p| rgb::RGBA {
+            r: p.0[0],
+            g: p.0[1],
+            b: p.0[2],
+            a: p.0[3],
+        })
         .collect();
 
     // Quantize with GIF-optimized settings (binary transparency, LZW sort)
@@ -28,7 +35,11 @@ fn main() {
     let result = zenquant::quantize_rgba(&pixels, w as usize, h as usize, &config).unwrap();
 
     // Build zengif palette and reconstructed pixels from zenquant result
-    let palette_flat: Vec<u8> = result.palette().iter().flat_map(|c| c.iter().copied()).collect();
+    let palette_flat: Vec<u8> = result
+        .palette()
+        .iter()
+        .flat_map(|c| c.iter().copied())
+        .collect();
     let gif_palette = zengif::Palette::from_rgb_bytes(&palette_flat);
 
     let transparent_idx = result.transparent_index();
@@ -40,7 +51,12 @@ fn main() {
                 zengif::Rgba::TRANSPARENT
             } else {
                 let c = result.palette()[idx as usize];
-                zengif::Rgba { r: c[0], g: c[1], b: c[2], a: 255 }
+                zengif::Rgba {
+                    r: c[0],
+                    g: c[1],
+                    b: c[2],
+                    a: 255,
+                }
             }
         })
         .collect();

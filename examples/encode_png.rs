@@ -7,7 +7,9 @@ use zenquant::{OutputFormat, QuantizeConfig};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let input = args.get(1).expect("usage: encode_png <input.png> [output.png]");
+    let input = args
+        .get(1)
+        .expect("usage: encode_png <input.png> [output.png]");
     let output = args
         .get(2)
         .cloned()
@@ -18,7 +20,11 @@ fn main() {
     let (w, h) = (img.width() as usize, img.height() as usize);
     let pixels: Vec<rgb::RGB<u8>> = img
         .pixels()
-        .map(|p| rgb::RGB { r: p.0[0], g: p.0[1], b: p.0[2] })
+        .map(|p| rgb::RGB {
+            r: p.0[0],
+            g: p.0[1],
+            b: p.0[2],
+        })
         .collect();
 
     // Quantize with PNG-optimized settings
@@ -33,7 +39,11 @@ fn main() {
     encoder.set_depth(png::BitDepth::Eight);
 
     // Flatten palette to [R, G, B, R, G, B, ...]
-    let palette_flat: Vec<u8> = result.palette().iter().flat_map(|c| c.iter().copied()).collect();
+    let palette_flat: Vec<u8> = result
+        .palette()
+        .iter()
+        .flat_map(|c| c.iter().copied())
+        .collect();
     encoder.set_palette(palette_flat);
 
     // Set tRNS chunk if any palette entries have alpha < 255

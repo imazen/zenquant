@@ -238,7 +238,10 @@ pub fn refine_against_pixels(
     }
 
     // Pre-convert all pixels to OKLab once (avoids repeated cube-root per iteration)
-    let labs: Vec<OKLab> = pixels.iter().map(|p| srgb_to_oklab(p.r, p.g, p.b)).collect();
+    let labs: Vec<OKLab> = pixels
+        .iter()
+        .map(|p| srgb_to_oklab(p.r, p.g, p.b))
+        .collect();
 
     for _ in 0..iterations {
         // Build acceleration structures from current centroids

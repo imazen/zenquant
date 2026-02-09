@@ -34,7 +34,11 @@ fn main() {
         let h = img.height() as usize;
         let pixels: Vec<rgb::RGB<u8>> = img
             .pixels()
-            .map(|p| rgb::RGB { r: p.0[0], g: p.0[1], b: p.0[2] })
+            .map(|p| rgb::RGB {
+                r: p.0[0],
+                g: p.0[1],
+                b: p.0[2],
+            })
             .collect();
 
         eprint!("{stem}...");
@@ -43,14 +47,27 @@ fn main() {
         let s60 = {
             let png_cfg = QuantizeConfig::new(OutputFormat::Png).quality(Quality::Balanced);
             let gif_cfg = QuantizeConfig::new(OutputFormat::Gif).quality(Quality::Balanced);
-            let webp_cfg = QuantizeConfig::new(OutputFormat::WebpLossless).quality(Quality::Balanced);
+            let webp_cfg =
+                QuantizeConfig::new(OutputFormat::WebpLossless).quality(Quality::Balanced);
             let png_r = zenquant::quantize(&pixels, w, h, &png_cfg).unwrap();
             let gif_r = zenquant::quantize(&pixels, w, h, &gif_cfg).unwrap();
             let webp_r = zenquant::quantize(&pixels, w, h, &webp_cfg).unwrap();
             [
                 encode_indexed_png(png_r.palette(), png_r.indices(), w, h),
-                encode_gif_from_result(gif_r.palette(), gif_r.indices(), w, h, &format!("{stem}_zq60")),
-                encode_webp_from_result(webp_r.palette(), webp_r.indices(), w, h, &format!("{stem}_zq60")),
+                encode_gif_from_result(
+                    gif_r.palette(),
+                    gif_r.indices(),
+                    w,
+                    h,
+                    &format!("{stem}_zq60"),
+                ),
+                encode_webp_from_result(
+                    webp_r.palette(),
+                    webp_r.indices(),
+                    w,
+                    h,
+                    &format!("{stem}_zq60"),
+                ),
             ]
         };
 
@@ -64,8 +81,20 @@ fn main() {
             let webp_r = zenquant::quantize(&pixels, w, h, &webp_cfg).unwrap();
             [
                 encode_indexed_png(png_r.palette(), png_r.indices(), w, h),
-                encode_gif_from_result(gif_r.palette(), gif_r.indices(), w, h, &format!("{stem}_zq85")),
-                encode_webp_from_result(webp_r.palette(), webp_r.indices(), w, h, &format!("{stem}_zq85")),
+                encode_gif_from_result(
+                    gif_r.palette(),
+                    gif_r.indices(),
+                    w,
+                    h,
+                    &format!("{stem}_zq85"),
+                ),
+                encode_webp_from_result(
+                    webp_r.palette(),
+                    webp_r.indices(),
+                    w,
+                    h,
+                    &format!("{stem}_zq85"),
+                ),
             ]
         };
 
@@ -82,10 +111,18 @@ fn main() {
         println!(
             "{:<12} | {:>5} {:>5} {:>5} | {:>5} {:>5} {:>5} | {:>5} {:>5} {:>5} | {:>5} {:>5} {:>5}",
             stem,
-            kb(s60[0]), kb(s60[1]), kb(s60[2]),
-            kb(s85[0]), kb(s85[1]), kb(s85[2]),
-            kb(siq[0]), kb(siq[1]), kb(siq[2]),
-            kb(sqr[0]), kb(sqr[1]), kb(sqr[2]),
+            kb(s60[0]),
+            kb(s60[1]),
+            kb(s60[2]),
+            kb(s85[0]),
+            kb(s85[1]),
+            kb(s85[2]),
+            kb(siq[0]),
+            kb(siq[1]),
+            kb(siq[2]),
+            kb(sqr[0]),
+            kb(sqr[1]),
+            kb(sqr[2]),
         );
 
         for (i, s) in [s60, s85, siq, sqr].iter().enumerate() {
@@ -99,10 +136,18 @@ fn main() {
     println!(
         "{:<12} | {:>5} {:>5} {:>5} | {:>5} {:>5} {:>5} | {:>5} {:>5} {:>5} | {:>5} {:>5} {:>5}",
         "AVERAGE",
-        kb(totals[0][0] / 5), kb(totals[0][1] / 5), kb(totals[0][2] / 5),
-        kb(totals[1][0] / 5), kb(totals[1][1] / 5), kb(totals[1][2] / 5),
-        kb(totals[2][0] / 5), kb(totals[2][1] / 5), kb(totals[2][2] / 5),
-        kb(totals[3][0] / 5), kb(totals[3][1] / 5), kb(totals[3][2] / 5),
+        kb(totals[0][0] / 5),
+        kb(totals[0][1] / 5),
+        kb(totals[0][2] / 5),
+        kb(totals[1][0] / 5),
+        kb(totals[1][1] / 5),
+        kb(totals[1][2] / 5),
+        kb(totals[2][0] / 5),
+        kb(totals[2][1] / 5),
+        kb(totals[2][2] / 5),
+        kb(totals[3][0] / 5),
+        kb(totals[3][1] / 5),
+        kb(totals[3][2] / 5),
     );
 }
 
@@ -123,25 +168,43 @@ fn encode_indexed_png(palette: &[[u8; 3]], indices: &[u8], w: usize, h: usize) -
     buf.len()
 }
 
-fn encode_gif_from_result(palette: &[[u8; 3]], indices: &[u8], w: usize, h: usize, tag: &str) -> usize {
+fn encode_gif_from_result(
+    palette: &[[u8; 3]],
+    indices: &[u8],
+    w: usize,
+    h: usize,
+    tag: &str,
+) -> usize {
     let tmp_png = format!("/tmp/zq_{tag}_gif.png");
     let tmp_gif = format!("/tmp/zq_{tag}.gif");
     write_indexed_png_file(palette, indices, w, h, &tmp_png);
-    let _ = std::process::Command::new("convert").args([&tmp_png, &tmp_gif]).output();
-    let size = std::fs::metadata(&tmp_gif).map(|m| m.len() as usize).unwrap_or(0);
+    let _ = std::process::Command::new("convert")
+        .args([&tmp_png, &tmp_gif])
+        .output();
+    let size = std::fs::metadata(&tmp_gif)
+        .map(|m| m.len() as usize)
+        .unwrap_or(0);
     let _ = std::fs::remove_file(&tmp_png);
     let _ = std::fs::remove_file(&tmp_gif);
     size
 }
 
-fn encode_webp_from_result(palette: &[[u8; 3]], indices: &[u8], w: usize, h: usize, tag: &str) -> usize {
+fn encode_webp_from_result(
+    palette: &[[u8; 3]],
+    indices: &[u8],
+    w: usize,
+    h: usize,
+    tag: &str,
+) -> usize {
     let tmp_png = format!("/tmp/zq_{tag}_webp.png");
     let tmp_webp = format!("/tmp/zq_{tag}.webp");
     write_indexed_png_file(palette, indices, w, h, &tmp_png);
     let _ = std::process::Command::new("convert")
         .args([&tmp_png, "-define", "webp:lossless=true", &tmp_webp])
         .output();
-    let size = std::fs::metadata(&tmp_webp).map(|m| m.len() as usize).unwrap_or(0);
+    let size = std::fs::metadata(&tmp_webp)
+        .map(|m| m.len() as usize)
+        .unwrap_or(0);
     let _ = std::fs::remove_file(&tmp_png);
     let _ = std::fs::remove_file(&tmp_webp);
     size

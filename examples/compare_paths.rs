@@ -91,7 +91,13 @@ fn main() {
         let t0 = Instant::now();
         let q_result = zenquant::quantize(&pixels, width, height, &config).unwrap();
         let q_ms = t0.elapsed().as_secs_f64() * 1000.0;
-        let (q_ba, q_ss2) = score(&ref_rgb, q_result.palette(), q_result.indices(), width, height);
+        let (q_ba, q_ss2) = score(
+            &ref_rgb,
+            q_result.palette(),
+            q_result.indices(),
+            width,
+            height,
+        );
 
         // --- build_palette() + remap() ---
         let t0 = Instant::now();
@@ -99,12 +105,23 @@ fn main() {
         let shared = zenquant::build_palette(&[frame], &config).unwrap();
         let bp_result = shared.remap(&pixels, width, height, &config).unwrap();
         let bp_ms = t0.elapsed().as_secs_f64() * 1000.0;
-        let (bp_ba, bp_ss2) = score(&ref_rgb, bp_result.palette(), bp_result.indices(), width, height);
+        let (bp_ba, bp_ss2) = score(
+            &ref_rgb,
+            bp_result.palette(),
+            bp_result.indices(),
+            width,
+            height,
+        );
 
         println!(
             "{:<36} {:>8.3} {:>8.3}  {:>8.2} {:>8.2}  {:>8.1} {:>8.1}",
             &name[..name.len().min(36)],
-            q_ba, bp_ba, q_ss2, bp_ss2, q_ms, bp_ms,
+            q_ba,
+            bp_ba,
+            q_ss2,
+            bp_ss2,
+            q_ms,
+            bp_ms,
         );
 
         sum_q_ba += q_ba;
@@ -122,9 +139,12 @@ fn main() {
         println!(
             "{:<36} {:>8.3} {:>8.3}  {:>8.2} {:>8.2}  {:>8.1} {:>8.1}",
             "AVERAGE",
-            sum_q_ba / n, sum_bp_ba / n,
-            sum_q_ss2 / n, sum_bp_ss2 / n,
-            sum_q_ms / n, sum_bp_ms / n,
+            sum_q_ba / n,
+            sum_bp_ba / n,
+            sum_q_ss2 / n,
+            sum_bp_ss2 / n,
+            sum_q_ms / n,
+            sum_bp_ms / n,
         );
         println!();
         println!("q = quantize(),  bp = build_palette() + remap()");

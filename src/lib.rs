@@ -1025,8 +1025,7 @@ pub fn build_palette_rgba(
             histogram::build_histogram_alpha(&all_pixels, &all_weights);
         let _ = has_transparent; // transparency handled by alpha channel in palette entries
 
-        let mut centroids =
-            median_cut::median_cut_alpha(merged_hist, max_colors, kmeans_iters > 0);
+        let mut centroids = median_cut::median_cut_alpha(merged_hist, max_colors, kmeans_iters > 0);
 
         if kmeans_iters > 0 {
             let total = all_pixels.len();
@@ -1041,8 +1040,7 @@ pub fn build_palette_rgba(
                 let step = (total / 250_000).max(1);
                 let sub_pixels: Vec<rgb::RGBA<u8>> =
                     all_pixels.iter().step_by(step).copied().collect();
-                let sub_weights: Vec<f32> =
-                    all_weights.iter().step_by(step).copied().collect();
+                let sub_weights: Vec<f32> = all_weights.iter().step_by(step).copied().collect();
                 centroids = median_cut::refine_against_pixels_alpha(
                     centroids,
                     &sub_pixels,
@@ -1052,8 +1050,7 @@ pub fn build_palette_rgba(
             }
         }
 
-        let mut p =
-            palette::Palette::from_centroids_alpha(centroids, false, tuning.sort_strategy);
+        let mut p = palette::Palette::from_centroids_alpha(centroids, false, tuning.sort_strategy);
         p.build_nn_cache();
         p
     } else {
@@ -1067,8 +1064,7 @@ pub fn build_palette_rgba(
             max_colors
         };
 
-        let mut centroids =
-            median_cut::median_cut(merged_hist, opaque_colors, kmeans_iters > 0);
+        let mut centroids = median_cut::median_cut(merged_hist, opaque_colors, kmeans_iters > 0);
 
         if kmeans_iters > 0 {
             let total = all_pixels.len();
@@ -1083,8 +1079,7 @@ pub fn build_palette_rgba(
                 let step = (total / 250_000).max(1);
                 let sub_pixels: Vec<rgb::RGBA<u8>> =
                     all_pixels.iter().step_by(step).copied().collect();
-                let sub_weights: Vec<f32> =
-                    all_weights.iter().step_by(step).copied().collect();
+                let sub_weights: Vec<f32> = all_weights.iter().step_by(step).copied().collect();
                 centroids = median_cut::refine_against_pixels_rgba(
                     centroids,
                     &sub_pixels,
@@ -1166,10 +1161,24 @@ fn remap_rgb_impl(
     };
     if run_lambda > 0.0 {
         if use_viterbi {
-            remap::viterbi_refine(pixels, width, height, &weights, &pal, &mut indices, run_lambda);
+            remap::viterbi_refine(
+                pixels,
+                width,
+                height,
+                &weights,
+                &pal,
+                &mut indices,
+                run_lambda,
+            );
         } else {
             remap::run_extend_refine(
-                pixels, width, height, &weights, &pal, &mut indices, run_lambda,
+                pixels,
+                width,
+                height,
+                &weights,
+                &pal,
+                &mut indices,
+                run_lambda,
             );
         }
     }
@@ -1256,11 +1265,23 @@ fn remap_rgba_impl(
     if run_lambda > 0.0 {
         if use_viterbi {
             remap::viterbi_refine_rgba(
-                pixels, width, height, &weights, &pal, &mut indices, run_lambda,
+                pixels,
+                width,
+                height,
+                &weights,
+                &pal,
+                &mut indices,
+                run_lambda,
             );
         } else {
             remap::run_extend_refine_rgba(
-                pixels, width, height, &weights, &pal, &mut indices, run_lambda,
+                pixels,
+                width,
+                height,
+                &weights,
+                &pal,
+                &mut indices,
+                run_lambda,
             );
         }
     }

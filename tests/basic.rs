@@ -85,11 +85,7 @@ fn all_config_modes() {
             };
 
             let result = zenquant::quantize(&pixels, width, height, &config).unwrap();
-            assert!(
-                result.palette_len() <= 8,
-                "mode dither={}/{rp}",
-                !no_dither
-            );
+            assert!(result.palette_len() <= 8, "mode dither={}/{rp}", !no_dither);
             assert_eq!(result.indices().len(), 64);
         }
     }

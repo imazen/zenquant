@@ -8,7 +8,9 @@ use zenwebp::{EncodeRequest, LosslessConfig, PixelLayout};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let input = args.get(1).expect("usage: encode_webp <input.png> [output.webp]");
+    let input = args
+        .get(1)
+        .expect("usage: encode_webp <input.png> [output.webp]");
     let output = args
         .get(2)
         .cloned()
@@ -19,7 +21,11 @@ fn main() {
     let (w, h) = (img.width() as usize, img.height() as usize);
     let pixels: Vec<rgb::RGB<u8>> = img
         .pixels()
-        .map(|p| rgb::RGB { r: p.0[0], g: p.0[1], b: p.0[2] })
+        .map(|p| rgb::RGB {
+            r: p.0[0],
+            g: p.0[1],
+            b: p.0[2],
+        })
         .collect();
 
     // Quantize with WebP-optimized settings
