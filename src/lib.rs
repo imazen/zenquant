@@ -82,7 +82,7 @@ use alloc::vec::Vec;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Quality {
-    /// Fast mode — no masking, 1 k-means iteration. Roughly 30ms per 512x512 image.
+    /// Fast mode — no masking, histogram-only k-means. Roughly 25ms per 512x512 image.
     Fast,
     /// Balanced — AQ masking + 2 k-means iterations + greedy run extension.
     Balanced,
@@ -430,14 +430,14 @@ pub fn quantize(
     }
 
     // Pipeline tiers based on quality:
-    //   Fast:     no masking, 1 k-means iter, no Viterbi
-    //   Balanced: masking + light k-means (2 iters) + run extension
-    //   Best:     masking + full k-means (8 iters) + Viterbi DP
+    //   Fast:     no masking, histogram-only k-means, no Viterbi
+    //   Balanced: masking + light pixel k-means (2 iters) + run extension
+    //   Best:     masking + full pixel k-means (8 iters) + Viterbi DP
     let use_masking = matches!(config.quality, Quality::Balanced | Quality::Best);
     let kmeans_iters: usize = match config.quality {
         Quality::Best => 8,
         Quality::Balanced => 2,
-        Quality::Fast => 1,
+        Quality::Fast => 0,
     };
 
     // 1. Compute AQ masking weights (skip for fast mode — uniform weights)
@@ -450,10 +450,10 @@ pub fn quantize(
     // 2. Build weighted histogram
     let hist = histogram::build_histogram(pixels, &weights);
 
-    // 3. Median cut with histogram-level k-means refinement
-    let mut centroids = median_cut::median_cut(hist, max_colors, kmeans_iters > 0);
+    // 3. Median cut with histogram-level k-means refinement (always enabled)
+    let mut centroids = median_cut::median_cut(hist, max_colors, true);
 
-    // 3b. Pixel-level k-means refinement.
+    // 3b. Pixel-level k-means refinement (skip for Fast — histogram refinement suffices).
     if kmeans_iters > 0 {
         if pixels.len() <= 500_000 {
             centroids =
@@ -604,7 +604,7 @@ pub fn quantize_rgba(
     let kmeans_iters: usize = match config.quality {
         Quality::Best => 8,
         Quality::Balanced => 2,
-        Quality::Fast => 1,
+        Quality::Fast => 0,
     };
     let weights = if use_masking {
         masking::compute_masking_weights_rgba(pixels, width, height)
@@ -620,7 +620,7 @@ pub fn quantize_rgba(
         } else {
             max_colors
         };
-        let mut centroids = median_cut::median_cut_alpha(hist, opaque_colors, kmeans_iters > 0);
+        let mut centroids = median_cut::median_cut_alpha(hist, opaque_colors, true);
 
         if kmeans_iters > 0 {
             if pixels.len() <= 500_000 {
@@ -700,7 +700,7 @@ pub fn quantize_rgba(
         } else {
             max_colors
         };
-        let mut centroids = median_cut::median_cut(hist, opaque_colors, kmeans_iters > 0);
+        let mut centroids = median_cut::median_cut(hist, opaque_colors, true);
 
         if kmeans_iters > 0 {
             if pixels.len() <= 500_000 {
@@ -853,7 +853,7 @@ pub fn build_palette(
     let kmeans_iters: usize = match config.quality {
         Quality::Best => 8,
         Quality::Balanced => 2,
-        Quality::Fast => 1,
+        Quality::Fast => 0,
     };
 
     // Build merged histogram from all frames
@@ -882,7 +882,7 @@ pub fn build_palette(
     }
 
     // Median cut on merged histogram
-    let mut centroids = median_cut::median_cut(merged_hist, max_colors, kmeans_iters > 0);
+    let mut centroids = median_cut::median_cut(merged_hist, max_colors, true);
 
     // K-means refinement against subsampled pixels from all frames
     if kmeans_iters > 0 {
@@ -999,7 +999,7 @@ pub fn build_palette_rgba(
     let kmeans_iters: usize = match config.quality {
         Quality::Best => 8,
         Quality::Balanced => 2,
-        Quality::Fast => 1,
+        Quality::Fast => 0,
     };
 
     let mut all_pixels: Vec<rgb::RGBA<u8>> = Vec::new();
@@ -1027,7 +1027,7 @@ pub fn build_palette_rgba(
             histogram::build_histogram_alpha(&all_pixels, &all_weights);
         let _ = has_transparent; // transparency handled by alpha channel in palette entries
 
-        let mut centroids = median_cut::median_cut_alpha(merged_hist, max_colors, kmeans_iters > 0);
+        let mut centroids = median_cut::median_cut_alpha(merged_hist, max_colors, true);
 
         if kmeans_iters > 0 {
             let total = all_pixels.len();
@@ -1066,7 +1066,7 @@ pub fn build_palette_rgba(
             max_colors
         };
 
-        let mut centroids = median_cut::median_cut(merged_hist, opaque_colors, kmeans_iters > 0);
+        let mut centroids = median_cut::median_cut(merged_hist, opaque_colors, true);
 
         if kmeans_iters > 0 {
             let total = all_pixels.len();
