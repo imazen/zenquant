@@ -29,6 +29,10 @@ const QUANTIZER_NAMES: &[&str] = &[
     "zq-fast",
     "zq-balanced",
     "zq-best",
+    "zq-best-d50",
+    "zq-best-d60",
+    "zq-best-q-d50",
+    "zq-best-q-d60",
     "iq-s1-d50",
     "iq-s4-d100",
     "iq-s1-d100",
@@ -414,7 +418,37 @@ fn run_quantizer(
         "zq-best" => {
             let cfg = QuantizeConfig::new(OutputFormat::Png).max_colors(256);
             let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
-            Some((r.palette().to_vec(), r.indices().to_vec(), ""))
+            Some((r.palette().to_vec(), r.indices().to_vec(), "d0.3 (default)"))
+        }
+        "zq-best-d50" => {
+            let cfg = QuantizeConfig::new(OutputFormat::Png)
+                .max_colors(256)
+                ._dither_strength(0.5);
+            let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
+            Some((r.palette().to_vec(), r.indices().to_vec(), "d0.5"))
+        }
+        "zq-best-d60" => {
+            let cfg = QuantizeConfig::new(OutputFormat::Png)
+                .max_colors(256)
+                ._dither_strength(0.6);
+            let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
+            Some((r.palette().to_vec(), r.indices().to_vec(), "d0.6"))
+        }
+        "zq-best-q-d50" => {
+            let cfg = QuantizeConfig::new(OutputFormat::Png)
+                .max_colors(256)
+                ._dither_strength(0.5)
+                ._run_priority_quality();
+            let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
+            Some((r.palette().to_vec(), r.indices().to_vec(), "d0.5 quality-runs"))
+        }
+        "zq-best-q-d60" => {
+            let cfg = QuantizeConfig::new(OutputFormat::Png)
+                .max_colors(256)
+                ._dither_strength(0.6)
+                ._run_priority_quality();
+            let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
+            Some((r.palette().to_vec(), r.indices().to_vec(), "d0.6 quality-runs"))
         }
         "iq-s1-d50" => {
             let (p, i) = run_imagequant(pixels, width, height, 1, 100, 0.5);
