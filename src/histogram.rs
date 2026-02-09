@@ -45,7 +45,7 @@ fn quantize_key(lab: OKLab, bits: u32) -> u32 {
 
 /// Build a weighted color histogram from RGB pixels and per-pixel AQ weights.
 ///
-/// Uses adaptive bit depth: 5-bit for small images (more color precision), 4-bit
+/// Uses adaptive bit depth: 6-bit for small images (more color precision), 5-bit
 /// for large images (avoids dominant-color fragmentation on screenshots).
 /// Weighted centroids are computed in f64 for accumulation stability.
 pub fn build_histogram(pixels: &[rgb::RGB<u8>], weights: &[f32]) -> Vec<(OKLab, f32)> {
@@ -56,7 +56,7 @@ pub fn build_histogram(pixels: &[rgb::RGB<u8>], weights: &[f32]) -> Vec<(OKLab, 
         .map(|p| srgb_to_oklab(p.r, p.g, p.b))
         .collect();
 
-    let bits = if pixels.len() <= 500_000 { 6 } else { 4 };
+    let bits = if pixels.len() <= 500_000 { 6 } else { 5 };
     build_hist_at_depth(&labs, weights, bits)
 }
 
@@ -112,7 +112,7 @@ pub fn build_histogram_rgba(
         opaque_weights.push(weight);
     }
 
-    let bits = if pixels.len() <= 500_000 { 5 } else { 4 };
+    let bits = if pixels.len() <= 500_000 { 6 } else { 5 };
     let entries = build_hist_at_depth(&labs, &opaque_weights, bits);
     (entries, has_transparent)
 }
@@ -128,7 +128,7 @@ pub(crate) fn build_histogram_alpha(
 ) -> (Vec<(OKLabA, f32)>, bool) {
     assert_eq!(pixels.len(), weights.len());
 
-    let bits = if pixels.len() <= 500_000 { 5 } else { 4 };
+    let bits: u32 = 5;
     let alpha_bits: u32 = 6; // 64 alpha levels
     let alpha_max = (1u32 << alpha_bits) - 1;
     let alpha_scale = alpha_max as f32;
