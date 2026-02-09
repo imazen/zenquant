@@ -52,6 +52,7 @@ pub(crate) struct QuantizeTuning {
     pub(crate) sort_strategy: palette::PaletteSortStrategy,
     pub(crate) gif_frequency_reorder: bool,
     pub(crate) alpha_mode: AlphaMode,
+    pub(crate) viterbi_lambda_scale: f32,
 }
 
 /// How to handle alpha in quantization.
@@ -65,36 +66,46 @@ pub(crate) enum AlphaMode {
 
 impl QuantizeTuning {
     pub(crate) fn from_config(config: &QuantizeConfig) -> Self {
-        let (default_dither, sort, gif_reorder, alpha) = match config.output_format {
+        // Per-format tuning:
+        //   dither_strength: lower = fewer broken runs, better compression
+        //   sort_strategy: Luminance for PNG (sub filter), DeltaMinimize for others
+        //   viterbi_lambda_scale: multiplier on the run-extension lambda
+        //     GIF/WebP benefit heavily from longer runs (LZW/entropy coding)
+        let (default_dither, sort, gif_reorder, alpha, lambda_scale) = match config.output_format {
             OutputFormat::Generic => (
                 0.5,
                 palette::PaletteSortStrategy::DeltaMinimize,
                 false,
                 AlphaMode::Full,
+                1.0,
             ),
             OutputFormat::Gif => (
-                0.5,
+                0.35,
                 palette::PaletteSortStrategy::DeltaMinimize,
                 true,
                 AlphaMode::Binary,
+                3.0, // GIF's LZW rewards long runs heavily
             ),
             OutputFormat::Png => (
                 0.3,
                 palette::PaletteSortStrategy::Luminance,
                 false,
                 AlphaMode::Full,
+                1.0,
             ),
             OutputFormat::WebpLossless => (
-                0.5,
+                0.4,
                 palette::PaletteSortStrategy::DeltaMinimize,
                 false,
                 AlphaMode::Full,
+                2.0, // WebP entropy coding also benefits from runs
             ),
             OutputFormat::JxlModular => (
                 0.4,
                 palette::PaletteSortStrategy::DeltaMinimize,
                 false,
                 AlphaMode::Full,
+                1.5,
             ),
         };
 
@@ -103,6 +114,7 @@ impl QuantizeTuning {
             sort_strategy: sort,
             gif_frequency_reorder: gif_reorder,
             alpha_mode: alpha,
+            viterbi_lambda_scale: lambda_scale,
         }
     }
 }
@@ -335,7 +347,7 @@ pub fn quantize(
             RunPriority::Quality => 0.0,
             RunPriority::Balanced => 0.01,
             RunPriority::Compression => 0.02,
-        })
+        }) * tuning.viterbi_lambda_scale
     } else {
         config.viterbi_lambda.unwrap_or(0.0)
     };
@@ -470,7 +482,7 @@ pub fn quantize_rgba(
                 RunPriority::Quality => 0.0,
                 RunPriority::Balanced => 0.01,
                 RunPriority::Compression => 0.02,
-            })
+            }) * tuning.viterbi_lambda_scale
         } else {
             config.viterbi_lambda.unwrap_or(0.0)
         };
@@ -551,7 +563,7 @@ pub fn quantize_rgba(
                 RunPriority::Quality => 0.0,
                 RunPriority::Balanced => 0.01,
                 RunPriority::Compression => 0.02,
-            })
+            }) * tuning.viterbi_lambda_scale
         } else {
             config.viterbi_lambda.unwrap_or(0.0)
         };
