@@ -14,6 +14,7 @@ pub(crate) mod remap;
 
 pub use dither::DitherMode;
 pub use error::QuantizeError;
+pub use imgref::{Img, ImgRef, ImgVec};
 pub use remap::RunPriority;
 pub use rgb::{RGB, RGBA};
 
@@ -775,6 +776,280 @@ pub fn quantize_rgba(
     Ok(QuantizeResult {
         palette: pal,
         indices,
+    })
+}
+
+/// Build a shared palette from multiple RGB frames.
+///
+/// Each frame can have different dimensions. Returns a [`QuantizeResult`] whose
+/// palette is optimized across all frames. Call [`QuantizeResult::remap()`] on
+/// each frame to produce per-frame indices against the shared palette.
+///
+/// The returned result has empty indices — only the palette is meaningful.
+///
+/// # Example
+///
+/// ```no_run
+/// use zenquant::{QuantizeConfig, OutputFormat, ImgRef};
+///
+/// # let buf1 = vec![rgb::RGB::new(0u8,0,0); 64];
+/// # let buf2 = vec![rgb::RGB::new(0u8,0,0); 64];
+/// # let frame1 = ImgRef::new(&buf1, 8, 8);
+/// # let frame2 = ImgRef::new(&buf2, 8, 8);
+/// let config = QuantizeConfig::new().output_format(OutputFormat::Png);
+/// let shared = zenquant::build_palette(&[frame1, frame2], &config).unwrap();
+///
+/// // Remap each frame against the shared palette
+/// for frame in &[frame1, frame2] {
+///     let pixels: Vec<_> = frame.pixels().collect();
+///     let result = shared.remap(&pixels, frame.width(), frame.height(), &config).unwrap();
+/// }
+/// ```
+pub fn build_palette(
+    frames: &[ImgRef<'_, rgb::RGB<u8>>],
+    config: &QuantizeConfig,
+) -> Result<QuantizeResult, QuantizeError> {
+    if frames.is_empty() {
+        return Err(QuantizeError::ZeroDimension);
+    }
+    for frame in frames {
+        if frame.width() == 0 || frame.height() == 0 {
+            return Err(QuantizeError::ZeroDimension);
+        }
+    }
+    if config.max_colors < 2 || config.max_colors > 256 {
+        return Err(QuantizeError::InvalidMaxColors(config.max_colors));
+    }
+    if config.quality > 100 {
+        return Err(QuantizeError::InvalidQuality(config.quality));
+    }
+
+    let tuning = QuantizeTuning::from_config(config);
+    let max_colors = config.max_colors as usize;
+    let use_masking = config.quality >= 50;
+    let kmeans_iters: usize = if config.quality >= 75 {
+        8
+    } else if config.quality >= 50 {
+        2
+    } else {
+        0
+    };
+
+    // Build merged histogram from all frames
+    let mut merged_hist: Vec<(oklab::OKLab, f32)> = Vec::new();
+    let mut all_pixels: Vec<rgb::RGB<u8>> = Vec::new();
+    let mut all_weights: Vec<f32> = Vec::new();
+
+    for frame in frames {
+        let pixels: Vec<rgb::RGB<u8>> = frame.pixels().collect();
+        let w = frame.width();
+        let h = frame.height();
+
+        let weights = if use_masking {
+            masking::compute_masking_weights(&pixels, w, h)
+        } else {
+            vec![1.0f32; pixels.len()]
+        };
+
+        let hist = histogram::build_histogram(&pixels, &weights);
+        merged_hist.extend_from_slice(&hist);
+
+        if kmeans_iters > 0 {
+            all_pixels.extend_from_slice(&pixels);
+            all_weights.extend_from_slice(&weights);
+        }
+    }
+
+    // Median cut on merged histogram
+    let mut centroids = median_cut::median_cut(merged_hist, max_colors, kmeans_iters > 0);
+
+    // K-means refinement against subsampled pixels from all frames
+    if kmeans_iters > 0 {
+        let total = all_pixels.len();
+        if total <= 500_000 {
+            centroids =
+                median_cut::refine_against_pixels(centroids, &all_pixels, &all_weights, kmeans_iters);
+        } else {
+            // Subsample uniformly across all frames
+            let step = (total / 250_000).max(1);
+            let sub_pixels: Vec<rgb::RGB<u8>> = all_pixels.iter().step_by(step).copied().collect();
+            let sub_weights: Vec<f32> = all_weights.iter().step_by(step).copied().collect();
+            centroids =
+                median_cut::refine_against_pixels(centroids, &sub_pixels, &sub_weights, kmeans_iters);
+        }
+    }
+
+    let mut pal = palette::Palette::from_centroids_sorted(centroids, false, tuning.sort_strategy);
+    pal.build_nn_cache();
+
+    Ok(QuantizeResult {
+        palette: pal,
+        indices: Vec::new(),
+    })
+}
+
+/// Build a shared palette from multiple RGBA frames.
+///
+/// Each frame can have different dimensions. Returns a [`QuantizeResult`] whose
+/// palette is optimized across all frames. Call [`QuantizeResult::remap_rgba()`]
+/// on each frame to produce per-frame indices against the shared palette.
+///
+/// The returned result has empty indices — only the palette is meaningful.
+///
+/// # Example
+///
+/// ```no_run
+/// use zenquant::{QuantizeConfig, OutputFormat, ImgRef};
+///
+/// # let buf1 = vec![rgb::RGBA::new(0u8,0,0,255); 64];
+/// # let buf2 = vec![rgb::RGBA::new(0u8,0,0,255); 48];
+/// # let frame1 = ImgRef::new(&buf1, 8, 8);
+/// # let frame2 = ImgRef::new(&buf2, 8, 6);
+/// let config = QuantizeConfig::new().output_format(OutputFormat::Gif);
+/// let shared = zenquant::build_palette_rgba(&[frame1, frame2], &config).unwrap();
+///
+/// // Remap each frame against the shared palette
+/// for frame in &[frame1, frame2] {
+///     let pixels: Vec<_> = frame.pixels().collect();
+///     let result = shared.remap_rgba(&pixels, frame.width(), frame.height(), &config).unwrap();
+/// }
+/// ```
+pub fn build_palette_rgba(
+    frames: &[ImgRef<'_, rgb::RGBA<u8>>],
+    config: &QuantizeConfig,
+) -> Result<QuantizeResult, QuantizeError> {
+    if frames.is_empty() {
+        return Err(QuantizeError::ZeroDimension);
+    }
+    for frame in frames {
+        if frame.width() == 0 || frame.height() == 0 {
+            return Err(QuantizeError::ZeroDimension);
+        }
+    }
+    if config.max_colors < 2 || config.max_colors > 256 {
+        return Err(QuantizeError::InvalidMaxColors(config.max_colors));
+    }
+    if config.quality > 100 {
+        return Err(QuantizeError::InvalidQuality(config.quality));
+    }
+
+    let tuning = QuantizeTuning::from_config(config);
+    let max_colors = config.max_colors as usize;
+    let use_masking = config.quality >= 50;
+    let kmeans_iters: usize = if config.quality >= 75 {
+        8
+    } else if config.quality >= 50 {
+        2
+    } else {
+        0
+    };
+
+    let mut all_pixels: Vec<rgb::RGBA<u8>> = Vec::new();
+    let mut all_weights: Vec<f32> = Vec::new();
+
+    // Collect pixels and weights from all frames (masking is per-frame/spatial)
+    for frame in frames {
+        let pixels: Vec<rgb::RGBA<u8>> = frame.pixels().collect();
+        let w = frame.width();
+        let h = frame.height();
+
+        let weights = if use_masking {
+            masking::compute_masking_weights_rgba(&pixels, w, h)
+        } else {
+            vec![1.0f32; pixels.len()]
+        };
+
+        all_pixels.extend_from_slice(&pixels);
+        all_weights.extend_from_slice(&weights);
+    }
+
+    let pal = if tuning.alpha_mode == AlphaMode::Full {
+        // Full alpha: 4D OKLabA histogram and median cut
+        let (merged_hist, has_transparent) =
+            histogram::build_histogram_alpha(&all_pixels, &all_weights);
+        let _ = has_transparent; // transparency handled by alpha channel in palette entries
+
+        let mut centroids =
+            median_cut::median_cut_alpha(merged_hist, max_colors, kmeans_iters > 0);
+
+        if kmeans_iters > 0 {
+            let total = all_pixels.len();
+            if total <= 500_000 {
+                centroids = median_cut::refine_against_pixels_alpha(
+                    centroids,
+                    &all_pixels,
+                    &all_weights,
+                    kmeans_iters,
+                );
+            } else {
+                let step = (total / 250_000).max(1);
+                let sub_pixels: Vec<rgb::RGBA<u8>> =
+                    all_pixels.iter().step_by(step).copied().collect();
+                let sub_weights: Vec<f32> =
+                    all_weights.iter().step_by(step).copied().collect();
+                centroids = median_cut::refine_against_pixels_alpha(
+                    centroids,
+                    &sub_pixels,
+                    &sub_weights,
+                    kmeans_iters,
+                );
+            }
+        }
+
+        let mut p =
+            palette::Palette::from_centroids_alpha(centroids, false, tuning.sort_strategy);
+        p.build_nn_cache();
+        p
+    } else {
+        // Binary alpha: 3D OKLab histogram, transparent pixels excluded
+        let (merged_hist, has_transparent) =
+            histogram::build_histogram_rgba(&all_pixels, &all_weights);
+
+        let opaque_colors = if has_transparent {
+            max_colors.saturating_sub(1)
+        } else {
+            max_colors
+        };
+
+        let mut centroids =
+            median_cut::median_cut(merged_hist, opaque_colors, kmeans_iters > 0);
+
+        if kmeans_iters > 0 {
+            let total = all_pixels.len();
+            if total <= 500_000 {
+                centroids = median_cut::refine_against_pixels_rgba(
+                    centroids,
+                    &all_pixels,
+                    &all_weights,
+                    kmeans_iters,
+                );
+            } else {
+                let step = (total / 250_000).max(1);
+                let sub_pixels: Vec<rgb::RGBA<u8>> =
+                    all_pixels.iter().step_by(step).copied().collect();
+                let sub_weights: Vec<f32> =
+                    all_weights.iter().step_by(step).copied().collect();
+                centroids = median_cut::refine_against_pixels_rgba(
+                    centroids,
+                    &sub_pixels,
+                    &sub_weights,
+                    kmeans_iters,
+                );
+            }
+        }
+
+        let mut p = palette::Palette::from_centroids_sorted(
+            centroids,
+            has_transparent,
+            tuning.sort_strategy,
+        );
+        p.build_nn_cache();
+        p
+    };
+
+    Ok(QuantizeResult {
+        palette: pal,
+        indices: Vec::new(),
     })
 }
 

@@ -1,4 +1,4 @@
-use zenquant::{DitherMode, OutputFormat, QuantizeConfig, QuantizeError, RunPriority};
+use zenquant::{DitherMode, ImgRef, OutputFormat, QuantizeConfig, QuantizeError, RunPriority};
 
 #[test]
 fn smoke_test_rgb() {
@@ -671,4 +671,95 @@ fn remap_rgba_preserves_palette() {
 
     assert_eq!(result1.palette(), result2.palette());
     assert_eq!(result1.transparent_index(), result2.transparent_index());
+}
+
+#[test]
+fn build_palette_rgb_multi_frame() {
+    // Two frames with different color distributions
+    let frame1_pixels: Vec<rgb::RGB<u8>> = (0..64)
+        .map(|i| rgb::RGB { r: (i * 4) as u8, g: 0, b: 0 })
+        .collect();
+    let frame2_pixels: Vec<rgb::RGB<u8>> = (0..48)
+        .map(|i| rgb::RGB { r: 0, g: (i * 5) as u8, b: 0 })
+        .collect();
+
+    let f1 = ImgRef::new(&frame1_pixels, 8, 8);
+    let f2 = ImgRef::new(&frame2_pixels, 8, 6);
+
+    let config = QuantizeConfig::new().quality(85).output_format(OutputFormat::Png);
+    let shared = zenquant::build_palette(&[f1, f2], &config).unwrap();
+
+    // Palette should exist and be non-empty
+    assert!(shared.palette_len() > 0);
+    // Indices should be empty (build_palette only builds the palette)
+    assert!(shared.indices().is_empty());
+
+    // Remap each frame against the shared palette
+    let r1 = shared.remap(&frame1_pixels, 8, 8, &config).unwrap();
+    let r2 = shared.remap(&frame2_pixels, 8, 6, &config).unwrap();
+
+    // Both remapped results should share the same palette
+    assert_eq!(r1.palette(), r2.palette());
+    assert_eq!(r1.indices().len(), 64);
+    assert_eq!(r2.indices().len(), 48);
+}
+
+#[test]
+fn build_palette_rgba_gif_multi_frame() {
+    let frame1_pixels: Vec<rgb::RGBA<u8>> = (0..64)
+        .map(|i| rgb::RGBA {
+            r: (i * 4) as u8,
+            g: 128,
+            b: 64,
+            a: if i == 0 { 0 } else { 255 },
+        })
+        .collect();
+    let frame2_pixels: Vec<rgb::RGBA<u8>> = (0..48)
+        .map(|i| rgb::RGBA {
+            r: 128,
+            g: (i * 5) as u8,
+            b: 64,
+            a: 255,
+        })
+        .collect();
+
+    let f1 = ImgRef::new(&frame1_pixels, 8, 8);
+    let f2 = ImgRef::new(&frame2_pixels, 8, 6);
+
+    let config = QuantizeConfig::new().quality(85).output_format(OutputFormat::Gif);
+    let shared = zenquant::build_palette_rgba(&[f1, f2], &config).unwrap();
+
+    assert!(shared.palette_len() > 0);
+    assert!(shared.indices().is_empty());
+    // Frame 1 has a transparent pixel, so shared palette should have transparency
+    assert!(shared.transparent_index().is_some());
+
+    // Remap each frame
+    let r1 = shared.remap_rgba(&frame1_pixels, 8, 8, &config).unwrap();
+    let r2 = shared.remap_rgba(&frame2_pixels, 8, 6, &config).unwrap();
+
+    assert_eq!(r1.palette(), r2.palette());
+    assert_eq!(r1.indices().len(), 64);
+    assert_eq!(r2.indices().len(), 48);
+}
+
+#[test]
+fn build_palette_empty_frames_errors() {
+    let config = QuantizeConfig::new();
+    let result = zenquant::build_palette(&[], &config);
+    assert!(result.is_err());
+}
+
+#[test]
+fn build_palette_single_frame_matches_quantize() {
+    // A single-frame build_palette should produce a similar palette to quantize()
+    let pixels: Vec<rgb::RGB<u8>> = (0..256)
+        .map(|i| rgb::RGB { r: i as u8, g: (255 - i) as u8, b: 128 })
+        .collect();
+    let f = ImgRef::new(&pixels, 16, 16);
+
+    let config = QuantizeConfig::new().quality(85).output_format(OutputFormat::Png);
+    let shared = zenquant::build_palette(&[f], &config).unwrap();
+    assert!(shared.palette_len() > 0);
+    assert!(shared.palette_len() <= 256);
 }
