@@ -439,16 +439,11 @@ pub fn quantize(
     };
 
     // 1. Compute AQ masking weights (skip for fast mode — uniform weights)
-    let mut weights = if use_masking {
+    let weights = if use_masking {
         masking::compute_masking_weights(pixels, width, height)
     } else {
         vec![1.0f32; pixels.len()]
     };
-
-    // 1b. Boost weights in smooth gradient regions for better palette allocation
-    if use_masking {
-        masking::boost_gradient_weights(pixels, &mut weights, width, height);
-    }
 
     // 2. Build weighted histogram
     let hist = histogram::build_histogram(pixels, &weights);
@@ -609,15 +604,11 @@ pub fn quantize_rgba(
         Quality::Balanced => 2,
         Quality::Fast => 0,
     };
-    let mut weights = if use_masking {
+    let weights = if use_masking {
         masking::compute_masking_weights_rgba(pixels, width, height)
     } else {
         vec![1.0f32; pixels.len()]
     };
-
-    if use_masking {
-        masking::boost_gradient_weights_rgba(pixels, &mut weights, width, height);
-    }
 
     let (pal, mut indices) = if tuning.alpha_mode == AlphaMode::Full {
         // Full alpha quantization: 4D OKLabA pipeline
@@ -873,15 +864,11 @@ pub fn build_palette(
         let w = frame.width();
         let h = frame.height();
 
-        let mut weights = if use_masking {
+        let weights = if use_masking {
             masking::compute_masking_weights(&pixels, w, h)
         } else {
             vec![1.0f32; pixels.len()]
         };
-
-        if use_masking {
-            masking::boost_gradient_weights(&pixels, &mut weights, w, h);
-        }
 
         let hist = histogram::build_histogram(&pixels, &weights);
         merged_hist.extend_from_slice(&hist);
@@ -1022,15 +1009,11 @@ pub fn build_palette_rgba(
         let w = frame.width();
         let h = frame.height();
 
-        let mut weights = if use_masking {
+        let weights = if use_masking {
             masking::compute_masking_weights_rgba(&pixels, w, h)
         } else {
             vec![1.0f32; pixels.len()]
         };
-
-        if use_masking {
-            masking::boost_gradient_weights_rgba(&pixels, &mut weights, w, h);
-        }
 
         all_pixels.extend_from_slice(&pixels);
         all_weights.extend_from_slice(&weights);
@@ -1150,15 +1133,11 @@ fn remap_rgb_impl(
     let use_masking = matches!(config.quality, Quality::Balanced | Quality::Best);
     let use_viterbi = matches!(config.quality, Quality::Best);
 
-    let mut weights = if use_masking {
+    let weights = if use_masking {
         masking::compute_masking_weights(pixels, width, height)
     } else {
         vec![1.0f32; pixels.len()]
     };
-
-    if use_masking {
-        masking::boost_gradient_weights(pixels, &mut weights, width, height);
-    }
 
     let mut indices = dither::dither_image(
         pixels,
@@ -1240,15 +1219,11 @@ fn remap_rgba_impl(
     let use_masking = matches!(config.quality, Quality::Balanced | Quality::Best);
     let use_viterbi = matches!(config.quality, Quality::Best);
 
-    let mut weights = if use_masking {
+    let weights = if use_masking {
         masking::compute_masking_weights_rgba(pixels, width, height)
     } else {
         vec![1.0f32; pixels.len()]
     };
-
-    if use_masking {
-        masking::boost_gradient_weights_rgba(pixels, &mut weights, width, height);
-    }
 
     // Detect alpha mode from the palette: if any entry has alpha between 1-254,
     // the palette was built with full alpha quantization.

@@ -2,7 +2,7 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::oklab::{OKLab, srgb_to_oklab};
+use crate::oklab::srgb_to_oklab;
 
 /// Compute per-pixel AQ masking weights from an RGB image.
 ///
@@ -194,108 +194,6 @@ fn masking_to_weights(masking: &[f32]) -> Vec<f32> {
             w.clamp(0.1, 1.0)
         })
         .collect()
-}
-
-/// Boost weights for pixels in smooth gradients to steer palette allocation.
-///
-/// Pixels with moderate neighbor distance (not flat, not an edge) are in
-/// gradient transitions that need more palette entries. Boosting their weights
-/// makes k-means cluster more finely in these regions.
-///
-/// Only applied for images > 500K pixels where 5-bit histograms lose gradient
-/// detail. Small images with 6-bit histograms already have sufficient resolution.
-pub fn boost_gradient_weights(
-    pixels: &[rgb::RGB<u8>],
-    weights: &mut [f32],
-    width: usize,
-    height: usize,
-) {
-    if pixels.len() <= 500_000 {
-        return;
-    }
-    // Thresholds in squared OKLab distance of max cardinal neighbor
-    let gradient_lo: f32 = 0.0002; // below: uniform region, no boost
-    let gradient_hi: f32 = 0.003; // above: edge, no boost
-    let boost: f32 = 1.5;
-
-    let labs: Vec<OKLab> = pixels
-        .iter()
-        .map(|p| srgb_to_oklab(p.r, p.g, p.b))
-        .collect();
-
-    for y in 0..height {
-        for x in 0..width {
-            let idx = y * width + x;
-            let c = labs[idx];
-            let mut max_dist_sq: f32 = 0.0;
-
-            if x > 0 {
-                max_dist_sq = max_dist_sq.max(c.distance_sq(labs[idx - 1]));
-            }
-            if x + 1 < width {
-                max_dist_sq = max_dist_sq.max(c.distance_sq(labs[idx + 1]));
-            }
-            if y > 0 {
-                max_dist_sq = max_dist_sq.max(c.distance_sq(labs[idx - width]));
-            }
-            if y + 1 < height {
-                max_dist_sq = max_dist_sq.max(c.distance_sq(labs[idx + width]));
-            }
-
-            if max_dist_sq > gradient_lo && max_dist_sq < gradient_hi {
-                weights[idx] *= boost;
-            }
-        }
-    }
-}
-
-/// Boost weights for RGBA pixels in smooth gradients.
-/// Only applied for images > 500K pixels (see `boost_gradient_weights`).
-pub fn boost_gradient_weights_rgba(
-    pixels: &[rgb::RGBA<u8>],
-    weights: &mut [f32],
-    width: usize,
-    height: usize,
-) {
-    if pixels.len() <= 500_000 {
-        return;
-    }
-    let gradient_lo: f32 = 0.0002;
-    let gradient_hi: f32 = 0.003;
-    let boost: f32 = 1.5;
-
-    let labs: Vec<OKLab> = pixels
-        .iter()
-        .map(|p| srgb_to_oklab(p.r, p.g, p.b))
-        .collect();
-
-    for y in 0..height {
-        for x in 0..width {
-            let idx = y * width + x;
-            if pixels[idx].a == 0 {
-                continue;
-            }
-            let c = labs[idx];
-            let mut max_dist_sq: f32 = 0.0;
-
-            if x > 0 && pixels[idx - 1].a > 0 {
-                max_dist_sq = max_dist_sq.max(c.distance_sq(labs[idx - 1]));
-            }
-            if x + 1 < width && pixels[idx + 1].a > 0 {
-                max_dist_sq = max_dist_sq.max(c.distance_sq(labs[idx + 1]));
-            }
-            if y > 0 && pixels[idx - width].a > 0 {
-                max_dist_sq = max_dist_sq.max(c.distance_sq(labs[idx - width]));
-            }
-            if y + 1 < height && pixels[idx + width].a > 0 {
-                max_dist_sq = max_dist_sq.max(c.distance_sq(labs[idx + width]));
-            }
-
-            if max_dist_sq > gradient_lo && max_dist_sq < gradient_hi {
-                weights[idx] *= boost;
-            }
-        }
-    }
 }
 
 #[cfg(test)]
