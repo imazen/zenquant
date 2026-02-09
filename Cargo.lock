@@ -228,6 +228,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dssim-core"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3c601412450ff29a9258b2f85b18b38f658caf70fad1692f40ca863d86cb753"
+dependencies = [
+ "imgref",
+ "itertools",
+ "rgb",
+]
+
+[[package]]
 name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -417,6 +428,15 @@ name = "imgref"
 version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7c5cedc30da3a610cac6b4ba17597bdf7152cf974e8aab3afb3d54455e371c8"
+
+[[package]]
+name = "itertools"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
+dependencies = [
+ "either",
+]
 
 [[package]]
 name = "js-sys"
@@ -1090,6 +1110,7 @@ dependencies = [
  "butteraugli",
  "codec-corpus",
  "color_quant",
+ "dssim-core",
  "enough",
  "exoquant",
  "fast-ssim2",

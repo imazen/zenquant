@@ -34,6 +34,7 @@ enough = "0.3"
 imgref = "1"
 codec-corpus = "1"
 color_quant = "1"
+dssim-core = { version = "3", default-features = false }
 exoquant = "0.2"
 gif = { version = "0.14", default-features = false, features = ["std"] }
 

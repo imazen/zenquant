@@ -44,6 +44,7 @@ struct QuantizerResult {
     name: String,
     butteraugli: f64,
     ssimulacra2: f64,
+    dssim: f64,
     png_bytes: usize,
     gif_bytes: usize,
     webp_bytes: usize,
@@ -185,6 +186,7 @@ fn main() {
             name: "zenquant".into(),
             butteraugli: zq_metrics.0,
             ssimulacra2: zq_metrics.1,
+            dssim: zq_metrics.2,
             png_bytes: zq_sizes.0,
             gif_bytes: zq_sizes.1,
             webp_bytes: zq_sizes.2,
@@ -210,6 +212,7 @@ fn main() {
             name: "imagequant".into(),
             butteraugli: iq_metrics.0,
             ssimulacra2: iq_metrics.1,
+            dssim: iq_metrics.2,
             png_bytes: iq_sizes.0,
             gif_bytes: iq_sizes.1,
             webp_bytes: iq_sizes.2,
@@ -235,6 +238,7 @@ fn main() {
             name: "quantizr".into(),
             butteraugli: qr_metrics.0,
             ssimulacra2: qr_metrics.1,
+            dssim: qr_metrics.2,
             png_bytes: qr_sizes.0,
             gif_bytes: qr_sizes.1,
             webp_bytes: qr_sizes.2,
@@ -260,6 +264,7 @@ fn main() {
             name: "color_quant".into(),
             butteraugli: cq_metrics.0,
             ssimulacra2: cq_metrics.1,
+            dssim: cq_metrics.2,
             png_bytes: cq_sizes.0,
             gif_bytes: cq_sizes.1,
             webp_bytes: cq_sizes.2,
@@ -287,6 +292,7 @@ fn main() {
                     name: "exoquant".into(),
                     butteraugli: ex_metrics.0,
                     ssimulacra2: ex_metrics.1,
+                    dssim: ex_metrics.2,
                     png_bytes: ex_sizes.0,
                     gif_bytes: ex_sizes.1,
                     webp_bytes: ex_sizes.2,
@@ -409,13 +415,14 @@ fn run_exoquant(
 // Metrics
 // ---------------------------------------------------------------------------
 
+/// Returns (butteraugli, ssimulacra2, dssim)
 fn compute_metrics(
     ref_rgb: &[RGB8],
     palette: &[[u8; 3]],
     indices: &[u8],
     width: usize,
     height: usize,
-) -> (f64, f64) {
+) -> (f64, f64, f64) {
     let test_rgb: Vec<RGB8> = indices
         .iter()
         .map(|&idx| {
@@ -424,6 +431,7 @@ fn compute_metrics(
         })
         .collect();
 
+    // Butteraugli
     let ref_img = ImgVec::new(ref_rgb.to_vec(), width, height);
     let test_img = ImgVec::new(test_rgb.clone(), width, height);
     let ba = butteraugli::butteraugli(
@@ -434,13 +442,21 @@ fn compute_metrics(
     .map(|r| r.score)
     .unwrap_or(f64::NAN);
 
+    // SSIMULACRA2
     let ref_pixels: Vec<[u8; 3]> = ref_rgb.iter().map(|p| [p.r, p.g, p.b]).collect();
     let test_pixels: Vec<[u8; 3]> = test_rgb.iter().map(|p| [p.r, p.g, p.b]).collect();
     let ref_img_ss = ImgVec::new(ref_pixels, width, height);
     let test_img_ss = ImgVec::new(test_pixels, width, height);
     let ss2 = compute_ssimulacra2(ref_img_ss.as_ref(), test_img_ss.as_ref()).unwrap_or(f64::NAN);
 
-    (ba, ss2)
+    // DSSIM
+    let d = dssim_core::Dssim::new();
+    let ref_dssim = d.create_image_rgb(ref_rgb, width, height).unwrap();
+    let test_dssim = d.create_image_rgb(&test_rgb, width, height).unwrap();
+    let (dssim_val, _) = d.compare(&ref_dssim, &test_dssim);
+    let dssim: f64 = dssim_val.into();
+
+    (ba, ss2, dssim)
 }
 
 // ---------------------------------------------------------------------------
@@ -554,10 +570,10 @@ fn print_summary(report: &ReportData) {
 
     eprintln!("\n--- Summary ---");
     eprintln!(
-        "{:<14} {:>7} {:>7} {:>8} {:>8} {:>8} {:>7}",
-        "Quantizer", "BA", "SS2", "PNG", "GIF", "WebP", "ms"
+        "{:<14} {:>7} {:>7} {:>8} {:>8} {:>8} {:>8} {:>7}",
+        "Quantizer", "BA", "SS2", "DSSIM", "PNG", "GIF", "WebP", "ms"
     );
-    eprintln!("{}", "-".repeat(62));
+    eprintln!("{}", "-".repeat(72));
 
     // Collect per-quantizer name
     let mut all_names: Vec<String> = Vec::new();
@@ -572,6 +588,7 @@ fn print_summary(report: &ReportData) {
     for name in &all_names {
         let mut sum_ba = 0.0f64;
         let mut sum_ss2 = 0.0f64;
+        let mut sum_dssim = 0.0f64;
         let mut sum_png = 0usize;
         let mut sum_gif = 0usize;
         let mut sum_webp = 0usize;
@@ -582,6 +599,7 @@ fn print_summary(report: &ReportData) {
             if let Some(q) = img.quantizers.iter().find(|q| &q.name == name) {
                 sum_ba += q.butteraugli;
                 sum_ss2 += q.ssimulacra2;
+                sum_dssim += q.dssim;
                 sum_png += q.png_bytes;
                 sum_gif += q.gif_bytes;
                 sum_webp += q.webp_bytes;
@@ -593,10 +611,11 @@ fn print_summary(report: &ReportData) {
         if count > 0 {
             let n = count as f64;
             eprintln!(
-                "{:<14} {:>7.2} {:>7.1} {:>8.0} {:>8.0} {:>8.0} {:>7.1}",
+                "{:<14} {:>7.2} {:>7.1} {:>8.5} {:>8.0} {:>8.0} {:>8.0} {:>7.1}",
                 name,
                 sum_ba / n,
                 sum_ss2 / n,
+                sum_dssim / n,
                 sum_png as f64 / n,
                 sum_gif as f64 / n,
                 sum_webp as f64 / n,
@@ -651,6 +670,8 @@ fn report_to_json(report: &ReportData) -> String {
             out.push_str(&format!("{:.4}", q.butteraugli));
             out.push_str(",\"ssimulacra2\":");
             out.push_str(&format!("{:.2}", q.ssimulacra2));
+            out.push_str(",\"dssim\":");
+            out.push_str(&format!("{:.6}", q.dssim));
             out.push_str(",\"png_bytes\":");
             out.push_str(&q.png_bytes.to_string());
             out.push_str(",\"gif_bytes\":");
@@ -810,6 +831,10 @@ body {
   position: relative;
   user-select: none;
   -webkit-user-select: none;
+}
+
+.compare-container.diff-mode {
+  isolation: isolate;
 }
 
 .compare-container img {
@@ -1186,13 +1211,16 @@ function renderViewport(img) {
     styleAttr = `width:${w}px;height:${h}px;`;
   }
 
+  const isDiff = viewMode === 'diff' && leftIdx !== rightIdx;
+  container.className = 'compare-container' + (isDiff ? ' diff-mode' : '');
+
   if (leftIdx === rightIdx) {
     // Same choice selected twice — just show the single image
     container.innerHTML = `
       <img class="compare-left" src="${leftSrc}" style="${styleAttr}" alt="${leftLabel}" loading="lazy">
       <div class="compare-labels"><span>${leftLabel}</span></div>
     `;
-  } else if (viewMode === 'diff') {
+  } else if (isDiff) {
     container.innerHTML = `
       <img class="compare-left" src="${leftSrc}" style="${styleAttr}" alt="${leftLabel}" loading="lazy">
       <img class="diff-overlay" src="${rightSrc}" style="${styleAttr}" alt="${rightLabel}" loading="lazy">
@@ -1269,6 +1297,7 @@ function renderMetrics(img) {
   const qs = img.quantizers;
   const bestBA = Math.min(...qs.map(q => q.butteraugli));
   const bestSS2 = Math.max(...qs.map(q => q.ssimulacra2));
+  const bestDSSIM = Math.min(...qs.map(q => q.dssim));
   const bestPNG = Math.min(...qs.map(q => q.png_bytes));
   const bestGIF = Math.min(...qs.map(q => q.gif_bytes));
   const bestWebP = Math.min(...qs.filter(q => q.webp_bytes > 0).map(q => q.webp_bytes));
@@ -1279,7 +1308,7 @@ function renderMetrics(img) {
   const selQuantIdxs = selected.filter(s => s > 0).map(s => s - 1);
 
   let html = `<table class="metrics-table">
-    <tr><th>Quantizer</th><th>BA ↓</th><th>SS2 ↑</th><th>PNG</th><th>GIF</th><th>WebP</th><th>ms</th></tr>`;
+    <tr><th>Quantizer</th><th>BA ↓</th><th>SS2 ↑</th><th>DSSIM ↓</th><th>PNG</th><th>GIF</th><th>WebP</th><th>ms</th></tr>`;
 
   const fmtSize = (v) => v > 0 ? (v / 1024).toFixed(1) + 'K' : '-';
   for (let i = 0; i < qs.length; i++) {
@@ -1289,6 +1318,7 @@ function renderMetrics(img) {
       <td>${q.name}${q.note ? ' *' : ''}</td>
       <td class="${q.butteraugli === bestBA ? 'best' : ''}">${q.butteraugli.toFixed(2)}</td>
       <td class="${q.ssimulacra2 === bestSS2 ? 'best' : ''}">${q.ssimulacra2.toFixed(1)}</td>
+      <td class="${q.dssim === bestDSSIM ? 'best' : ''}">${q.dssim.toFixed(5)}</td>
       <td class="${q.png_bytes === bestPNG ? 'best' : ''}">${fmtSize(q.png_bytes)}</td>
       <td class="${q.gif_bytes === bestGIF ? 'best' : ''}">${fmtSize(q.gif_bytes)}</td>
       <td class="${q.webp_bytes === bestWebP ? 'best' : ''}">${fmtSize(q.webp_bytes)}</td>
@@ -1310,12 +1340,13 @@ function renderSummary() {
   for (const img of DATA.images) {
     for (const q of img.quantizers) {
       if (!totals[q.name]) {
-        totals[q.name] = { ba: 0, ss2: 0, png: 0, gif: 0, webp: 0, ms: 0, n: 0 };
+        totals[q.name] = { ba: 0, ss2: 0, dssim: 0, png: 0, gif: 0, webp: 0, ms: 0, n: 0 };
         names.push(q.name);
       }
       const t = totals[q.name];
       t.ba += q.butteraugli;
       t.ss2 += q.ssimulacra2;
+      t.dssim += q.dssim;
       t.png += q.png_bytes;
       t.gif += q.gif_bytes;
       t.webp += q.webp_bytes;
@@ -1330,6 +1361,7 @@ function renderSummary() {
       name,
       ba: t.ba / t.n,
       ss2: t.ss2 / t.n,
+      dssim: t.dssim / t.n,
       png: t.png / t.n,
       gif: t.gif / t.n,
       webp: t.webp / t.n,
@@ -1339,6 +1371,7 @@ function renderSummary() {
 
   const bestBA = Math.min(...avgs.map(a => a.ba));
   const bestSS2 = Math.max(...avgs.map(a => a.ss2));
+  const bestDSSIM = Math.min(...avgs.map(a => a.dssim));
   const bestPNG = Math.min(...avgs.map(a => a.png));
   const bestGIF = Math.min(...avgs.map(a => a.gif));
   const bestWebP = Math.min(...avgs.filter(a => a.webp > 0).map(a => a.webp));
@@ -1347,13 +1380,14 @@ function renderSummary() {
   const fmtSize = (v) => v > 0 ? (v / 1024).toFixed(1) + 'K' : '-';
 
   let html = `<table class="summary-table">
-    <tr><th>Quantizer</th><th>Avg BA ↓</th><th>Avg SS2 ↑</th><th>Avg PNG</th><th>Avg GIF</th><th>Avg WebP</th><th>Avg ms</th></tr>`;
+    <tr><th>Quantizer</th><th>Avg BA ↓</th><th>Avg SS2 ↑</th><th>Avg DSSIM ↓</th><th>Avg PNG</th><th>Avg GIF</th><th>Avg WebP</th><th>Avg ms</th></tr>`;
 
   for (const a of avgs) {
     html += `<tr>
       <td>${a.name}</td>
       <td class="${a.ba === bestBA ? 'best' : ''}">${a.ba.toFixed(2)}</td>
       <td class="${a.ss2 === bestSS2 ? 'best' : ''}">${a.ss2.toFixed(1)}</td>
+      <td class="${a.dssim === bestDSSIM ? 'best' : ''}">${a.dssim.toFixed(5)}</td>
       <td class="${a.png === bestPNG ? 'best' : ''}">${fmtSize(a.png)}</td>
       <td class="${a.gif === bestGIF ? 'best' : ''}">${fmtSize(a.gif)}</td>
       <td class="${a.webp === bestWebP ? 'best' : ''}">${fmtSize(a.webp)}</td>
