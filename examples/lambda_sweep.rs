@@ -12,7 +12,7 @@ use rgb::RGB8;
 use std::io::Write;
 use std::path::PathBuf;
 
-use zenquant::remap::average_run_length;
+use zenquant::_internals::average_run_length;
 use zenquant::{DitherMode, QuantizeConfig, RunPriority};
 
 const LAMBDAS: &[f32] = &[0.0, 0.005, 0.01, 0.02];

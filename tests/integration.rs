@@ -687,7 +687,7 @@ mod cross_format {
                 let config = QuantizeConfig::new().output_format(fmt);
                 let result = zenquant::quantize(&pixels, w as usize, h as usize, &config).unwrap();
                 let deflate = deflate_size(result.indices());
-                let avg_run = zenquant::remap::average_run_length(result.indices());
+                let avg_run = zenquant::_internals::average_run_length(result.indices());
                 eprintln!(
                     "  {:<15} {:>7} {:>10} {:>8.2}",
                     fmt_name,

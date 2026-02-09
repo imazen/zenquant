@@ -34,6 +34,16 @@ codec-corpus = "1"
 default = ["std"]
 std = ["linear-srgb/std"]
 zengif-backend = ["dep:zengif", "dep:enough", "std"]
+# Expose internal modules for profiling/debugging examples. Not public API.
+_dev = []
 
 [[example]]
 name = "compare"
+
+[[example]]
+name = "profile_steps"
+required-features = ["_dev"]
+
+[[example]]
+name = "hist_debug"
+required-features = ["_dev"]

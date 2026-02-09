@@ -1,6 +1,4 @@
-use zenquant::oklab::srgb_to_oklab;
-use zenquant::palette::index_delta_score;
-use zenquant::remap::average_run_length;
+use zenquant::_internals::{average_run_length, index_delta_score, srgb_to_oklab};
 use zenquant::{DitherMode, QuantizeConfig, RunPriority};
 
 /// Compute mean squared error in OKLab space between original pixels and quantized result.
@@ -130,8 +128,8 @@ fn noisy_image_gets_low_weights() {
         32 * 32
     ];
 
-    let noisy_weights = zenquant::masking::compute_masking_weights(&noisy, 32, 32);
-    let smooth_weights = zenquant::masking::compute_masking_weights(&smooth, 32, 32);
+    let noisy_weights = zenquant::_internals::compute_masking_weights(&noisy, 32, 32);
+    let smooth_weights = zenquant::_internals::compute_masking_weights(&smooth, 32, 32);
 
     let noisy_mean: f32 = noisy_weights.iter().sum::<f32>() / noisy_weights.len() as f32;
     let smooth_mean: f32 = smooth_weights.iter().sum::<f32>() / smooth_weights.len() as f32;

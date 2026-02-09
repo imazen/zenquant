@@ -18,7 +18,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use zenquant::remap::average_run_length;
+use zenquant::_internals::average_run_length;
 use zenquant::{DitherMode, QuantizeConfig, RunPriority};
 
 fn main() {

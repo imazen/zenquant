@@ -3,20 +3,45 @@
 
 extern crate alloc;
 
-pub mod dither;
+pub(crate) mod dither;
 pub mod error;
-pub mod histogram;
-pub mod masking;
-pub mod median_cut;
-pub mod oklab;
-pub mod palette;
-pub mod remap;
+pub(crate) mod histogram;
+pub(crate) mod masking;
+pub(crate) mod median_cut;
+pub(crate) mod oklab;
+pub(crate) mod palette;
+pub(crate) mod remap;
 #[cfg(feature = "zengif-backend")]
 pub mod zengif_backend;
 
 pub use dither::DitherMode;
 pub use error::QuantizeError;
 pub use remap::RunPriority;
+pub use rgb::{RGB, RGBA};
+
+// Re-export internal helpers used by tests and benchmarking examples.
+// Not part of the public API — may change without notice.
+#[doc(hidden)]
+pub mod _internals {
+    pub use crate::masking::compute_masking_weights;
+    pub use crate::oklab::srgb_to_oklab;
+    pub use crate::palette::index_delta_score;
+    pub use crate::remap::average_run_length;
+}
+
+// Internal modules re-exposed for profiling/debugging examples.
+// Gated behind the `_dev` feature — not part of the public API.
+#[cfg(feature = "_dev")]
+#[doc(hidden)]
+pub mod _dev {
+    pub use crate::dither;
+    pub use crate::histogram;
+    pub use crate::masking;
+    pub use crate::median_cut;
+    pub use crate::oklab;
+    pub use crate::palette;
+    pub use crate::remap;
+}
 
 use alloc::vec::Vec;
 
@@ -155,47 +180,67 @@ impl Default for QuantizeConfig {
 }
 
 impl QuantizeConfig {
+    /// Create a new config with default settings (256 colors, quality 85, adaptive dithering).
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Maximum palette colors (2–256). Default: 256.
     pub fn max_colors(mut self, n: u32) -> Self {
         self.max_colors = n;
         self
     }
 
+    /// Quality preset (0–100). Controls k-means iterations, AQ masking,
+    /// and Viterbi optimization. Default: 85.
+    ///
+    /// - **0–49:** fast mode — no masking or refinement
+    /// - **50–74:** balanced — masking + 2 k-means iterations + run extension
+    /// - **75–100:** quality — masking + 8 k-means iterations + Viterbi DP
     pub fn quality(mut self, q: u32) -> Self {
         self.quality = q;
         self
     }
 
+    /// Compression vs quality tradeoff for index optimization.
+    /// Only affects quality >= 50. Default: `Balanced`.
     pub fn run_priority(mut self, rp: RunPriority) -> Self {
         self.run_priority = rp;
         self
     }
 
+    /// Dithering algorithm. Default: `Adaptive`.
     pub fn dither(mut self, mode: DitherMode) -> Self {
         self.dither = mode;
         self
     }
 
+    /// Target output format. Tunes palette sort order, dither strength,
+    /// and Viterbi lambda for the format's compression algorithm.
+    /// Default: `Generic` (no format-specific tuning).
     pub fn output_format(mut self, format: OutputFormat) -> Self {
         self.output_format = format;
         self
     }
 
+    /// Override dither strength (0.0–1.0). `None` uses the format default.
     pub fn dither_strength(mut self, strength: f32) -> Self {
         self.dither_strength = Some(strength);
         self
     }
 
+    /// Override Viterbi lambda (0.0 disables). `None` uses the `RunPriority` default.
     pub fn viterbi_lambda(mut self, lambda: f32) -> Self {
         self.viterbi_lambda = Some(lambda);
         self
     }
 }
 
-/// Quantization result.
+/// Result of palette quantization.
+///
+/// Contains an optimized palette and per-pixel indices into that palette.
+/// Use [`palette()`](Self::palette) for RGB or [`palette_rgba()`](Self::palette_rgba) for RGBA,
+/// and [`indices()`](Self::indices) for the index map.
 #[derive(Debug)]
 pub struct QuantizeResult {
     palette: palette::Palette,
@@ -203,12 +248,12 @@ pub struct QuantizeResult {
 }
 
 impl QuantizeResult {
-    /// Get the sRGB palette entries, delta-sorted.
+    /// sRGB palette entries, sorted for the target output format.
     pub fn palette(&self) -> &[[u8; 3]] {
         self.palette.entries()
     }
 
-    /// Get the palette index for each pixel.
+    /// Palette index for each pixel, in row-major order: `pixel = y * width + x`.
     pub fn indices(&self) -> &[u8] {
         &self.indices
     }
@@ -243,7 +288,26 @@ impl QuantizeResult {
     }
 }
 
-/// Quantize an RGB image to a palette.
+/// Quantize an RGB image to an indexed palette.
+///
+/// Returns a [`QuantizeResult`] with palette entries and per-pixel indices.
+/// Indices are in row-major order: `index = y * width + x`.
+///
+/// # Example
+///
+/// ```no_run
+/// use zenquant::{QuantizeConfig, OutputFormat};
+///
+/// # let pixels: Vec<rgb::RGB<u8>> = vec![];
+/// # let (width, height) = (64, 64);
+/// let config = QuantizeConfig::new()
+///     .quality(85)
+///     .output_format(OutputFormat::Png);
+/// let result = zenquant::quantize(&pixels, width, height, &config).unwrap();
+///
+/// let palette = result.palette();   // &[[u8; 3]] — sRGB palette
+/// let indices = result.indices();   // &[u8] — row-major palette indices
+/// ```
 pub fn quantize(
     pixels: &[rgb::RGB<u8>],
     width: usize,
@@ -388,8 +452,29 @@ pub fn quantize(
     })
 }
 
-/// Quantize an RGBA image to a palette.
-/// Fully transparent pixels (alpha == 0) are assigned a dedicated transparent index.
+/// Quantize an RGBA image to an indexed palette.
+///
+/// Transparent pixels (alpha == 0) get a dedicated transparent palette index,
+/// accessible via [`QuantizeResult::transparent_index()`]. For formats with
+/// per-index alpha (PNG tRNS, WebP), use [`QuantizeResult::palette_rgba()`]
+/// and [`QuantizeResult::alpha_table()`].
+///
+/// # Example
+///
+/// ```no_run
+/// use zenquant::{QuantizeConfig, OutputFormat};
+///
+/// # let pixels: Vec<rgb::RGBA<u8>> = vec![];
+/// # let (width, height) = (64, 64);
+/// let config = QuantizeConfig::new()
+///     .quality(85)
+///     .output_format(OutputFormat::Gif);
+/// let result = zenquant::quantize_rgba(&pixels, width, height, &config).unwrap();
+///
+/// let palette = result.palette();            // &[[u8; 3]]
+/// let indices = result.indices();            // &[u8]
+/// let transparent = result.transparent_index(); // Option<u8>
+/// ```
 pub fn quantize_rgba(
     pixels: &[rgb::RGBA<u8>],
     width: usize,

@@ -6,12 +6,12 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use zenquant::dither::{DitherMode as DM, dither_image};
-use zenquant::histogram;
-use zenquant::masking;
-use zenquant::median_cut;
-use zenquant::palette::{Palette, PaletteSortStrategy};
-use zenquant::remap;
+use zenquant::_dev::dither::{DitherMode as DM, dither_image};
+use zenquant::_dev::histogram;
+use zenquant::_dev::masking;
+use zenquant::_dev::median_cut;
+use zenquant::_dev::palette::{Palette, PaletteSortStrategy};
+use zenquant::_dev::remap;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

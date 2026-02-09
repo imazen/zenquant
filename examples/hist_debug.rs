@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use zenquant::oklab::srgb_to_oklab;
+use zenquant::_dev::oklab::srgb_to_oklab;
 
 fn count_bins(pixels: &[rgb::RGB<u8>], bits: u32) -> usize {
     let max_val = (1u32 << bits) - 1;

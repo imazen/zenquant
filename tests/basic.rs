@@ -229,7 +229,7 @@ fn output_format_png() {
     let result = zenquant::quantize(&pixels, 8, 8, &config).unwrap();
     assert!(result.palette_len() <= 16);
     // PNG uses luminance sort — palette L values should be monotonically increasing
-    let labs = zenquant::oklab::srgb_to_oklab;
+    let labs = zenquant::_internals::srgb_to_oklab;
     let mut prev_l = -1.0f32;
     for entry in result.palette() {
         let lab = labs(entry[0], entry[1], entry[2]);
