@@ -15,10 +15,18 @@ pub enum DitherMode {
     Adaptive,
 }
 
-/// Apply Floyd-Steinberg error diffusion with AQ modulation.
+/// Apply serpentine Floyd-Steinberg error diffusion with AQ modulation.
 ///
 /// `dither_strength` controls the fraction of quantization error to diffuse
 /// (0.0 = no dithering, 0.5 = half-strength, 1.0 = standard Floyd-Steinberg).
+///
+/// Improvements over naive Floyd-Steinberg:
+/// - Serpentine scanning: alternates L→R and R→L each row, preventing
+///   directional banding artifacts visible at higher dither strengths.
+/// - Error magnitude reduction: when accumulated error exceeds a threshold,
+///   it's damped by 75% to prevent runaway error accumulation.
+/// - OKLab gamut clamping: prevents error-adjusted values from drifting
+///   outside the representable color space.
 #[allow(clippy::too_many_arguments)]
 pub fn dither_image(
     pixels: &[rgb::RGB<u8>],
@@ -46,10 +54,26 @@ pub fn dither_image(
         .collect();
 
     let mut indices = vec![0u8; pixels.len()];
-    let mut prev_index: Option<u8> = None;
+
+    // Error magnitude threshold — errors beyond this get damped.
+    // Scaled by dither_strength so higher dither levels allow proportionally
+    // larger errors before damping kicks in.
+    let max_err_sq = 0.002 * dither_strength;
+
+    let adaptive = mode == DitherMode::Adaptive;
 
     for y in 0..height {
-        for x in 0..width {
+        // Serpentine: even rows L→R, odd rows R→L
+        let forward = y % 2 == 0;
+        let mut prev_index: Option<u8> = None;
+
+        let x_iter: Box<dyn Iterator<Item = usize>> = if forward {
+            Box::new(0..width)
+        } else {
+            Box::new((0..width).rev())
+        };
+
+        for x in x_iter {
             let idx = y * width + x;
             let current = OKLab::new(lab_buf[idx][0], lab_buf[idx][1], lab_buf[idx][2]);
 
@@ -86,12 +110,20 @@ pub fn dither_image(
             let chosen_lab = palette.entries_oklab()[chosen as usize];
 
             // Compute quantization error, scaled by dither strength
-            let err_l = (current.l - chosen_lab.l) * dither_strength;
-            let err_a = (current.a - chosen_lab.a) * dither_strength;
-            let err_b = (current.b - chosen_lab.b) * dither_strength;
+            let mut err_l = (current.l - chosen_lab.l) * dither_strength;
+            let mut err_a = (current.a - chosen_lab.a) * dither_strength;
+            let mut err_b = (current.b - chosen_lab.b) * dither_strength;
 
-            // Diffuse error with AQ modulation.
-            // Error is generated at reduced strength but *received* with the target pixel's AQ weight.
+            // Error magnitude reduction: damp large errors to prevent
+            // runaway accumulation that creates visible noise patterns.
+            let err_mag = err_l * err_l + err_a * err_a + err_b * err_b;
+            if err_mag > max_err_sq {
+                err_l *= 0.75;
+                err_a *= 0.75;
+                err_b *= 0.75;
+            }
+
+            // Diffuse error with AQ modulation and gamut clamping.
             let diffuse_err = |buf: &mut [[f32; 3]],
                                target_idx: usize,
                                fraction: f32,
@@ -100,33 +132,59 @@ pub fn dither_image(
                                eb: f32,
                                w_mod: f32| {
                 let scale = fraction * w_mod;
-                buf[target_idx][0] += el * scale;
-                buf[target_idx][1] += ea * scale;
-                buf[target_idx][2] += eb * scale;
+                let v = &mut buf[target_idx];
+                v[0] = (v[0] + el * scale).clamp(0.0, 1.0);
+                v[1] = (v[1] + ea * scale).clamp(-0.5, 0.5);
+                v[2] = (v[2] + eb * scale).clamp(-0.5, 0.5);
             };
 
-            let adaptive = mode == DitherMode::Adaptive;
-
-            // Floyd-Steinberg kernel: right 7/16, bottom-left 3/16, bottom 5/16, bottom-right 1/16
-            if x + 1 < width {
-                let w = if adaptive { weights[idx + 1] } else { 1.0 };
-                diffuse_err(&mut lab_buf, idx + 1, 7.0 / 16.0, err_l, err_a, err_b, w);
-            }
-            if y + 1 < height {
-                if x > 0 {
-                    let ti = (y + 1) * width + (x - 1);
-                    let w = if adaptive { weights[ti] } else { 1.0 };
-                    diffuse_err(&mut lab_buf, ti, 3.0 / 16.0, err_l, err_a, err_b, w);
-                }
-                {
-                    let ti = (y + 1) * width + x;
-                    let w = if adaptive { weights[ti] } else { 1.0 };
-                    diffuse_err(&mut lab_buf, ti, 5.0 / 16.0, err_l, err_a, err_b, w);
-                }
+            // Serpentine Floyd-Steinberg kernel:
+            //   Forward (L→R): right 7/16, bottom-left 3/16, bottom 5/16, bottom-right 1/16
+            //   Reverse (R→L): left 7/16, bottom-right 3/16, bottom 5/16, bottom-left 1/16
+            if forward {
                 if x + 1 < width {
-                    let ti = (y + 1) * width + (x + 1);
-                    let w = if adaptive { weights[ti] } else { 1.0 };
-                    diffuse_err(&mut lab_buf, ti, 1.0 / 16.0, err_l, err_a, err_b, w);
+                    let w = if adaptive { weights[idx + 1] } else { 1.0 };
+                    diffuse_err(&mut lab_buf, idx + 1, 7.0 / 16.0, err_l, err_a, err_b, w);
+                }
+                if y + 1 < height {
+                    if x > 0 {
+                        let ti = (y + 1) * width + (x - 1);
+                        let w = if adaptive { weights[ti] } else { 1.0 };
+                        diffuse_err(&mut lab_buf, ti, 3.0 / 16.0, err_l, err_a, err_b, w);
+                    }
+                    {
+                        let ti = (y + 1) * width + x;
+                        let w = if adaptive { weights[ti] } else { 1.0 };
+                        diffuse_err(&mut lab_buf, ti, 5.0 / 16.0, err_l, err_a, err_b, w);
+                    }
+                    if x + 1 < width {
+                        let ti = (y + 1) * width + (x + 1);
+                        let w = if adaptive { weights[ti] } else { 1.0 };
+                        diffuse_err(&mut lab_buf, ti, 1.0 / 16.0, err_l, err_a, err_b, w);
+                    }
+                }
+            } else {
+                // Reverse: "right" is actually left (x - 1)
+                if x > 0 {
+                    let w = if adaptive { weights[idx - 1] } else { 1.0 };
+                    diffuse_err(&mut lab_buf, idx - 1, 7.0 / 16.0, err_l, err_a, err_b, w);
+                }
+                if y + 1 < height {
+                    if x + 1 < width {
+                        let ti = (y + 1) * width + (x + 1);
+                        let w = if adaptive { weights[ti] } else { 1.0 };
+                        diffuse_err(&mut lab_buf, ti, 3.0 / 16.0, err_l, err_a, err_b, w);
+                    }
+                    {
+                        let ti = (y + 1) * width + x;
+                        let w = if adaptive { weights[ti] } else { 1.0 };
+                        diffuse_err(&mut lab_buf, ti, 5.0 / 16.0, err_l, err_a, err_b, w);
+                    }
+                    if x > 0 {
+                        let ti = (y + 1) * width + (x - 1);
+                        let w = if adaptive { weights[ti] } else { 1.0 };
+                        diffuse_err(&mut lab_buf, ti, 1.0 / 16.0, err_l, err_a, err_b, w);
+                    }
                 }
             }
         }
@@ -135,7 +193,8 @@ pub fn dither_image(
     indices
 }
 
-/// Apply dithering for RGBA images. Transparent pixels pass through unchanged.
+/// Apply serpentine Floyd-Steinberg dithering for RGBA images.
+/// Transparent pixels pass through unchanged.
 #[allow(clippy::too_many_arguments)]
 pub fn dither_image_rgba(
     pixels: &[rgb::RGBA<u8>],
@@ -154,6 +213,8 @@ pub fn dither_image_rgba(
     }
 
     let run_bias = run_priority.bias();
+    let max_err_sq = 0.002 * dither_strength;
+    let adaptive = mode == DitherMode::Adaptive;
 
     let mut lab_buf: Vec<[f32; 3]> = pixels
         .iter()
@@ -164,10 +225,18 @@ pub fn dither_image_rgba(
         .collect();
 
     let mut indices = vec![0u8; pixels.len()];
-    let mut prev_index: Option<u8> = None;
 
     for y in 0..height {
-        for x in 0..width {
+        let forward = y % 2 == 0;
+        let mut prev_index: Option<u8> = None;
+
+        let x_iter: Box<dyn Iterator<Item = usize>> = if forward {
+            Box::new(0..width)
+        } else {
+            Box::new((0..width).rev())
+        };
+
+        for x in x_iter {
             let idx = y * width + x;
 
             if pixels[idx].a == 0 {
@@ -208,11 +277,16 @@ pub fn dither_image_rgba(
             prev_index = Some(chosen);
 
             let chosen_lab = palette.entries_oklab()[chosen as usize];
-            let err_l = (current.l - chosen_lab.l) * dither_strength;
-            let err_a = (current.a - chosen_lab.a) * dither_strength;
-            let err_b = (current.b - chosen_lab.b) * dither_strength;
+            let mut err_l = (current.l - chosen_lab.l) * dither_strength;
+            let mut err_a = (current.a - chosen_lab.a) * dither_strength;
+            let mut err_b = (current.b - chosen_lab.b) * dither_strength;
 
-            let adaptive = mode == DitherMode::Adaptive;
+            let err_mag = err_l * err_l + err_a * err_a + err_b * err_b;
+            if err_mag > max_err_sq {
+                err_l *= 0.75;
+                err_a *= 0.75;
+                err_b *= 0.75;
+            }
 
             let diffuse_err = |buf: &mut [[f32; 3]],
                                ti: usize,
@@ -222,35 +296,68 @@ pub fn dither_image_rgba(
                                eb: f32,
                                w_mod: f32| {
                 let scale = fraction * w_mod;
-                buf[ti][0] += el * scale;
-                buf[ti][1] += ea * scale;
-                buf[ti][2] += eb * scale;
+                let v = &mut buf[ti];
+                v[0] = (v[0] + el * scale).clamp(0.0, 1.0);
+                v[1] = (v[1] + ea * scale).clamp(-0.5, 0.5);
+                v[2] = (v[2] + eb * scale).clamp(-0.5, 0.5);
             };
 
-            if x + 1 < width && pixels[idx + 1].a > 0 {
-                let w = if adaptive { weights[idx + 1] } else { 1.0 };
-                diffuse_err(&mut lab_buf, idx + 1, 7.0 / 16.0, err_l, err_a, err_b, w);
-            }
-            if y + 1 < height {
-                if x > 0 {
-                    let ti = (y + 1) * width + (x - 1);
-                    if pixels[ti].a > 0 {
-                        let w = if adaptive { weights[ti] } else { 1.0 };
-                        diffuse_err(&mut lab_buf, ti, 3.0 / 16.0, err_l, err_a, err_b, w);
+            let opaque_at = |px: usize| pixels[px].a > 0;
+
+            if forward {
+                if x + 1 < width && opaque_at(idx + 1) {
+                    let w = if adaptive { weights[idx + 1] } else { 1.0 };
+                    diffuse_err(&mut lab_buf, idx + 1, 7.0 / 16.0, err_l, err_a, err_b, w);
+                }
+                if y + 1 < height {
+                    if x > 0 {
+                        let ti = (y + 1) * width + (x - 1);
+                        if opaque_at(ti) {
+                            let w = if adaptive { weights[ti] } else { 1.0 };
+                            diffuse_err(&mut lab_buf, ti, 3.0 / 16.0, err_l, err_a, err_b, w);
+                        }
+                    }
+                    {
+                        let ti = (y + 1) * width + x;
+                        if opaque_at(ti) {
+                            let w = if adaptive { weights[ti] } else { 1.0 };
+                            diffuse_err(&mut lab_buf, ti, 5.0 / 16.0, err_l, err_a, err_b, w);
+                        }
+                    }
+                    if x + 1 < width {
+                        let ti = (y + 1) * width + (x + 1);
+                        if opaque_at(ti) {
+                            let w = if adaptive { weights[ti] } else { 1.0 };
+                            diffuse_err(&mut lab_buf, ti, 1.0 / 16.0, err_l, err_a, err_b, w);
+                        }
                     }
                 }
-                {
-                    let ti = (y + 1) * width + x;
-                    if pixels[ti].a > 0 {
-                        let w = if adaptive { weights[ti] } else { 1.0 };
-                        diffuse_err(&mut lab_buf, ti, 5.0 / 16.0, err_l, err_a, err_b, w);
-                    }
+            } else {
+                if x > 0 && opaque_at(idx - 1) {
+                    let w = if adaptive { weights[idx - 1] } else { 1.0 };
+                    diffuse_err(&mut lab_buf, idx - 1, 7.0 / 16.0, err_l, err_a, err_b, w);
                 }
-                if x + 1 < width {
-                    let ti = (y + 1) * width + (x + 1);
-                    if pixels[ti].a > 0 {
-                        let w = if adaptive { weights[ti] } else { 1.0 };
-                        diffuse_err(&mut lab_buf, ti, 1.0 / 16.0, err_l, err_a, err_b, w);
+                if y + 1 < height {
+                    if x + 1 < width {
+                        let ti = (y + 1) * width + (x + 1);
+                        if opaque_at(ti) {
+                            let w = if adaptive { weights[ti] } else { 1.0 };
+                            diffuse_err(&mut lab_buf, ti, 3.0 / 16.0, err_l, err_a, err_b, w);
+                        }
+                    }
+                    {
+                        let ti = (y + 1) * width + x;
+                        if opaque_at(ti) {
+                            let w = if adaptive { weights[ti] } else { 1.0 };
+                            diffuse_err(&mut lab_buf, ti, 5.0 / 16.0, err_l, err_a, err_b, w);
+                        }
+                    }
+                    if x > 0 {
+                        let ti = (y + 1) * width + (x - 1);
+                        if opaque_at(ti) {
+                            let w = if adaptive { weights[ti] } else { 1.0 };
+                            diffuse_err(&mut lab_buf, ti, 1.0 / 16.0, err_l, err_a, err_b, w);
+                        }
                     }
                 }
             }
@@ -260,7 +367,7 @@ pub fn dither_image_rgba(
     indices
 }
 
-/// Alpha-aware dithering: error diffusion includes alpha channel.
+/// Alpha-aware serpentine dithering: error diffusion includes alpha channel.
 /// Used when the palette has per-entry alpha values (PNG, WebP, JXL, Generic).
 #[allow(clippy::too_many_arguments)]
 pub fn dither_image_rgba_alpha(
@@ -280,6 +387,8 @@ pub fn dither_image_rgba_alpha(
     }
 
     let run_bias = run_priority.bias();
+    let max_err_sq = 0.002 * dither_strength;
+    let adaptive = mode == DitherMode::Adaptive;
 
     // Working buffer: [L, a, b, alpha]
     let mut lab_buf: Vec<[f32; 4]> = pixels
@@ -292,10 +401,18 @@ pub fn dither_image_rgba_alpha(
         .collect();
 
     let mut indices = vec![0u8; pixels.len()];
-    let mut prev_index: Option<u8> = None;
 
     for y in 0..height {
-        for x in 0..width {
+        let forward = y % 2 == 0;
+        let mut prev_index: Option<u8> = None;
+
+        let x_iter: Box<dyn Iterator<Item = usize>> = if forward {
+            Box::new(0..width)
+        } else {
+            Box::new((0..width).rev())
+        };
+
+        for x in x_iter {
             let idx = y * width + x;
             let current_alpha = lab_buf[idx][3];
 
@@ -339,13 +456,18 @@ pub fn dither_image_rgba_alpha(
             let chosen_lab = palette.entries_oklab()[chosen as usize];
             let chosen_alpha = palette.entries_rgba()[chosen as usize][3] as f32 / 255.0;
 
-            // Compute quantization error in color + alpha
-            let err_l = (current.l - chosen_lab.l) * dither_strength;
-            let err_a = (current.a - chosen_lab.a) * dither_strength;
-            let err_b = (current.b - chosen_lab.b) * dither_strength;
-            let err_al = (current_alpha - chosen_alpha) * dither_strength;
+            let mut err_l = (current.l - chosen_lab.l) * dither_strength;
+            let mut err_a = (current.a - chosen_lab.a) * dither_strength;
+            let mut err_b = (current.b - chosen_lab.b) * dither_strength;
+            let mut err_al = (current_alpha - chosen_alpha) * dither_strength;
 
-            let adaptive = mode == DitherMode::Adaptive;
+            let err_mag = err_l * err_l + err_a * err_a + err_b * err_b;
+            if err_mag > max_err_sq {
+                err_l *= 0.75;
+                err_a *= 0.75;
+                err_b *= 0.75;
+                err_al *= 0.75;
+            }
 
             let diffuse_err = |buf: &mut [[f32; 4]],
                                ti: usize,
@@ -356,46 +478,69 @@ pub fn dither_image_rgba_alpha(
                                eal: f32,
                                w_mod: f32| {
                 let scale = fraction * w_mod;
-                buf[ti][0] += el * scale;
-                buf[ti][1] += ea * scale;
-                buf[ti][2] += eb * scale;
-                buf[ti][3] += eal * scale;
+                let v = &mut buf[ti];
+                v[0] = (v[0] + el * scale).clamp(0.0, 1.0);
+                v[1] = (v[1] + ea * scale).clamp(-0.5, 0.5);
+                v[2] = (v[2] + eb * scale).clamp(-0.5, 0.5);
+                v[3] = (v[3] + eal * scale).clamp(0.0, 1.0);
             };
 
-            // Don't diffuse error to fully-transparent neighbors
-            if x + 1 < width && pixels[idx + 1].a > 0 {
-                let w = if adaptive { weights[idx + 1] } else { 1.0 };
-                diffuse_err(
-                    &mut lab_buf,
-                    idx + 1,
-                    7.0 / 16.0,
-                    err_l,
-                    err_a,
-                    err_b,
-                    err_al,
-                    w,
-                );
-            }
-            if y + 1 < height {
-                if x > 0 {
-                    let ti = (y + 1) * width + (x - 1);
-                    if pixels[ti].a > 0 {
-                        let w = if adaptive { weights[ti] } else { 1.0 };
-                        diffuse_err(&mut lab_buf, ti, 3.0 / 16.0, err_l, err_a, err_b, err_al, w);
+            let opaque_at = |px: usize| pixels[px].a > 0;
+
+            if forward {
+                if x + 1 < width && opaque_at(idx + 1) {
+                    let w = if adaptive { weights[idx + 1] } else { 1.0 };
+                    diffuse_err(&mut lab_buf, idx + 1, 7.0 / 16.0, err_l, err_a, err_b, err_al, w);
+                }
+                if y + 1 < height {
+                    if x > 0 {
+                        let ti = (y + 1) * width + (x - 1);
+                        if opaque_at(ti) {
+                            let w = if adaptive { weights[ti] } else { 1.0 };
+                            diffuse_err(&mut lab_buf, ti, 3.0 / 16.0, err_l, err_a, err_b, err_al, w);
+                        }
+                    }
+                    {
+                        let ti = (y + 1) * width + x;
+                        if opaque_at(ti) {
+                            let w = if adaptive { weights[ti] } else { 1.0 };
+                            diffuse_err(&mut lab_buf, ti, 5.0 / 16.0, err_l, err_a, err_b, err_al, w);
+                        }
+                    }
+                    if x + 1 < width {
+                        let ti = (y + 1) * width + (x + 1);
+                        if opaque_at(ti) {
+                            let w = if adaptive { weights[ti] } else { 1.0 };
+                            diffuse_err(&mut lab_buf, ti, 1.0 / 16.0, err_l, err_a, err_b, err_al, w);
+                        }
                     }
                 }
-                {
-                    let ti = (y + 1) * width + x;
-                    if pixels[ti].a > 0 {
-                        let w = if adaptive { weights[ti] } else { 1.0 };
-                        diffuse_err(&mut lab_buf, ti, 5.0 / 16.0, err_l, err_a, err_b, err_al, w);
-                    }
+            } else {
+                if x > 0 && opaque_at(idx - 1) {
+                    let w = if adaptive { weights[idx - 1] } else { 1.0 };
+                    diffuse_err(&mut lab_buf, idx - 1, 7.0 / 16.0, err_l, err_a, err_b, err_al, w);
                 }
-                if x + 1 < width {
-                    let ti = (y + 1) * width + (x + 1);
-                    if pixels[ti].a > 0 {
-                        let w = if adaptive { weights[ti] } else { 1.0 };
-                        diffuse_err(&mut lab_buf, ti, 1.0 / 16.0, err_l, err_a, err_b, err_al, w);
+                if y + 1 < height {
+                    if x + 1 < width {
+                        let ti = (y + 1) * width + (x + 1);
+                        if opaque_at(ti) {
+                            let w = if adaptive { weights[ti] } else { 1.0 };
+                            diffuse_err(&mut lab_buf, ti, 3.0 / 16.0, err_l, err_a, err_b, err_al, w);
+                        }
+                    }
+                    {
+                        let ti = (y + 1) * width + x;
+                        if opaque_at(ti) {
+                            let w = if adaptive { weights[ti] } else { 1.0 };
+                            diffuse_err(&mut lab_buf, ti, 5.0 / 16.0, err_l, err_a, err_b, err_al, w);
+                        }
+                    }
+                    if x > 0 {
+                        let ti = (y + 1) * width + (x - 1);
+                        if opaque_at(ti) {
+                            let w = if adaptive { weights[ti] } else { 1.0 };
+                            diffuse_err(&mut lab_buf, ti, 1.0 / 16.0, err_l, err_a, err_b, err_al, w);
+                        }
                     }
                 }
             }
