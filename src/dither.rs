@@ -77,10 +77,36 @@ pub fn dither_image(
             let idx = y * width + x;
             let current = OKLab::new(lab_buf[idx][0], lab_buf[idx][1], lab_buf[idx][2]);
 
-            // Find nearest palette entry using seed + neighbor refinement
+            // Find nearest palette entry to the error-adjusted pixel
             let p = pixels[idx];
+            let orig_lab = srgb_to_oklab(p.r, p.g, p.b);
             let seed = palette.nearest_cached(p.r, p.g, p.b);
-            let best = palette.nearest_seeded(current, seed);
+            let dithered_best = palette.nearest_seeded(current, seed);
+
+            // Undithered fallback: if error diffusion pushed us to a palette
+            // entry much farther from the *original* pixel than the naive
+            // nearest match, the dithering created a discordant speckle.
+            // Only reject when the dithered choice is >2x worse.
+            let undithered_best = palette.nearest_seeded(orig_lab, seed);
+            let best = if dithered_best == undithered_best {
+                dithered_best
+            } else {
+                let d_dithered = orig_lab.distance_sq(
+                    palette.entries_oklab()[dithered_best as usize],
+                );
+                let d_undithered = orig_lab.distance_sq(
+                    palette.entries_oklab()[undithered_best as usize],
+                );
+                // Allow the dithered choice unless it's >2x farther from the
+                // original than the undithered choice. This permits normal
+                // dithering between nearby palette entries while blocking
+                // gross hue shifts.
+                if d_dithered <= d_undithered * 2.0 {
+                    dithered_best
+                } else {
+                    undithered_best
+                }
+            };
             let best_lab = palette.entries_oklab()[best as usize];
 
             // Run-aware dither suppression: if we'd extend a run, and we're in
@@ -247,8 +273,26 @@ pub fn dither_image_rgba(
 
             let current = OKLab::new(lab_buf[idx][0], lab_buf[idx][1], lab_buf[idx][2]);
             let p = pixels[idx];
+            let orig_lab = srgb_to_oklab(p.r, p.g, p.b);
             let seed = palette.nearest_cached(p.r, p.g, p.b);
-            let best = palette.nearest_seeded(current, seed);
+            let dithered_best = palette.nearest_seeded(current, seed);
+
+            let undithered_best = palette.nearest_seeded(orig_lab, seed);
+            let best = if dithered_best == undithered_best {
+                dithered_best
+            } else {
+                let d_dithered = orig_lab.distance_sq(
+                    palette.entries_oklab()[dithered_best as usize],
+                );
+                let d_undithered = orig_lab.distance_sq(
+                    palette.entries_oklab()[undithered_best as usize],
+                );
+                if d_dithered <= d_undithered * 2.0 {
+                    dithered_best
+                } else {
+                    undithered_best
+                }
+            };
             let best_lab = palette.entries_oklab()[best as usize];
 
             let chosen = if run_bias > 0.0 {
@@ -424,7 +468,27 @@ pub fn dither_image_rgba_alpha(
             }
 
             let current = OKLab::new(lab_buf[idx][0], lab_buf[idx][1], lab_buf[idx][2]);
-            let best = palette.nearest_with_alpha(current, current_alpha);
+            let p = pixels[idx];
+            let orig_lab = srgb_to_oklab(p.r, p.g, p.b);
+            let orig_alpha = p.a as f32 / 255.0;
+            let dithered_best = palette.nearest_with_alpha(current, current_alpha);
+
+            let undithered_best = palette.nearest_with_alpha(orig_lab, orig_alpha);
+            let best = if dithered_best == undithered_best {
+                dithered_best
+            } else {
+                let d_dithered = orig_lab.distance_sq(
+                    palette.entries_oklab()[dithered_best as usize],
+                );
+                let d_undithered = orig_lab.distance_sq(
+                    palette.entries_oklab()[undithered_best as usize],
+                );
+                if d_dithered <= d_undithered * 2.0 {
+                    dithered_best
+                } else {
+                    undithered_best
+                }
+            };
             let best_lab = palette.entries_oklab()[best as usize];
 
             let chosen = if run_bias > 0.0 {
