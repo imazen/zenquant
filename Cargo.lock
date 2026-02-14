@@ -53,12 +53,6 @@ dependencies = [
 
 [[package]]
 name = "bitflags"
-version = "1.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
-
-[[package]]
-name = "bitflags"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "812e12b5285cc515a9c72a5c1d3b6d46a19dac5acfef5265968c166106e31dd3"
@@ -407,7 +401,7 @@ dependencies = [
  "byteorder-lite",
  "moxcms",
  "num-traits",
- "png 0.18.0",
+ "png",
 ]
 
 [[package]]
@@ -466,7 +460,7 @@ version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d0b95e02c851351f877147b7deea7b1afb1df71b63aa5f8270716e0c5720616"
 dependencies = [
- "bitflags 2.10.0",
+ "bitflags",
  "libc",
 ]
 
@@ -613,24 +607,11 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "png"
-version = "0.17.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82151a2fc869e011c153adc57cf2789ccb8d9906ce52c0b39a6b5697749d7526"
-dependencies = [
- "bitflags 1.3.2",
- "crc32fast",
- "fdeflate",
- "flate2",
- "miniz_oxide",
-]
-
-[[package]]
-name = "png"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97baced388464909d42d89643fe4361939af9b7ce7a31ee32a168f832a70f2a0"
 dependencies = [
- "bitflags 2.10.0",
+ "bitflags",
  "crc32fast",
  "fdeflate",
  "flate2",
@@ -716,7 +697,7 @@ version = "1.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "146c9e247ccc180c1f61615433868c99f3de3ae256a30a43b49f67c2d9171f34"
 dependencies = [
- "bitflags 2.10.0",
+ "bitflags",
  "errno",
  "libc",
  "linux-raw-sys",
@@ -1092,15 +1073,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "453f24cf9e21be2148954a438c72fb999da42b1d128105bfd73ce91e1c6c7d33"
 
 [[package]]
+name = "zencodec-types"
+version = "0.1.0"
+dependencies = [
+ "enough",
+ "imgref",
+ "rgb",
+]
+
+[[package]]
 name = "zengif"
 version = "0.6.0"
 dependencies = [
  "bytemuck",
  "enough",
  "gif",
+ "linear-srgb",
  "quantizr",
  "rgb",
  "whereat",
+ "zencodec-types",
 ]
 
 [[package]]
@@ -1120,7 +1112,7 @@ dependencies = [
  "imagequant",
  "imgref",
  "linear-srgb",
- "png 0.17.16",
+ "png",
  "quantizr",
  "rgb",
  "thiserror",
@@ -1136,7 +1128,9 @@ dependencies = [
  "enough",
  "hashbrown",
  "libm",
+ "linear-srgb",
  "rgb",
  "thiserror",
  "whereat",
+ "zencodec-types",
 ]

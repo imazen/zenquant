@@ -27,7 +27,7 @@ quantizr = "1"
 flate2 = "1"
 butteraugli = "0.4"
 fast-ssim2 = { version = "0.6", features = ["imgref"] }
-png = "0.17"
+png = "0.18"
 zengif = { path = "../zengif", features = ["quantizr"] }
 zenwebp = { path = "../zenwebp", default-features = false, features = ["std", "pixel-types"] }
 enough = "0.3"
