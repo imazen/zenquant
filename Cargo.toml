@@ -30,7 +30,7 @@ fast-ssim2 = { version = "0.6", features = ["imgref"] }
 png = "0.18"
 zengif = { path = "../zengif", features = ["quantizr"] }
 zenwebp = { path = "../zenwebp", default-features = false, features = ["std", "pixel-types"] }
-enough = "0.3"
+enough = "0.4"
 imgref = "1"
 codec-corpus = "1"
 color_quant = "1"
