@@ -60,3 +60,6 @@ name = "compare_paths"
 
 [[example]]
 name = "quantizer_comparison"
+
+[[example]]
+name = "calibrate_mpe"

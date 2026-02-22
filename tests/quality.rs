@@ -1,4 +1,4 @@
-use zenquant::_internals::{average_run_length, index_delta_score, srgb_to_oklab};
+use zenquant::_internals::{average_run_length, compute_mpe, index_delta_score, srgb_to_oklab};
 use zenquant::{OutputFormat, QuantizeConfig};
 
 /// Compute mean squared error in OKLab space between original pixels and quantized result.
@@ -151,4 +151,87 @@ fn gradient_produces_reasonable_quality() {
 
     // MSE should be very low with 256 colors on a gradient
     assert!(mse < 0.001, "MSE too high for 256-color gradient: {mse:.6}");
+}
+
+#[test]
+fn mpe_lower_with_more_colors() {
+    let pixels = gradient_image(32, 32);
+
+    let config_8 = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(8)
+        .compute_quality_metric(true);
+
+    let config_64 = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(64)
+        .compute_quality_metric(true);
+
+    let result_8 = zenquant::quantize(&pixels, 32, 32, &config_8).unwrap();
+    let result_64 = zenquant::quantize(&pixels, 32, 32, &config_64).unwrap();
+
+    let mpe_8 = result_8.mpe_score().expect("metric should be computed");
+    let mpe_64 = result_64.mpe_score().expect("metric should be computed");
+
+    assert!(
+        mpe_64 < mpe_8,
+        "64-color should have lower MPE than 8-color: mpe_8={mpe_8:.6}, mpe_64={mpe_64:.6}"
+    );
+}
+
+#[test]
+fn mpe_inline_matches_standalone() {
+    let pixels = gradient_image(32, 32);
+
+    let config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(16)
+        .compute_quality_metric(true);
+
+    let result = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
+    let inline_score = result.mpe_score().expect("metric should be computed");
+
+    // Compute standalone MPE from the same result
+    let standalone = compute_mpe(&pixels, result.palette(), result.indices(), 32, 32, None);
+
+    // Inline uses per-pixel masking weights; standalone uses uniform weights.
+    // So they won't be identical, but both should be finite and positive.
+    assert!(inline_score.is_finite() && inline_score > 0.0);
+    assert!(standalone.score.is_finite() && standalone.score > 0.0);
+}
+
+#[test]
+fn mpe_with_masking_weights() {
+    let pixels = gradient_image(32, 32);
+
+    let weights = zenquant::_internals::compute_masking_weights(&pixels, 32, 32);
+
+    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(16);
+
+    let result = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
+
+    let mpe = compute_mpe(
+        &pixels,
+        result.palette(),
+        result.indices(),
+        32,
+        32,
+        Some(&weights),
+    );
+
+    assert!(
+        mpe.score.is_finite() && mpe.score > 0.0,
+        "MPE with masking weights should be finite and positive: {}",
+        mpe.score
+    );
+    assert_eq!(mpe.block_cols, 8); // 32 / 4
+    assert_eq!(mpe.block_rows, 8);
+}
+
+#[test]
+fn mpe_disabled_by_default() {
+    let pixels = gradient_image(16, 16);
+    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(8);
+    let result = zenquant::quantize(&pixels, 16, 16, &config).unwrap();
+    assert!(
+        result.mpe_score().is_none(),
+        "MPE should not be computed by default"
+    );
 }

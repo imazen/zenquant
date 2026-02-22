@@ -212,6 +212,7 @@ impl Palette {
     }
 
     /// Number of palette entries.
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.entries_srgb.len()
     }

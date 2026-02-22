@@ -2,6 +2,7 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use crate::metric::MpeAccumulator;
 use crate::oklab::{OKLab, oklab_to_srgb, srgb_to_oklab};
 use crate::palette::Palette;
 use crate::remap::RunPriority;
@@ -141,9 +142,19 @@ pub fn dither_image(
     mode: DitherMode,
     run_priority: RunPriority,
     dither_strength: f32,
+    mut mpe_acc: Option<&mut MpeAccumulator>,
 ) -> Vec<u8> {
     if mode == DitherMode::None {
-        return simple_remap(pixels, palette);
+        let indices = simple_remap(pixels, palette);
+        if let Some(ref mut acc) = mpe_acc {
+            let oklab_pal = palette.entries_oklab();
+            for (i, (pixel, &idx)) in pixels.iter().zip(indices.iter()).enumerate() {
+                let orig = srgb_to_oklab(pixel.r, pixel.g, pixel.b);
+                let chosen = oklab_pal[idx as usize];
+                acc.accumulate(i, orig, chosen, weights[i]);
+            }
+        }
+        return indices;
     }
 
     let run_bias = run_priority.bias();
@@ -248,6 +259,11 @@ pub fn dither_image(
             prev_index = Some(chosen);
 
             let chosen_lab = palette.entries_oklab()[chosen as usize];
+
+            // MPE accumulation — reuses orig_lab + chosen_lab already computed.
+            if let Some(ref mut acc) = mpe_acc {
+                acc.accumulate(idx, orig_lab, chosen_lab, weights[idx]);
+            }
 
             // Compute quantization error, scaled by dither strength and
             // edge-aware dither map. Edge pixels generate less error to
@@ -387,11 +403,24 @@ pub fn dither_image_rgba(
     mode: DitherMode,
     run_priority: RunPriority,
     dither_strength: f32,
+    mut mpe_acc: Option<&mut MpeAccumulator>,
 ) -> Vec<u8> {
     let transparent_idx = palette.transparent_index().unwrap_or(0);
 
     if mode == DitherMode::None {
-        return simple_remap_rgba(pixels, palette, transparent_idx);
+        let indices = simple_remap_rgba(pixels, palette, transparent_idx);
+        if let Some(ref mut acc) = mpe_acc {
+            let oklab_pal = palette.entries_oklab();
+            for (i, (pixel, &idx)) in pixels.iter().zip(indices.iter()).enumerate() {
+                if pixel.a == 0 {
+                    continue;
+                }
+                let orig = srgb_to_oklab(pixel.r, pixel.g, pixel.b);
+                let chosen = oklab_pal[idx as usize];
+                acc.accumulate(i, orig, chosen, weights[i]);
+            }
+        }
+        return indices;
     }
 
     let run_bias = run_priority.bias();
@@ -484,6 +513,12 @@ pub fn dither_image_rgba(
             prev_index = Some(chosen);
 
             let chosen_lab = palette.entries_oklab()[chosen as usize];
+
+            // MPE accumulation — reuses orig_lab + chosen_lab already computed.
+            if let Some(ref mut acc) = mpe_acc {
+                acc.accumulate(idx, orig_lab, chosen_lab, weights[idx]);
+            }
+
             let scale = dither_strength * dither_map[idx];
             let mut err_l = (current.l - chosen_lab.l) * scale;
             let mut err_a = (current.a - chosen_lab.a) * scale;
@@ -621,11 +656,24 @@ pub fn dither_image_rgba_alpha(
     mode: DitherMode,
     run_priority: RunPriority,
     dither_strength: f32,
+    mut mpe_acc: Option<&mut MpeAccumulator>,
 ) -> Vec<u8> {
     let transparent_idx = palette.transparent_index().unwrap_or(0);
 
     if mode == DitherMode::None {
-        return simple_remap_rgba_alpha(pixels, palette, transparent_idx);
+        let indices = simple_remap_rgba_alpha(pixels, palette, transparent_idx);
+        if let Some(ref mut acc) = mpe_acc {
+            let oklab_pal = palette.entries_oklab();
+            for (i, (pixel, &idx)) in pixels.iter().zip(indices.iter()).enumerate() {
+                if pixel.a == 0 {
+                    continue;
+                }
+                let orig = srgb_to_oklab(pixel.r, pixel.g, pixel.b);
+                let chosen = oklab_pal[idx as usize];
+                acc.accumulate(i, orig, chosen, weights[i]);
+            }
+        }
+        return indices;
     }
 
     let run_bias = run_priority.bias();
@@ -722,6 +770,11 @@ pub fn dither_image_rgba_alpha(
 
             let chosen_lab = palette.entries_oklab()[chosen as usize];
             let chosen_alpha = palette.entries_rgba()[chosen as usize][3] as f32 / 255.0;
+
+            // MPE accumulation — reuses orig_lab + chosen_lab already computed.
+            if let Some(ref mut acc) = mpe_acc {
+                acc.accumulate(idx, orig_lab, chosen_lab, weights[idx]);
+            }
 
             let scale = dither_strength * dither_map[idx];
             let mut err_l = (current.l - chosen_lab.l) * scale;
@@ -1028,6 +1081,7 @@ mod tests {
             DitherMode::None,
             RunPriority::Quality,
             0.5,
+            None,
         );
         assert_eq!(indices.len(), 64);
         for &idx in &indices {
@@ -1057,6 +1111,7 @@ mod tests {
             DitherMode::Adaptive,
             RunPriority::Balanced,
             0.5,
+            None,
         );
         assert_eq!(indices.len(), width * height);
         for &idx in &indices {

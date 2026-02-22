@@ -27,6 +27,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "archmage"
+version = "0.8.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7c08f2a4e269733dda395816163bc15a857921b10b0379098ccec3c138fa4c2"
+dependencies = [
+ "archmage-macros",
+]
+
+[[package]]
+name = "archmage-macros"
+version = "0.8.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4793caa55d22cb56b0327fe7541b6886a2dfa3c1fec0692027c6b0f166161a3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -240,9 +260,9 @@ checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 
 [[package]]
 name = "enough"
-version = "0.3.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65641ff0923e45cf34a4cb0115080cb7fc8bf4fd419c2207670d5722bab4c581"
+checksum = "177a59811828ea5dbc8927662d444ffee7b55a44696486f1b1a245ae9e652533"
 
 [[package]]
 name = "equator"
@@ -466,13 +486,13 @@ dependencies = [
 
 [[package]]
 name = "linear-srgb"
-version = "0.4.0"
+version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d458e5e9228c58b8b1d49118eb26204f152ddc2b1ab6f451563ec647ccc76519"
+checksum = "7687eee4c424bdb5f360d5d975a52baa0f56c1ce15e3c5cbef4af7d39e148092"
 dependencies = [
+ "archmage",
  "bytemuck",
- "multiversed",
- "multiversion",
+ "magetypes",
  "num-traits",
  "wide 1.1.1",
 ]
@@ -488,6 +508,15 @@ name = "log"
 version = "0.4.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
+
+[[package]]
+name = "magetypes"
+version = "0.8.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e1d0f7705de45621a898d33438530819800169bfdea58619c06fa1f091b70e8"
+dependencies = [
+ "archmage",
+]
 
 [[package]]
 name = "miniz_oxide"
@@ -507,17 +536,6 @@ checksum = "ac9557c559cd6fc9867e122e20d2cbefc9ca29d80d027a8e39310920ed2f0a97"
 dependencies = [
  "num-traits",
  "pxfm",
-]
-
-[[package]]
-name = "multiversed"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31eede710ee60ecb1708685a9d948d25a67ee3940ee8a1096431590cb21eef7d"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -1079,6 +1097,7 @@ dependencies = [
  "enough",
  "imgref",
  "rgb",
+ "whereat",
 ]
 
 [[package]]

@@ -70,10 +70,7 @@ fn main() {
         .collect();
 
     // Header
-    println!(
-        "{:<8} {:>8} {:>8} {:>10}",
-        "dither", "BA", "SS2", "DSSIM"
-    );
+    println!("{:<8} {:>8} {:>8} {:>10}", "dither", "BA", "SS2", "DSSIM");
     println!("{}", "-".repeat(38));
 
     for &dither in DITHER_VALUES {
@@ -117,8 +114,8 @@ fn main() {
             let test_pixels: Vec<[u8; 3]> = test_rgb.iter().map(|p| [p.r, p.g, p.b]).collect();
             let ref_img_ss = ImgVec::new(ref_pixels, width, height);
             let test_img_ss = ImgVec::new(test_pixels, width, height);
-            let ss2 = compute_ssimulacra2(ref_img_ss.as_ref(), test_img_ss.as_ref())
-                .unwrap_or(f64::NAN);
+            let ss2 =
+                compute_ssimulacra2(ref_img_ss.as_ref(), test_img_ss.as_ref()).unwrap_or(f64::NAN);
 
             // DSSIM
             let d = Dssim::new();

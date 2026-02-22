@@ -49,7 +49,7 @@ macro_rules! dev_modules {
     };
 }
 dev_modules!(
-    dither, histogram, masking, median_cut, oklab, palette, remap
+    dither, histogram, masking, median_cut, metric, oklab, palette, remap
 );
 pub mod error;
 
@@ -63,6 +63,7 @@ pub use rgb::{RGB, RGBA};
 pub mod _internals {
     pub use crate::dither::DitherMode;
     pub use crate::masking::compute_masking_weights;
+    pub use crate::metric::{MpeResult, compute_mpe, compute_mpe_rgba};
     pub use crate::oklab::srgb_to_oklab;
     pub use crate::palette::index_delta_score;
     pub use crate::remap::{RunPriority, average_run_length};
@@ -73,7 +74,7 @@ pub mod _internals {
 #[cfg(feature = "_dev")]
 #[doc(hidden)]
 pub mod _dev {
-    pub use crate::{dither, histogram, masking, median_cut, oklab, palette, remap};
+    pub use crate::{dither, histogram, masking, median_cut, metric, oklab, palette, remap};
 }
 
 use alloc::vec::Vec;
@@ -192,6 +193,7 @@ pub struct QuantizeConfig {
     dither_mode: dither::DitherMode,
     dither_strength: Option<f32>,
     viterbi_lambda: Option<f32>,
+    compute_metric: bool,
 }
 
 impl QuantizeConfig {
@@ -207,6 +209,7 @@ impl QuantizeConfig {
             dither_mode: dither::DitherMode::Adaptive,
             dither_strength: None,
             viterbi_lambda: None,
+            compute_metric: false,
         }
     }
 
@@ -221,6 +224,16 @@ impl QuantizeConfig {
     /// Quality preset. Default: [`Quality::Best`].
     pub fn quality(mut self, q: Quality) -> Self {
         self.quality = q;
+        self
+    }
+
+    /// Compute MPE quality metric during quantization.
+    ///
+    /// When enabled, the result includes per-block and global quality scores
+    /// accessible via [`QuantizeResult::mpe_result()`] and [`QuantizeResult::mpe_score()`].
+    /// Adds ~8 FLOPs/pixel overhead during dithering. Default: `false`.
+    pub fn compute_quality_metric(mut self, enable: bool) -> Self {
+        self.compute_metric = enable;
         self
     }
 
@@ -271,6 +284,7 @@ impl QuantizeConfig {
 pub struct QuantizeResult {
     palette: palette::Palette,
     indices: Vec<u8>,
+    mpe_result: Option<metric::MpeResult>,
 }
 
 impl QuantizeResult {
@@ -311,6 +325,20 @@ impl QuantizeResult {
         // Find last non-255 alpha
         let last_non_opaque = alphas.iter().rposition(|&a| a != 255);
         last_non_opaque.map(|pos| alphas[..=pos].to_vec())
+    }
+
+    /// Per-block and global MPE quality metric, if computed.
+    ///
+    /// Returns `Some` when [`QuantizeConfig::compute_quality_metric(true)`] was used.
+    pub fn mpe_result(&self) -> Option<&metric::MpeResult> {
+        self.mpe_result.as_ref()
+    }
+
+    /// Global MPE quality score (lower is better), if computed.
+    ///
+    /// Convenience accessor — equivalent to `self.mpe_result().map(|r| r.score)`.
+    pub fn mpe_score(&self) -> Option<f32> {
+        self.mpe_result.as_ref().map(|r| r.score)
     }
 
     /// Remap an RGB image against this result's palette.
@@ -426,6 +454,7 @@ pub fn quantize(
         return Ok(QuantizeResult {
             palette: pal,
             indices,
+            mpe_result: None,
         });
     }
 
@@ -479,6 +508,11 @@ pub fn quantize(
     // Keep greedy run-bias during dithering even when Viterbi will run.
     // The greedy bias shapes error diffusion favorably, and Viterbi can
     // further optimize the index sequence post-hoc.
+    let mut mpe_acc = if config.compute_metric {
+        Some(metric::MpeAccumulator::new(width, height))
+    } else {
+        None
+    };
     let mut indices = dither::dither_image(
         pixels,
         width,
@@ -488,6 +522,7 @@ pub fn quantize(
         config.dither_mode,
         config.run_priority,
         tuning.dither_strength,
+        mpe_acc.as_mut(),
     );
 
     // 5b. Run optimization
@@ -535,9 +570,12 @@ pub fn quantize(
         pal
     };
 
+    let mpe_result = mpe_acc.map(|acc| acc.finalize());
+
     Ok(QuantizeResult {
         palette: pal,
         indices,
+        mpe_result,
     })
 }
 
@@ -596,6 +634,7 @@ pub fn quantize_rgba(
         return Ok(QuantizeResult {
             palette: pal,
             indices,
+            mpe_result: None,
         });
     }
 
@@ -665,6 +704,7 @@ pub fn quantize_rgba(
             config.dither_mode,
             config.run_priority,
             tuning.dither_strength,
+            None,
         );
 
         if viterbi_lambda > 0.0 {
@@ -746,6 +786,7 @@ pub fn quantize_rgba(
             config.dither_mode,
             config.run_priority,
             tuning.dither_strength,
+            None,
         );
 
         if viterbi_lambda > 0.0 {
@@ -785,6 +826,7 @@ pub fn quantize_rgba(
     Ok(QuantizeResult {
         palette: pal,
         indices,
+        mpe_result: None,
     })
 }
 
@@ -846,6 +888,7 @@ pub fn build_palette(
         return Ok(QuantizeResult {
             palette: pal,
             indices: Vec::new(),
+            mpe_result: None,
         });
     }
 
@@ -914,6 +957,7 @@ pub fn build_palette(
     Ok(QuantizeResult {
         palette: pal,
         indices: Vec::new(),
+        mpe_result: None,
     })
 }
 
@@ -976,6 +1020,7 @@ pub fn build_palette_rgba(
             return Ok(QuantizeResult {
                 palette: pal,
                 indices: Vec::new(),
+                mpe_result: None,
             });
         } else {
             let centroids: Vec<oklab::OKLab> = exact_colors
@@ -991,6 +1036,7 @@ pub fn build_palette_rgba(
             return Ok(QuantizeResult {
                 palette: pal,
                 indices: Vec::new(),
+                mpe_result: None,
             });
         }
     }
@@ -1103,6 +1149,7 @@ pub fn build_palette_rgba(
     Ok(QuantizeResult {
         palette: pal,
         indices: Vec::new(),
+        mpe_result: None,
     })
 }
 
@@ -1150,6 +1197,7 @@ fn remap_rgb_impl(
         config.dither_mode,
         config.run_priority,
         tuning.dither_strength,
+        None,
     );
 
     let run_lambda = if use_masking {
@@ -1189,6 +1237,7 @@ fn remap_rgb_impl(
     Ok(QuantizeResult {
         palette: pal,
         indices,
+        mpe_result: None,
     })
 }
 
@@ -1241,6 +1290,7 @@ fn remap_rgba_impl(
             config.dither_mode,
             config.run_priority,
             tuning.dither_strength,
+            None,
         )
     } else {
         dither::dither_image_rgba(
@@ -1252,6 +1302,7 @@ fn remap_rgba_impl(
             config.dither_mode,
             config.run_priority,
             tuning.dither_strength,
+            None,
         )
     };
 
@@ -1292,6 +1343,7 @@ fn remap_rgba_impl(
     Ok(QuantizeResult {
         palette: pal,
         indices,
+        mpe_result: None,
     })
 }
 

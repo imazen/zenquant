@@ -107,6 +107,7 @@ fn main() {
         DM::Adaptive,
         remap::RunPriority::Balanced,
         0.5,
+        None,
     );
     let dither_ms = t.elapsed().as_secs_f64() * 1000.0;
     println!("5. Dithering:       {:>8.1}ms", dither_ms);
@@ -137,6 +138,7 @@ fn main() {
         DM::Adaptive,
         remap::RunPriority::Balanced,
         0.5,
+        None,
     );
     remap::viterbi_refine(
         &pixels,
