@@ -1,7 +1,7 @@
 //! Calibrate MPE ↔ butteraugli mapping.
 //!
-//! Loads images from CID22 corpus, quantizes at various color counts,
-//! computes both butteraugli and MPE, outputs CSV for correlation analysis.
+//! Loads images from a corpus, quantizes at various color counts,
+//! computes both butteraugli and multiple MPE pooling variants, outputs CSV.
 //!
 //! Usage:
 //!   cargo run --example calibrate_mpe --release -- [image_dir] [max_images]
@@ -15,6 +15,29 @@ use std::path::PathBuf;
 
 use zenquant::_internals::compute_mpe;
 use zenquant::{OutputFormat, QuantizeConfig};
+
+/// Minkowski-p pooling: (mean(x^p))^(1/p)
+fn minkowski_pool(values: &[f32], p: f64) -> f32 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut sum = 0.0f64;
+    for &v in values {
+        sum += (v as f64).powf(p);
+    }
+    let mean = sum / values.len() as f64;
+    mean.powf(1.0 / p) as f32
+}
+
+/// Percentile of sorted values (0-100).
+fn percentile(values: &mut [f32], pct: f32) -> f32 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let idx = ((values.len() - 1) as f32 * pct / 100.0) as usize;
+    values[idx.min(values.len() - 1)]
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -46,7 +69,8 @@ fn main() {
 
     let color_counts: &[u32] = &[8, 16, 32, 64, 128, 256];
 
-    println!("image,colors,mpe_score,butteraugli");
+    // CSV header: multiple pooling variants for comparison
+    println!("image,colors,mink4,mink8,mink16,max,p95,p99,butteraugli");
 
     for path in &paths {
         let img = match image::open(path) {
@@ -68,7 +92,6 @@ fn main() {
             .collect();
         let fname = path.file_name().unwrap().to_string_lossy();
 
-        // Butteraugli reference image (sRGB u8)
         let orig_img = ImgVec::new(pixels.clone(), width, height);
 
         for &colors in color_counts {
@@ -82,7 +105,6 @@ fn main() {
                 }
             };
 
-            // MPE
             let mpe = compute_mpe(
                 &pixels,
                 result.palette(),
@@ -92,7 +114,17 @@ fn main() {
                 None,
             );
 
-            // Butteraugli — reconstruct quantized image as RGB8
+            // Compute multiple pooling variants from block scores
+            let bs = &mpe.block_scores;
+            let mink4 = minkowski_pool(bs, 4.0);
+            let mink8 = mpe.score; // internal pooling is mink8
+            let mink16 = minkowski_pool(bs, 16.0);
+            let max_score = bs.iter().cloned().fold(0.0f32, f32::max);
+            let mut bs_copy = bs.clone();
+            let p95 = percentile(&mut bs_copy.clone(), 95.0);
+            let p99 = percentile(&mut bs_copy, 99.0);
+
+            // Butteraugli
             let quant_pixels: Vec<RGB8> = result
                 .indices()
                 .iter()
@@ -115,7 +147,10 @@ fn main() {
 
             match ba_result {
                 Ok(ba) => {
-                    println!("{fname},{colors},{:.6},{:.4}", mpe.score, ba.score);
+                    println!(
+                        "{fname},{colors},{mink4:.6},{mink8:.6},{mink16:.6},{max_score:.6},{p95:.6},{p99:.6},{:.4}",
+                        ba.score
+                    );
                 }
                 Err(e) => {
                     eprintln!("  butteraugli error {fname} @ {colors}: {e}");

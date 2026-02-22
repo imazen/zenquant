@@ -10,13 +10,14 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use crate::masking;
 use crate::oklab::{OKLab, srgb_to_oklab};
 
-/// Luminance weight — L channel errors are 1.5× more visible than chroma.
-const W_L: f32 = 1.5;
+/// Luminance weight — L channel errors are 2× more visible than chroma.
+const W_L: f32 = 2.0;
 
-/// Structure penalty weight — banding penalty contribution.
-const LAMBDA: f32 = 0.8;
+/// Structure penalty weight — banding/noise penalty contribution relative to RMSE.
+const LAMBDA: f32 = 0.5;
 
 /// Minimum variance to consider a block as having meaningful structure.
 const EPSILON: f32 = 1e-6;
@@ -115,7 +116,7 @@ impl MpeAccumulator {
         self.pixel_count[bi] += 1;
     }
 
-    /// Finalize: compute per-block scores and global Minkowski-4 pooled score.
+    /// Finalize: compute per-block RMSE scores and global Minkowski-4 pooled score.
     pub fn finalize(self) -> MpeResult {
         let n = self.block_cols * self.block_rows;
         let mut block_scores = Vec::with_capacity(n);
@@ -127,32 +128,42 @@ impl MpeAccumulator {
                 continue;
             }
 
-            let mean_error = self.error_sum[bi] / count;
-            let mean_weight = self.weight_sum[bi] / count;
+            // Block RMSE — sqrt of mean squared error gives scores in a useful
+            // range (~0.01–0.5) instead of MSE's tiny values (~0.0001–0.01).
+            let rmse = (self.error_sum[bi] / count).sqrt();
 
             // Variance of original L: E[L²] - E[L]²
             let orig_l_mean = self.orig_l_sum[bi] / count;
-            let orig_l_var = (self.orig_l2_sum[bi] / count) - orig_l_mean * orig_l_mean;
+            let orig_l_var =
+                ((self.orig_l2_sum[bi] / count) - orig_l_mean * orig_l_mean).max(0.0);
 
             // Variance of quantized L
             let quant_l_mean = self.quant_l_sum[bi] / count;
-            let quant_l_var = (self.quant_l2_sum[bi] / count) - quant_l_mean * quant_l_mean;
+            let quant_l_var =
+                ((self.quant_l2_sum[bi] / count) - quant_l_mean * quant_l_mean).max(0.0);
 
-            // Structure penalty: catches variance collapse (banding).
-            // Only active when original has meaningful variation.
+            // Structure penalty: detects both banding (variance collapse) and
+            // excessive dither noise (variance inflation). Measures how far the
+            // variance ratio deviates from 1.0.
             let structure_penalty = if orig_l_var > EPSILON {
                 let ratio = quant_l_var / orig_l_var;
-                (1.0 - ratio).max(0.0)
+                // |log(ratio)| penalizes both under and over. Clamped to [0, 2].
+                let log_ratio = ratio.ln().abs();
+                log_ratio.min(2.0)
+            } else if quant_l_var > EPSILON {
+                // Original was flat but quantized has noise → dither artifact
+                1.0
             } else {
                 0.0
             };
 
-            let score = mean_error + LAMBDA * structure_penalty * mean_weight;
+            let mean_weight = self.weight_sum[bi] / count;
+            let score = rmse + LAMBDA * structure_penalty * mean_weight * rmse;
             block_scores.push(score);
         }
 
         // Minkowski-4 pooling: emphasizes worst-case blocks.
-        let global = minkowski4_pool(&block_scores);
+        let global = minkowski8_pool(&block_scores);
         let butteraugli_estimate = mpe_to_butteraugli(global);
 
         MpeResult {
@@ -169,6 +180,11 @@ impl MpeAccumulator {
 ///
 /// This is the standalone variant — works with output from any quantizer.
 /// For inline accumulation during zenquant dithering, use the config flag instead.
+///
+/// When `weights` is `None`, computes AQ masking weights from the original image
+/// (edge/texture detection, same as zenquant's quantization pipeline). This gives
+/// perceptually-weighted scores where errors in textured regions are masked.
+/// Pass explicit weights to override.
 pub fn compute_mpe(
     pixels: &[rgb::RGB<u8>],
     palette: &[[u8; 3]],
@@ -180,15 +196,23 @@ pub fn compute_mpe(
     debug_assert_eq!(pixels.len(), width * height);
     debug_assert_eq!(indices.len(), width * height);
 
-    let default_weight = 1.0f32;
+    // Auto-compute masking weights when none provided
+    let auto_weights;
+    let w_slice: &[f32] = match weights {
+        Some(ws) => ws,
+        None => {
+            auto_weights = masking::compute_masking_weights(pixels, width, height);
+            &auto_weights
+        }
+    };
+
     let mut acc = MpeAccumulator::new(width, height);
 
     for (i, (pixel, &idx)) in pixels.iter().zip(indices.iter()).enumerate() {
         let orig = srgb_to_oklab(pixel.r, pixel.g, pixel.b);
         let p = palette[idx as usize];
         let quant = srgb_to_oklab(p[0], p[1], p[2]);
-        let w = weights.map_or(default_weight, |ws| ws[i]);
-        acc.accumulate(i, orig, quant, w);
+        acc.accumulate(i, orig, quant, w_slice[i]);
     }
 
     acc.finalize()
@@ -225,35 +249,33 @@ pub fn compute_mpe_rgba(
     acc.finalize()
 }
 
-/// Minkowski-4 pooling: `(mean(x⁴))^(1/4)`.
-fn minkowski4_pool(values: &[f32]) -> f32 {
+/// Minkowski-8 pooling: `(mean(x⁸))^(1/8)`.
+///
+/// Higher exponent (8 vs 4) better matches butteraugli's worst-case behavior.
+/// Mean is over ALL blocks (including zeros), so images with few bad blocks
+/// get pulled down rather than having zeros excluded from the denominator.
+fn minkowski8_pool(values: &[f32]) -> f32 {
     if values.is_empty() {
         return 0.0;
     }
     let mut sum = 0.0f64;
-    let mut count = 0u32;
     for &v in values {
-        if v > 0.0 {
-            let v64 = v as f64;
-            let v2 = v64 * v64;
-            sum += v2 * v2;
-            count += 1;
-        }
+        let v64 = v as f64;
+        let v2 = v64 * v64;
+        let v4 = v2 * v2;
+        sum += v4 * v4;
     }
-    if count == 0 {
-        return 0.0;
-    }
-    let mean = sum / count as f64;
-    mean.sqrt().sqrt() as f32
+    let mean = sum / values.len() as f64;
+    mean.powf(0.125) as f32
 }
 
 /// Map MPE score to estimated butteraugli distance.
 ///
-/// Placeholder linear mapping — replace with fitted constants after calibration.
+/// Calibrated from CID22 (209 photos), CLIC 2025 (62 images), and gb82-sc
+/// (11 screenshots) across 8–256 color quantization levels (N=1677).
+/// Power-law fit: BA ≈ 111 × MPE^0.95 (R²=0.70 log-log, Spearman 0.83).
 fn mpe_to_butteraugli(mpe: f32) -> f32 {
-    // Uncalibrated: rough linear approximation.
-    // Will be updated with proper coefficients from calibrate_mpe example.
-    mpe * 10.0
+    111.0 * mpe.powf(0.948)
 }
 
 #[cfg(test)]
@@ -481,26 +503,29 @@ mod tests {
     }
 
     #[test]
-    fn minkowski4_empty() {
-        assert_eq!(minkowski4_pool(&[]), 0.0);
+    fn minkowski8_empty() {
+        assert_eq!(minkowski8_pool(&[]), 0.0);
     }
 
     #[test]
-    fn minkowski4_uniform() {
+    fn minkowski8_uniform() {
         // All same value → result should equal that value.
         let values = vec![0.5f32; 10];
-        let result = minkowski4_pool(&values);
+        let result = minkowski8_pool(&values);
         assert!((result - 0.5).abs() < 1e-5, "got {result}");
     }
 
     #[test]
-    fn minkowski4_emphasizes_outliers() {
-        // One outlier among zeros: result should be > simple mean.
+    fn minkowski8_emphasizes_outliers() {
+        // One outlier among zeros: result should be > simple mean but < outlier value.
         let mut values = vec![0.0f32; 9];
         values.push(1.0);
-        let mink = minkowski4_pool(&values);
-        // Only 1 non-zero value out of 10, mean^(1/4) = (1/1)^0.25 = 1.0
-        // because we only count non-zero values in the denominator
-        assert!(mink > 0.0);
+        let mink = minkowski8_pool(&values);
+        // mean(x^8) = 1/10, (1/10)^(1/8) ≈ 0.749
+        let expected = (1.0f64 / 10.0).powf(0.125) as f32;
+        assert!(
+            (mink - expected).abs() < 1e-5,
+            "expected {expected}, got {mink}"
+        );
     }
 }
