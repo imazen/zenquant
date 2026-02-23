@@ -28,18 +28,19 @@ dependencies = [
 
 [[package]]
 name = "archmage"
-version = "0.8.5"
+version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7c08f2a4e269733dda395816163bc15a857921b10b0379098ccec3c138fa4c2"
+checksum = "7b6d08808218c9a8bb39ac0490adc5d65a666cc38ddb730baf9ed57e32d803ee"
 dependencies = [
  "archmage-macros",
+ "safe_unaligned_simd",
 ]
 
 [[package]]
 name = "archmage-macros"
-version = "0.8.5"
+version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4793caa55d22cb56b0327fe7541b6886a2dfa3c1fec0692027c6b0f166161a3"
+checksum = "4320e26657ff06e4cb353df04642c3faa5390cae53705e846b788b59d14bc52e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1103,6 +1104,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "zenflate"
+version = "0.2.1"
+dependencies = [
+ "archmage",
+ "enough",
+ "safe_unaligned_simd",
+]
+
+[[package]]
 name = "zengif"
 version = "0.6.0"
 dependencies = [
@@ -1137,6 +1147,7 @@ dependencies = [
  "quantizr",
  "rgb",
  "thiserror",
+ "zenflate",
  "zengif",
  "zenwebp",
 ]
