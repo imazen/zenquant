@@ -70,14 +70,17 @@ fn all_config_modes() {
         .collect();
 
     // Test dither modes × run priorities via expert methods
-    for no_dither in [true, false] {
+    for dither_mode in ["adaptive", "none", "blue_noise", "sierra_lite"] {
         for rp in ["quality", "balanced", "compression"] {
             let mut config = QuantizeConfig::new(OutputFormat::Png)
                 .max_colors(8)
                 .quality(Quality::Balanced);
-            if no_dither {
-                config = config._no_dither();
-            }
+            config = match dither_mode {
+                "none" => config._no_dither(),
+                "blue_noise" => config._blue_noise_dither(),
+                "sierra_lite" => config._sierra_lite_dither(),
+                _ => config, // adaptive is default
+            };
             config = match rp {
                 "quality" => config._run_priority_quality(),
                 "compression" => config._run_priority_compression(),
@@ -85,8 +88,18 @@ fn all_config_modes() {
             };
 
             let result = zenquant::quantize(&pixels, width, height, &config).unwrap();
-            assert!(result.palette_len() <= 8, "mode dither={}/{rp}", !no_dither);
+            assert!(
+                result.palette_len() <= 8,
+                "mode {dither_mode}/{rp}: palette too large"
+            );
             assert_eq!(result.indices().len(), 64);
+            for &idx in result.indices() {
+                assert!(
+                    (idx as usize) < result.palette_len(),
+                    "mode {dither_mode}/{rp}: index {idx} >= palette len {}",
+                    result.palette_len()
+                );
+            }
         }
     }
 }

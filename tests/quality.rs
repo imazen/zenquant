@@ -517,3 +517,213 @@ fn remap_rgba_enforces_min_ssim2() {
         "remap_rgba should enforce min_ssim2: got {result:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Blue noise dithering tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn blue_noise_produces_valid_indices() {
+    let pixels = gradient_image(32, 32);
+    let config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(16)
+        ._blue_noise_dither();
+    let result = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
+    for &idx in result.indices() {
+        assert!(
+            (idx as usize) < result.palette_len(),
+            "blue noise index {idx} >= palette len {}",
+            result.palette_len()
+        );
+    }
+}
+
+#[test]
+fn blue_noise_is_deterministic() {
+    let pixels = gradient_image(32, 32);
+    let config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(16)
+        ._blue_noise_dither();
+    let r1 = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
+    let r2 = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
+    assert_eq!(r1.indices(), r2.indices(), "blue noise should be deterministic");
+}
+
+#[test]
+fn blue_noise_differs_from_no_dither() {
+    let pixels = gradient_image(32, 32);
+    let bn_config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(8)
+        ._blue_noise_dither();
+    let nd_config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(8)
+        ._no_dither();
+    let bn = zenquant::quantize(&pixels, 32, 32, &bn_config).unwrap();
+    let nd = zenquant::quantize(&pixels, 32, 32, &nd_config).unwrap();
+    // Palettes should be the same (same quantization), but indices should differ
+    // because blue noise adds perceptual noise before palette lookup
+    let diffs = bn
+        .indices()
+        .iter()
+        .zip(nd.indices().iter())
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(
+        diffs > 0,
+        "blue noise should produce at least some different indices vs no-dither"
+    );
+}
+
+#[test]
+fn blue_noise_computes_mpe() {
+    let pixels = gradient_image(32, 32);
+    let config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(16)
+        ._blue_noise_dither()
+        .compute_quality_metric(true);
+    let result = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
+    assert!(
+        result.mpe_score().is_some(),
+        "blue noise should compute MPE when requested"
+    );
+    assert!(
+        result.ssimulacra2_estimate().is_some(),
+        "blue noise should compute SSIM2 estimate when requested"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Temporal clamping tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn temporal_clamping_locks_static_pixels_rgb() {
+    let width = 16;
+    let height = 16;
+    let pixels = gradient_image(width, height);
+
+    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(16);
+    let shared = zenquant::quantize(&pixels, width, height, &config).unwrap();
+
+    // First remap (no prev)
+    let r1 = shared.remap(&pixels, width, height, &config).unwrap();
+
+    // Second remap with prev_indices — identical pixels should produce identical indices
+    let r2 = shared
+        .remap_with_prev(&pixels, width, height, &config, r1.indices())
+        .unwrap();
+
+    assert_eq!(
+        r1.indices(),
+        r2.indices(),
+        "static pixels should be identical when temporal clamping is applied"
+    );
+}
+
+#[test]
+fn temporal_clamping_locks_static_pixels_rgba() {
+    let width = 16;
+    let height = 16;
+    let pixels: Vec<rgb::RGBA<u8>> = (0..width * height)
+        .map(|i| {
+            let v = (i * 4 % 256) as u8;
+            rgb::RGBA {
+                r: v,
+                g: v,
+                b: v,
+                a: 255,
+            }
+        })
+        .collect();
+
+    let config = QuantizeConfig::new(OutputFormat::Gif).max_colors(16);
+    let shared = zenquant::quantize_rgba(&pixels, width, height, &config).unwrap();
+
+    let r1 = shared.remap_rgba(&pixels, width, height, &config).unwrap();
+    let r2 = shared
+        .remap_rgba_with_prev(&pixels, width, height, &config, r1.indices())
+        .unwrap();
+
+    assert_eq!(
+        r1.indices(),
+        r2.indices(),
+        "static RGBA pixels should be identical when temporal clamping is applied"
+    );
+}
+
+#[test]
+fn temporal_clamping_allows_changed_pixels_to_differ() {
+    let width = 16;
+    let height = 16;
+    let pixels1 = gradient_image(width, height);
+
+    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(16);
+    let shared = zenquant::quantize(&pixels1, width, height, &config).unwrap();
+    let r1 = shared.remap(&pixels1, width, height, &config).unwrap();
+
+    // Create a very different frame
+    let pixels2: Vec<rgb::RGB<u8>> = pixels1
+        .iter()
+        .map(|p| rgb::RGB {
+            r: 255 - p.r,
+            g: 255 - p.g,
+            b: 255 - p.b,
+        })
+        .collect();
+
+    let r2 = shared
+        .remap_with_prev(&pixels2, width, height, &config, r1.indices())
+        .unwrap();
+
+    // Changed pixels should be allowed to differ
+    let diffs = r1
+        .indices()
+        .iter()
+        .zip(r2.indices().iter())
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(
+        diffs > 0,
+        "changed pixels should produce different indices even with temporal clamping"
+    );
+}
+
+#[test]
+fn temporal_clamping_works_with_sierra_lite() {
+    let width = 16;
+    let height = 16;
+    let pixels = gradient_image(width, height);
+
+    let config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(16)
+        ._sierra_lite_dither();
+    let shared = zenquant::quantize(&pixels, width, height, &config).unwrap();
+    let r1 = shared.remap(&pixels, width, height, &config).unwrap();
+    let r2 = shared
+        .remap_with_prev(&pixels, width, height, &config, r1.indices())
+        .unwrap();
+
+    assert_eq!(
+        r1.indices(),
+        r2.indices(),
+        "Sierra Lite + temporal clamping should lock static pixels"
+    );
+}
+
+#[test]
+fn remap_with_prev_enforces_min_ssim2() {
+    let pixels = gradient_image(32, 32);
+    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(16);
+    let shared = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
+    let r1 = shared.remap(&pixels, 32, 32, &config).unwrap();
+
+    // Set unreachably high min_ssim2
+    let strict_config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(2)
+        .min_ssim2(99.9);
+    let result = shared.remap_with_prev(&pixels, 32, 32, &strict_config, r1.indices());
+    assert!(
+        matches!(result, Err(QuantizeError::QualityNotMet { .. })),
+        "remap_with_prev should enforce min_ssim2: got {result:?}"
+    );
+}
