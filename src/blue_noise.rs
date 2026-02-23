@@ -301,7 +301,7 @@ mod tests {
         for y in 0..BLUE_NOISE_SIZE {
             for x in 0..BLUE_NOISE_SIZE {
                 let t = threshold(x, y);
-                assert!(t >= -0.5 && t <= 0.5, "threshold({x},{y}) = {t} out of range");
+                assert!((-0.5..=0.5).contains(&t), "threshold({x},{y}) = {t} out of range");
             }
         }
     }

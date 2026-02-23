@@ -2,6 +2,7 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use crate::blue_noise;
 use crate::metric::MpeAccumulator;
 use crate::oklab::{OKLab, oklab_to_srgb, srgb_to_oklab};
 use crate::palette::Palette;
@@ -288,6 +289,7 @@ fn diffuse_err_3ch(
 
 /// 4-channel error diffusion with proportional overflow control and gamut clamping.
 #[inline(always)]
+#[allow(clippy::too_many_arguments)]
 fn diffuse_err_4ch(
     buf: &mut [[f32; 4]],
     target_idx: usize,
@@ -489,6 +491,19 @@ pub fn dither_image(
         return indices;
     }
 
+    if mode == DitherMode::BlueNoise {
+        return dither_image_blue_noise(
+            pixels,
+            width,
+            height,
+            weights,
+            palette,
+            run_priority,
+            dither_strength,
+            mpe_acc,
+        );
+    }
+
     let run_bias = run_priority.bias();
 
     // Working buffer in OKLab (we add error diffusion to this)
@@ -653,6 +668,19 @@ pub fn dither_image_rgba(
         return indices;
     }
 
+    if mode == DitherMode::BlueNoise {
+        return dither_image_rgba_blue_noise(
+            pixels,
+            width,
+            height,
+            weights,
+            palette,
+            run_priority,
+            dither_strength,
+            mpe_acc,
+        );
+    }
+
     let run_bias = run_priority.bias();
     let max_err_sq = 0.002 * dither_strength;
     let adaptive = matches!(mode, DitherMode::Adaptive | DitherMode::SierraLite);
@@ -814,6 +842,19 @@ pub fn dither_image_rgba_alpha(
         return indices;
     }
 
+    if mode == DitherMode::BlueNoise {
+        return dither_image_rgba_alpha_blue_noise(
+            pixels,
+            width,
+            height,
+            weights,
+            palette,
+            run_priority,
+            dither_strength,
+            mpe_acc,
+        );
+    }
+
     let run_bias = run_priority.bias();
     let max_err_sq = 0.002 * dither_strength;
     let adaptive = matches!(mode, DitherMode::Adaptive | DitherMode::SierraLite);
@@ -942,6 +983,288 @@ pub fn dither_image_rgba_alpha(
                     lab_buf, diffuse_err, weights, adaptive,
                     pixels, err_l, err_a, err_b, err_al,
                     7.0 / 16.0, 3.0 / 16.0, 5.0 / 16.0, 1.0 / 16.0);
+            }
+        }
+    }
+
+    indices
+}
+
+// ---------------------------------------------------------------------------
+// Blue noise dithering — position-deterministic, zero temporal flicker
+// ---------------------------------------------------------------------------
+
+/// Blue noise dithering for RGB images.
+///
+/// Each pixel gets noise from a tiled 64×64 blue noise map, modulated by the
+/// edge-aware dither map. No error propagation — each pixel is independent,
+/// so the result is fully deterministic per position.
+#[allow(clippy::too_many_arguments)]
+fn dither_image_blue_noise(
+    pixels: &[rgb::RGB<u8>],
+    width: usize,
+    height: usize,
+    weights: &[f32],
+    palette: &Palette,
+    run_priority: RunPriority,
+    dither_strength: f32,
+    mut mpe_acc: Option<&mut MpeAccumulator>,
+) -> Vec<u8> {
+    let run_bias = run_priority.bias();
+
+    // Convert to OKLab for dither map computation (read-only after this)
+    let lab_buf: Vec<[f32; 3]> = pixels
+        .iter()
+        .map(|p| {
+            let lab = srgb_to_oklab(p.r, p.g, p.b);
+            [lab.l, lab.a, lab.b]
+        })
+        .collect();
+
+    let dither_map = compute_dither_map(&lab_buf, width, height);
+    let mut indices = vec![0u8; pixels.len()];
+
+    // Noise scales: L has wider perceptual range than a,b
+    let noise_l = dither_strength * 0.15;
+    let noise_ab = dither_strength * 0.06;
+
+    for y in 0..height {
+        let mut prev_index: Option<u8> = None;
+
+        for x in 0..width {
+            let idx = y * width + x;
+            let p = pixels[idx];
+            let orig_lab = srgb_to_oklab(p.r, p.g, p.b);
+
+            // Blue noise threshold modulated by edge-aware map
+            let t = blue_noise::threshold(x, y) * dither_map[idx];
+
+            // Add noise in OKLab, clamp to gamut bounds
+            let noisy = OKLab::new(
+                (orig_lab.l + t * noise_l).clamp(-0.05, 1.05),
+                (orig_lab.a + t * noise_ab).clamp(-0.55, 0.55),
+                (orig_lab.b + t * noise_ab).clamp(-0.55, 0.55),
+            );
+
+            // Two-seed palette search
+            let seed = palette.nearest_cached(p.r, p.g, p.b);
+            let (adj_r, adj_g, adj_b) = oklab_to_srgb(noisy);
+            let seed2 = palette.nearest_cached(adj_r, adj_g, adj_b);
+            let best = palette.nearest_seeded_2(noisy, seed, seed2);
+
+            // Run-priority bias
+            let chosen = if run_bias > 0.0 {
+                if let Some(prev) = prev_index {
+                    let best_lab = palette.entries_oklab()[best as usize];
+                    let prev_dist = noisy.distance_sq(palette.entries_oklab()[prev as usize]);
+                    let best_dist = noisy.distance_sq(best_lab);
+                    let w = weights[idx];
+                    let threshold = run_bias * best_dist * 2.0 * (1.1 - w);
+                    if prev_dist < best_dist + threshold {
+                        prev
+                    } else {
+                        best
+                    }
+                } else {
+                    best
+                }
+            } else {
+                best
+            };
+
+            indices[idx] = chosen;
+            prev_index = Some(chosen);
+
+            if let Some(ref mut acc) = mpe_acc {
+                let chosen_lab = palette.entries_oklab()[chosen as usize];
+                acc.accumulate(idx, orig_lab, chosen_lab, weights[idx]);
+            }
+        }
+    }
+
+    indices
+}
+
+/// Blue noise dithering for RGBA images with binary transparency.
+/// Transparent pixels (alpha == 0) map to transparent_idx.
+#[allow(clippy::too_many_arguments)]
+fn dither_image_rgba_blue_noise(
+    pixels: &[rgb::RGBA<u8>],
+    width: usize,
+    height: usize,
+    weights: &[f32],
+    palette: &Palette,
+    run_priority: RunPriority,
+    dither_strength: f32,
+    mut mpe_acc: Option<&mut MpeAccumulator>,
+) -> Vec<u8> {
+    let transparent_idx = palette.transparent_index().unwrap_or(0);
+    let run_bias = run_priority.bias();
+
+    let lab_buf: Vec<[f32; 3]> = pixels
+        .iter()
+        .map(|p| {
+            let lab = srgb_to_oklab(p.r, p.g, p.b);
+            [lab.l, lab.a, lab.b]
+        })
+        .collect();
+
+    let dither_map = compute_dither_map(&lab_buf, width, height);
+    let mut indices = vec![0u8; pixels.len()];
+
+    let noise_l = dither_strength * 0.15;
+    let noise_ab = dither_strength * 0.06;
+
+    for y in 0..height {
+        let mut prev_index: Option<u8> = None;
+
+        for x in 0..width {
+            let idx = y * width + x;
+
+            if pixels[idx].a == 0 {
+                indices[idx] = transparent_idx;
+                prev_index = Some(transparent_idx);
+                continue;
+            }
+
+            let p = pixels[idx];
+            let orig_lab = srgb_to_oklab(p.r, p.g, p.b);
+            let t = blue_noise::threshold(x, y) * dither_map[idx];
+
+            let noisy = OKLab::new(
+                (orig_lab.l + t * noise_l).clamp(-0.05, 1.05),
+                (orig_lab.a + t * noise_ab).clamp(-0.55, 0.55),
+                (orig_lab.b + t * noise_ab).clamp(-0.55, 0.55),
+            );
+
+            let seed = palette.nearest_cached(p.r, p.g, p.b);
+            let (adj_r, adj_g, adj_b) = oklab_to_srgb(noisy);
+            let seed2 = palette.nearest_cached(adj_r, adj_g, adj_b);
+            let best = palette.nearest_seeded_2(noisy, seed, seed2);
+
+            let chosen = if run_bias > 0.0 {
+                if let Some(prev) = prev_index {
+                    if prev != transparent_idx {
+                        let best_lab = palette.entries_oklab()[best as usize];
+                        let prev_dist = noisy.distance_sq(palette.entries_oklab()[prev as usize]);
+                        let best_dist = noisy.distance_sq(best_lab);
+                        let w = weights[idx];
+                        let threshold = run_bias * best_dist * 2.0 * (1.1 - w);
+                        if prev_dist < best_dist + threshold {
+                            prev
+                        } else {
+                            best
+                        }
+                    } else {
+                        best
+                    }
+                } else {
+                    best
+                }
+            } else {
+                best
+            };
+
+            indices[idx] = chosen;
+            prev_index = Some(chosen);
+
+            if let Some(ref mut acc) = mpe_acc {
+                let chosen_lab = palette.entries_oklab()[chosen as usize];
+                acc.accumulate(idx, orig_lab, chosen_lab, weights[idx]);
+            }
+        }
+    }
+
+    indices
+}
+
+/// Blue noise dithering for RGBA images with full alpha channel.
+/// Applies noise to alpha as well (for palettes with per-entry alpha).
+#[allow(clippy::too_many_arguments)]
+fn dither_image_rgba_alpha_blue_noise(
+    pixels: &[rgb::RGBA<u8>],
+    width: usize,
+    height: usize,
+    weights: &[f32],
+    palette: &Palette,
+    run_priority: RunPriority,
+    dither_strength: f32,
+    mut mpe_acc: Option<&mut MpeAccumulator>,
+) -> Vec<u8> {
+    let transparent_idx = palette.transparent_index().unwrap_or(0);
+    let run_bias = run_priority.bias();
+
+    let lab_buf: Vec<[f32; 4]> = pixels
+        .iter()
+        .map(|p| {
+            let lab = srgb_to_oklab(p.r, p.g, p.b);
+            let alpha = p.a as f32 / 255.0;
+            [lab.l, lab.a, lab.b, alpha]
+        })
+        .collect();
+
+    let dither_map = compute_dither_map_4(&lab_buf, width, height);
+    let mut indices = vec![0u8; pixels.len()];
+
+    let noise_l = dither_strength * 0.15;
+    let noise_ab = dither_strength * 0.06;
+    let noise_alpha = dither_strength * 0.10;
+
+    for y in 0..height {
+        let mut prev_index: Option<u8> = None;
+
+        for x in 0..width {
+            let idx = y * width + x;
+
+            if pixels[idx].a == 0 {
+                indices[idx] = transparent_idx;
+                prev_index = Some(transparent_idx);
+                continue;
+            }
+
+            let p = pixels[idx];
+            let orig_lab = srgb_to_oklab(p.r, p.g, p.b);
+            let orig_alpha = p.a as f32 / 255.0;
+            let t = blue_noise::threshold(x, y) * dither_map[idx];
+
+            let noisy = OKLab::new(
+                (orig_lab.l + t * noise_l).clamp(-0.05, 1.05),
+                (orig_lab.a + t * noise_ab).clamp(-0.55, 0.55),
+                (orig_lab.b + t * noise_ab).clamp(-0.55, 0.55),
+            );
+            let noisy_alpha = (orig_alpha + t * noise_alpha).clamp(0.0, 1.0);
+
+            let best = palette.nearest_with_alpha(noisy, noisy_alpha);
+
+            let chosen = if run_bias > 0.0 {
+                if let Some(prev) = prev_index {
+                    if prev != transparent_idx {
+                        let best_lab = palette.entries_oklab()[best as usize];
+                        let prev_dist = noisy.distance_sq(palette.entries_oklab()[prev as usize]);
+                        let best_dist = noisy.distance_sq(best_lab);
+                        let w = weights[idx];
+                        let threshold = run_bias * best_dist * 2.0 * (1.1 - w);
+                        if prev_dist < best_dist + threshold {
+                            prev
+                        } else {
+                            best
+                        }
+                    } else {
+                        best
+                    }
+                } else {
+                    best
+                }
+            } else {
+                best
+            };
+
+            indices[idx] = chosen;
+            prev_index = Some(chosen);
+
+            if let Some(ref mut acc) = mpe_acc {
+                let chosen_lab = palette.entries_oklab()[chosen as usize];
+                acc.accumulate(idx, orig_lab, chosen_lab, weights[idx]);
             }
         }
     }
