@@ -549,6 +549,9 @@ fn optimize_inner(
     let mut pending: Option<Pending> = None;
 
     for y in 0..height {
+        // Compact predictor buffer to bound memory (keeps last 32KB window)
+        predictor.compact();
+
         let row_start = y * width;
 
         // Pack initial row

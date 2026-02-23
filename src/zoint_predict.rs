@@ -474,6 +474,7 @@ pub(crate) struct PredictorSnapshot {
     next_hashes: [u32; 2],
     total_bytes_fed: usize,
     estimated_bits: u64,
+    data_trimmed: usize,
 }
 
 /// Lightweight LZ77 predictor for estimating deflate-compressed sizes.
@@ -490,9 +491,12 @@ pub(crate) struct Predictor {
     total_bytes_fed: usize,
     estimated_bits: u64,
     /// Accumulated filtered data (the matchfinder's input buffer).
-    /// Grows as rows are fed. We keep it so the matchfinder can reference
-    /// back-pointers into previously fed data.
+    /// Periodically compacted to keep only the last MATCHFINDER_WINDOW_SIZE
+    /// bytes reachable by backward references.
     data: alloc::vec::Vec<u8>,
+    /// Cumulative bytes trimmed from the front of `data`.
+    /// `data[i]` corresponds to logical position `i + data_trimmed`.
+    data_trimmed: usize,
 }
 
 /// Greedy matchfinder parameters (equivalent to zenflate effort 10).
@@ -509,6 +513,7 @@ impl Predictor {
             total_bytes_fed: 0,
             estimated_bits: 0,
             data: alloc::vec::Vec::with_capacity(4096),
+            data_trimmed: 0,
         }
     }
 
@@ -600,6 +605,24 @@ impl Predictor {
         self.estimated_bits.div_ceil(8) as usize
     }
 
+    /// Compact the data buffer by discarding bytes unreachable by backward
+    /// references. Call between rows (not mid-filter-evaluation) to bound
+    /// memory growth. Without compaction, the data buffer grows to
+    /// `width * height` bytes; with it, stays under ~2 * MATCHFINDER_WINDOW_SIZE.
+    pub fn compact(&mut self) {
+        let window = MATCHFINDER_WINDOW_SIZE as usize;
+        // Keep 1.5x window to avoid compacting too frequently
+        if self.data.len() <= window + window / 2 {
+            return;
+        }
+        // The oldest reachable backward reference is at most WINDOW_SIZE bytes
+        // before the current write position. Keep WINDOW_SIZE bytes.
+        let trim = self.data.len() - window;
+        self.data.drain(..trim);
+        self.in_base_offset = self.in_base_offset.saturating_sub(trim);
+        self.data_trimmed += trim;
+    }
+
     /// Take a snapshot for later fork/restore.
     ///
     /// The heavy matchfinder state is wrapped in an Arc — if only one snapshot
@@ -612,6 +635,7 @@ impl Predictor {
             next_hashes: self.next_hashes,
             total_bytes_fed: self.total_bytes_fed,
             estimated_bits: self.estimated_bits,
+            data_trimmed: self.data_trimmed,
         }
     }
 
@@ -627,9 +651,9 @@ impl Predictor {
         self.next_hashes = snap.next_hashes;
         self.total_bytes_fed = snap.total_bytes_fed;
         self.estimated_bits = snap.estimated_bits;
+        self.data_trimmed = snap.data_trimmed;
         // Truncate data buffer to match the snapshot's state
-        // The snapshot was taken after total_bytes_fed bytes were processed
-        self.data.truncate(snap.total_bytes_fed);
+        self.data.truncate(snap.total_bytes_fed - snap.data_trimmed);
     }
 
     /// Restore from an owned snapshot (consumes the snapshot).
@@ -645,7 +669,8 @@ impl Predictor {
         self.next_hashes = snap.next_hashes;
         self.total_bytes_fed = snap.total_bytes_fed;
         self.estimated_bits = snap.estimated_bits;
-        self.data.truncate(snap.total_bytes_fed);
+        self.data_trimmed = snap.data_trimmed;
+        self.data.truncate(snap.total_bytes_fed - snap.data_trimmed);
     }
 
     /// Get the current estimated compressed size in bytes.
