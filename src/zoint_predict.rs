@@ -533,12 +533,19 @@ impl Predictor {
 
         // Run greedy LZ77 matching on the new data
         let mut pos = start_pos;
-        // Need 8 bytes of lookahead for safe matching (load_u64_le in lz_extend)
-        let safe_end = end_pos.saturating_sub(8);
+        // Need room for: load_u32_le tail check (4 bytes past best_len-3)
+        // and load_u64_le in lz_extend (8 bytes). At minimum we need 5 bytes
+        // remaining to enter longest_match (it returns early if max_len < 5).
+        // We use safe_end = end_pos - 5 to ensure at least 5 bytes available,
+        // and cap max_len to remaining - 1 so the 4-byte tail check at
+        // (in_next + best_len - 3) doesn't read past end_pos.
+        let safe_end = end_pos.saturating_sub(5);
 
         while pos < safe_end {
             let remaining = (end_pos - pos) as u32;
-            let max_len = remaining.min(DEFLATE_MAX_MATCH_LEN);
+            // Cap at remaining-1: longest_match does load_u32_le at
+            // in_next + best_len - 3, reading 4 bytes → needs best_len+1 bytes
+            let max_len = (remaining - 1).min(DEFLATE_MAX_MATCH_LEN);
 
             let (match_len, match_offset) = self.mf.longest_match(
                 &self.data,
