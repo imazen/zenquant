@@ -244,7 +244,7 @@ impl QuantizeConfig {
             target_ssim2: None,
             min_ssim2: None,
             zoint_deflate_effort: 10,
-            zoint_tolerance: 0.015,
+            zoint_tolerance: 0.01,
         }
     }
 
