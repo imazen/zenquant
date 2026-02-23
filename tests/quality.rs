@@ -392,3 +392,128 @@ fn min_ssim2_rgba_returns_quality_not_met() {
         "expected QualityNotMet for RGBA with 2 colors and min_ssim2=99.9, got {result:?}"
     );
 }
+
+// ===================== Remap path quality metric tests =====================
+
+#[test]
+fn remap_computes_mpe_when_requested() {
+    let pixels = gradient_image(32, 32);
+
+    // Build a palette first
+    let palette_config = QuantizeConfig::new(OutputFormat::Png).max_colors(16);
+    let shared = zenquant::quantize(&pixels, 32, 32, &palette_config).unwrap();
+
+    // Remap with metric computation enabled
+    let remap_config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(16)
+        .compute_quality_metric(true);
+    let result = shared.remap(&pixels, 32, 32, &remap_config).unwrap();
+
+    assert!(
+        result.mpe_score().is_some(),
+        "remap should compute MPE when compute_quality_metric is set"
+    );
+    assert!(result.ssimulacra2_estimate().is_some());
+    assert!(result.butteraugli_estimate().is_some());
+}
+
+#[test]
+fn remap_no_metric_by_default() {
+    let pixels = gradient_image(32, 32);
+    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(16);
+    let shared = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
+    let result = shared.remap(&pixels, 32, 32, &config).unwrap();
+
+    assert!(
+        result.mpe_score().is_none(),
+        "remap should not compute MPE by default"
+    );
+}
+
+#[test]
+fn remap_enforces_min_ssim2() {
+    let pixels = gradient_image(32, 32);
+
+    // Build palette with only 2 colors — quality will be terrible
+    let palette_config = QuantizeConfig::new(OutputFormat::Png).max_colors(2);
+    let shared = zenquant::quantize(&pixels, 32, 32, &palette_config).unwrap();
+
+    // Remap with a high quality floor
+    let remap_config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(2)
+        .min_ssim2(99.9);
+    let result = shared.remap(&pixels, 32, 32, &remap_config);
+    assert!(
+        matches!(result, Err(QuantizeError::QualityNotMet { .. })),
+        "remap should enforce min_ssim2: got {result:?}"
+    );
+}
+
+#[test]
+fn remap_target_ssim2_computes_metric() {
+    let pixels = gradient_image(32, 32);
+
+    let palette_config = QuantizeConfig::new(OutputFormat::Png).max_colors(256);
+    let shared = zenquant::quantize(&pixels, 32, 32, &palette_config).unwrap();
+
+    // Remap with target_ssim2 — should implicitly compute metric
+    let remap_config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(256)
+        .target_ssim2(80.0);
+    let result = shared.remap(&pixels, 32, 32, &remap_config).unwrap();
+
+    assert!(
+        result.mpe_score().is_some(),
+        "remap should compute metric when target_ssim2 is set"
+    );
+}
+
+#[test]
+fn remap_rgba_computes_mpe_when_requested() {
+    let pixels: Vec<rgb::RGBA<u8>> = (0..1024)
+        .map(|i| rgb::RGBA {
+            r: (i % 256) as u8,
+            g: ((i * 3) % 256) as u8,
+            b: ((i * 7) % 256) as u8,
+            a: 255,
+        })
+        .collect();
+
+    let palette_config = QuantizeConfig::new(OutputFormat::Png).max_colors(16);
+    let shared = zenquant::quantize_rgba(&pixels, 32, 32, &palette_config).unwrap();
+
+    let remap_config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(16)
+        .compute_quality_metric(true);
+    let result = shared.remap_rgba(&pixels, 32, 32, &remap_config).unwrap();
+
+    assert!(
+        result.mpe_score().is_some(),
+        "remap_rgba should compute MPE when requested"
+    );
+    assert!(result.ssimulacra2_estimate().is_some());
+}
+
+#[test]
+fn remap_rgba_enforces_min_ssim2() {
+    let pixels: Vec<rgb::RGBA<u8>> = (0..1024)
+        .map(|i| rgb::RGBA {
+            r: (i % 256) as u8,
+            g: ((i * 3) % 256) as u8,
+            b: ((i * 7) % 256) as u8,
+            a: 255,
+        })
+        .collect();
+
+    let palette_config = QuantizeConfig::new(OutputFormat::Png).max_colors(2);
+    let shared = zenquant::quantize_rgba(&pixels, 32, 32, &palette_config).unwrap();
+
+    let remap_config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(2)
+        .min_ssim2(99.9);
+    let result = shared.remap_rgba(&pixels, 32, 32, &remap_config);
+    assert!(
+        matches!(result, Err(QuantizeError::QualityNotMet { .. })),
+        "remap_rgba should enforce min_ssim2: got {result:?}"
+    );
+}

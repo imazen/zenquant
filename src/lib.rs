@@ -1381,15 +1381,41 @@ fn remap_rgb_impl(
         });
     }
 
-    let tuning = QuantizeTuning::from_config(config);
+    // When target_ssim2 or min_ssim2 is set, force metric computation
+    let needs_metric =
+        config.compute_metric || config.target_ssim2.is_some() || config.min_ssim2.is_some();
+
+    // Apply compression tier overrides when target_ssim2 is set
+    let (effective_quality, effective_run_priority, effective_dither_strength) =
+        if let Some(target) = config.target_ssim2 {
+            let tier = select_compression_tier(target);
+            (
+                tier.quality,
+                tier.run_priority,
+                config
+                    .dither_strength
+                    .map(|s| s * tier.dither_strength_mult),
+            )
+        } else {
+            (config.quality, config.run_priority, config.dither_strength)
+        };
+
+    let effective_config = QuantizeConfig {
+        quality: effective_quality,
+        run_priority: effective_run_priority,
+        dither_strength: effective_dither_strength,
+        compute_metric: needs_metric,
+        ..config.clone()
+    };
+    let tuning = QuantizeTuning::from_config(&effective_config);
 
     let mut pal = source_palette.clone();
     if !pal.has_nn_cache() {
         pal.build_nn_cache();
     }
 
-    let use_masking = matches!(config.quality, Quality::Balanced | Quality::Best);
-    let use_viterbi = matches!(config.quality, Quality::Best);
+    let use_masking = matches!(effective_quality, Quality::Balanced | Quality::Best);
+    let use_viterbi = matches!(effective_quality, Quality::Best);
 
     let weights = if use_masking {
         masking::compute_masking_weights(pixels, width, height)
@@ -1404,17 +1430,20 @@ fn remap_rgb_impl(
         &weights,
         &pal,
         config.dither_mode,
-        config.run_priority,
+        effective_run_priority,
         tuning.dither_strength,
         None,
     );
 
     let run_lambda = if use_masking {
-        config.viterbi_lambda.unwrap_or(match config.run_priority {
-            remap::RunPriority::Quality => 0.0,
-            remap::RunPriority::Balanced => 0.01,
-            remap::RunPriority::Compression => 0.02,
-        }) * tuning.viterbi_lambda_scale
+        config
+            .viterbi_lambda
+            .unwrap_or(match effective_run_priority {
+                remap::RunPriority::Quality => 0.0,
+                remap::RunPriority::Balanced => 0.01,
+                remap::RunPriority::Compression => 0.02,
+            })
+            * tuning.viterbi_lambda_scale
     } else {
         config.viterbi_lambda.unwrap_or(0.0)
     };
@@ -1442,11 +1471,44 @@ fn remap_rgb_impl(
         }
     }
 
+    // Compute MPE quality metric if requested
+    let mpe_result = if needs_metric {
+        let w = if use_masking {
+            Some(&weights[..])
+        } else {
+            None
+        };
+        Some(metric::compute_mpe(
+            pixels,
+            pal.entries(),
+            &indices,
+            width,
+            height,
+            w,
+        ))
+    } else {
+        None
+    };
+
+    // Check min_ssim2 quality floor
+    if let Some(min) = config.min_ssim2 {
+        let achieved = mpe_result
+            .as_ref()
+            .map(|r| r.ssimulacra2_estimate)
+            .unwrap_or(100.0);
+        if achieved < min {
+            return Err(QuantizeError::QualityNotMet {
+                min_ssim2: min,
+                achieved_ssim2: achieved,
+            });
+        }
+    }
+
     // No frequency reorder — palette order must be stable for shared-palette use.
     Ok(QuantizeResult {
         palette: pal,
         indices,
-        mpe_result: None,
+        mpe_result,
     })
 }
 
@@ -1469,15 +1531,41 @@ fn remap_rgba_impl(
         });
     }
 
-    let tuning = QuantizeTuning::from_config(config);
+    // When target_ssim2 or min_ssim2 is set, force metric computation
+    let needs_metric =
+        config.compute_metric || config.target_ssim2.is_some() || config.min_ssim2.is_some();
+
+    // Apply compression tier overrides when target_ssim2 is set
+    let (effective_quality, effective_run_priority, effective_dither_strength) =
+        if let Some(target) = config.target_ssim2 {
+            let tier = select_compression_tier(target);
+            (
+                tier.quality,
+                tier.run_priority,
+                config
+                    .dither_strength
+                    .map(|s| s * tier.dither_strength_mult),
+            )
+        } else {
+            (config.quality, config.run_priority, config.dither_strength)
+        };
+
+    let effective_config = QuantizeConfig {
+        quality: effective_quality,
+        run_priority: effective_run_priority,
+        dither_strength: effective_dither_strength,
+        compute_metric: needs_metric,
+        ..config.clone()
+    };
+    let tuning = QuantizeTuning::from_config(&effective_config);
 
     let mut pal = source_palette.clone();
     if !pal.has_nn_cache() {
         pal.build_nn_cache();
     }
 
-    let use_masking = matches!(config.quality, Quality::Balanced | Quality::Best);
-    let use_viterbi = matches!(config.quality, Quality::Best);
+    let use_masking = matches!(effective_quality, Quality::Balanced | Quality::Best);
+    let use_viterbi = matches!(effective_quality, Quality::Best);
 
     let weights = if use_masking {
         masking::compute_masking_weights_rgba(pixels, width, height)
@@ -1497,7 +1585,7 @@ fn remap_rgba_impl(
             &weights,
             &pal,
             config.dither_mode,
-            config.run_priority,
+            effective_run_priority,
             tuning.dither_strength,
             None,
         )
@@ -1509,18 +1597,21 @@ fn remap_rgba_impl(
             &weights,
             &pal,
             config.dither_mode,
-            config.run_priority,
+            effective_run_priority,
             tuning.dither_strength,
             None,
         )
     };
 
     let run_lambda = if use_masking {
-        config.viterbi_lambda.unwrap_or(match config.run_priority {
-            remap::RunPriority::Quality => 0.0,
-            remap::RunPriority::Balanced => 0.01,
-            remap::RunPriority::Compression => 0.02,
-        }) * tuning.viterbi_lambda_scale
+        config
+            .viterbi_lambda
+            .unwrap_or(match effective_run_priority {
+                remap::RunPriority::Quality => 0.0,
+                remap::RunPriority::Balanced => 0.01,
+                remap::RunPriority::Compression => 0.02,
+            })
+            * tuning.viterbi_lambda_scale
     } else {
         config.viterbi_lambda.unwrap_or(0.0)
     };
@@ -1548,11 +1639,39 @@ fn remap_rgba_impl(
         }
     }
 
+    // Compute MPE quality metric if requested
+    let mpe_result = if needs_metric {
+        Some(metric::compute_mpe_rgba(
+            pixels,
+            pal.entries_rgba(),
+            &indices,
+            width,
+            height,
+            None,
+        ))
+    } else {
+        None
+    };
+
+    // Check min_ssim2 quality floor
+    if let Some(min) = config.min_ssim2 {
+        let achieved = mpe_result
+            .as_ref()
+            .map(|r| r.ssimulacra2_estimate)
+            .unwrap_or(100.0);
+        if achieved < min {
+            return Err(QuantizeError::QualityNotMet {
+                min_ssim2: min,
+                achieved_ssim2: achieved,
+            });
+        }
+    }
+
     // No frequency reorder — palette order must be stable for shared-palette use.
     Ok(QuantizeResult {
         palette: pal,
         indices,
-        mpe_result: None,
+        mpe_result,
     })
 }
 
