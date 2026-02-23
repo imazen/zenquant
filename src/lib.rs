@@ -297,6 +297,20 @@ impl QuantizeConfig {
         self.viterbi_lambda = Some(lambda);
         self
     }
+
+    /// Use blue noise dithering (position-deterministic, zero flicker).
+    #[doc(hidden)]
+    pub fn _blue_noise_dither(mut self) -> Self {
+        self.dither_mode = dither::DitherMode::BlueNoise;
+        self
+    }
+
+    /// Use Sierra Lite dithering (lighter error diffusion, less temporal cascade).
+    #[doc(hidden)]
+    pub fn _sierra_lite_dither(mut self) -> Self {
+        self.dither_mode = dither::DitherMode::SierraLite;
+        self
+    }
 }
 
 /// Result of palette quantization.
@@ -404,7 +418,7 @@ impl QuantizeResult {
         height: usize,
         config: &QuantizeConfig,
     ) -> Result<QuantizeResult, QuantizeError> {
-        remap_rgb_impl(&self.palette, pixels, width, height, config)
+        remap_rgb_impl(&self.palette, pixels, width, height, config, None)
     }
 
     /// Remap an RGBA image against this result's palette.
@@ -439,7 +453,48 @@ impl QuantizeResult {
         height: usize,
         config: &QuantizeConfig,
     ) -> Result<QuantizeResult, QuantizeError> {
-        remap_rgba_impl(&self.palette, pixels, width, height, config)
+        remap_rgba_impl(&self.palette, pixels, width, height, config, None)
+    }
+
+    /// Remap with temporal clamping. Pixels whose undithered nearest palette
+    /// match matches prev_indices\[i\] retain that index, preventing flicker.
+    #[doc(hidden)]
+    pub fn remap_with_prev(
+        &self,
+        pixels: &[rgb::RGB<u8>],
+        width: usize,
+        height: usize,
+        config: &QuantizeConfig,
+        prev_indices: &[u8],
+    ) -> Result<QuantizeResult, QuantizeError> {
+        remap_rgb_impl(
+            &self.palette,
+            pixels,
+            width,
+            height,
+            config,
+            Some(prev_indices),
+        )
+    }
+
+    /// Remap RGBA with temporal clamping.
+    #[doc(hidden)]
+    pub fn remap_rgba_with_prev(
+        &self,
+        pixels: &[rgb::RGBA<u8>],
+        width: usize,
+        height: usize,
+        config: &QuantizeConfig,
+        prev_indices: &[u8],
+    ) -> Result<QuantizeResult, QuantizeError> {
+        remap_rgba_impl(
+            &self.palette,
+            pixels,
+            width,
+            height,
+            config,
+            Some(prev_indices),
+        )
     }
 }
 
@@ -1373,6 +1428,7 @@ fn remap_rgb_impl(
     width: usize,
     height: usize,
     config: &QuantizeConfig,
+    prev_indices: Option<&[u8]>,
 ) -> Result<QuantizeResult, QuantizeError> {
     if width == 0 || height == 0 {
         return Err(QuantizeError::ZeroDimension);
@@ -1437,7 +1493,7 @@ fn remap_rgb_impl(
         effective_run_priority,
         tuning.dither_strength,
         None,
-        None,
+        prev_indices,
     );
 
     let run_lambda = if use_masking {
@@ -1524,6 +1580,7 @@ fn remap_rgba_impl(
     width: usize,
     height: usize,
     config: &QuantizeConfig,
+    prev_indices: Option<&[u8]>,
 ) -> Result<QuantizeResult, QuantizeError> {
     if width == 0 || height == 0 {
         return Err(QuantizeError::ZeroDimension);
@@ -1593,7 +1650,7 @@ fn remap_rgba_impl(
             effective_run_priority,
             tuning.dither_strength,
             None,
-            None,
+            prev_indices,
         )
     } else {
         dither::dither_image_rgba(
@@ -1606,7 +1663,7 @@ fn remap_rgba_impl(
             effective_run_priority,
             tuning.dither_strength,
             None,
-            None,
+            prev_indices,
         )
     };
 
