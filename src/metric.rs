@@ -224,7 +224,9 @@ pub fn compute_mpe(
 
 /// Compute MPE from original RGBA pixels and a quantized result.
 ///
-/// Transparent pixels (alpha == 0) are skipped.
+/// Composites both original and quantized against a checkerboard pattern
+/// so that transparency differences (especially at edges) show up as
+/// visible color errors rather than being silently skipped.
 pub fn compute_mpe_rgba(
     pixels: &[rgb::RGBA<u8>],
     palette: &[[u8; 4]],
@@ -240,17 +242,50 @@ pub fn compute_mpe_rgba(
     let mut acc = MpeAccumulator::new(width, height);
 
     for (i, (pixel, &idx)) in pixels.iter().zip(indices.iter()).enumerate() {
-        if pixel.a == 0 {
-            continue;
-        }
-        let orig = srgb_to_oklab(pixel.r, pixel.g, pixel.b);
+        let x = i % width;
+        let y = i / width;
+
+        // Composite both original and quantized against checkerboard
+        let bg = checkerboard_color(x, y);
+        let orig = composite_over_bg(pixel.r, pixel.g, pixel.b, pixel.a, bg);
         let p = palette[idx as usize];
-        let quant = srgb_to_oklab(p[0], p[1], p[2]);
+        let quant = composite_over_bg(p[0], p[1], p[2], p[3], bg);
+
         let w = weights.map_or(default_weight, |ws| ws[i]);
         acc.accumulate(i, orig, quant, w);
     }
 
     acc.finalize()
+}
+
+/// Get checkerboard background color for a pixel position.
+///
+/// 8×8 pixel squares alternating between light gray (204) and medium gray (153).
+/// These values are chosen to make alpha errors visible on both light and dark
+/// areas while staying in a mid-range that doesn't overly bias the metric.
+#[inline]
+fn checkerboard_color(x: usize, y: usize) -> u8 {
+    if ((x >> 3) ^ (y >> 3)) & 1 == 0 {
+        204 // light square
+    } else {
+        153 // dark square
+    }
+}
+
+/// Composite an RGBA pixel over a solid background using standard alpha blending.
+///
+/// Returns the composited color in OKLab space.
+#[inline]
+fn composite_over_bg(r: u8, g: u8, b: u8, a: u8, bg: u8) -> OKLab {
+    let alpha = a as f32 / 255.0;
+    let inv_alpha = 1.0 - alpha;
+    let bg_f = bg as f32;
+
+    let cr = (r as f32 * alpha + bg_f * inv_alpha) as u8;
+    let cg = (g as f32 * alpha + bg_f * inv_alpha) as u8;
+    let cb = (b as f32 * alpha + bg_f * inv_alpha) as u8;
+
+    srgb_to_oklab(cr, cg, cb)
 }
 
 /// Minkowski-8 pooling: `(mean(x⁸))^(1/8)`.
@@ -533,7 +568,9 @@ mod tests {
     }
 
     #[test]
-    fn rgba_transparent_pixels_skipped() {
+    fn rgba_transparent_matching_scores_zero() {
+        // When both original and palette are fully transparent, compositing
+        // over checkerboard gives identical results → score 0.
         let pixels = vec![
             rgb::RGBA {
                 r: 0,
@@ -543,12 +580,35 @@ mod tests {
             };
             16
         ];
-        let palette = [[255, 255, 255, 255]];
+        let palette = [[0, 0, 0, 0]]; // also transparent
         let indices = vec![0u8; 16];
 
         let result = compute_mpe_rgba(&pixels, &palette, &indices, 4, 4, None);
-        // All transparent → no accumulation → score 0
         assert_eq!(result.score, 0.0);
+    }
+
+    #[test]
+    fn rgba_transparency_mismatch_detected() {
+        // Original is fully transparent but quantized is opaque white →
+        // compositing over checkerboard should produce a large error.
+        let pixels = vec![
+            rgb::RGBA {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0,
+            };
+            16
+        ];
+        let palette = [[255, 255, 255, 255]]; // opaque white
+        let indices = vec![0u8; 16];
+
+        let result = compute_mpe_rgba(&pixels, &palette, &indices, 4, 4, None);
+        assert!(
+            result.score > 0.0,
+            "transparency mismatch should be detected, got score={}",
+            result.score
+        );
     }
 
     #[test]
