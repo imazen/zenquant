@@ -115,9 +115,8 @@ pub enum OutputFormat {
     /// PNG filter types per scanline to minimize deflate-compressed size while
     /// keeping every pixel within its perceptual tolerance budget.
     ///
-    /// The result includes pre-compressed deflate data in
-    /// [`QuantizeResult::zoint_data()`], which downstream encoders can embed
-    /// directly without re-compressing.
+    /// The optimized indices are returned in the normal [`QuantizeResult::indices()`];
+    /// downstream encoders compress them through their standard pipeline.
     ///
     /// Requires the `zoint` feature.
     PngZoint,
@@ -235,7 +234,7 @@ impl QuantizeConfig {
             target_ssim2: None,
             min_ssim2: None,
             zoint_deflate_effort: 10,
-            zoint_tolerance: 0.002,
+            zoint_tolerance: 0.01,
         }
     }
 
@@ -348,42 +347,6 @@ impl QuantizeConfig {
     }
 }
 
-/// Pre-compressed PNG data from the zoint (joint deflate+quantization) pass.
-///
-/// Contains a raw deflate stream (no zlib header), per-row filter choices,
-/// the bit depth used for packing, and an Adler-32 checksum of the
-/// uncompressed filtered data. Downstream PNG encoders can wrap this in a
-/// zlib envelope and embed it directly as IDAT data.
-#[derive(Debug, Clone)]
-pub struct PngZointData {
-    deflate_stream: Vec<u8>,
-    filter_choices: Vec<u8>,
-    bit_depth: u8,
-    adler32: u32,
-}
-
-impl PngZointData {
-    /// Raw deflate stream (no zlib header/trailer).
-    pub fn deflate_stream(&self) -> &[u8] {
-        &self.deflate_stream
-    }
-
-    /// Per-row PNG filter type (0–4). Length equals the image height.
-    pub fn filter_choices(&self) -> &[u8] {
-        &self.filter_choices
-    }
-
-    /// Bit depth used for packing palette indices (1, 2, 4, or 8).
-    pub fn bit_depth(&self) -> u8 {
-        self.bit_depth
-    }
-
-    /// Adler-32 of the uncompressed filtered stream.
-    pub fn adler32(&self) -> u32 {
-        self.adler32
-    }
-}
-
 /// Result of palette quantization.
 ///
 /// Contains an optimized palette and per-pixel indices into that palette.
@@ -394,7 +357,6 @@ pub struct QuantizeResult {
     palette: palette::Palette,
     indices: Vec<u8>,
     mpe_result: Option<metric::MpeResult>,
-    zoint_data: Option<PngZointData>,
 }
 
 impl QuantizeResult {
@@ -459,11 +421,6 @@ impl QuantizeResult {
     /// Estimated butteraugli distance, if metric was computed.
     pub fn butteraugli_estimate(&self) -> Option<f32> {
         self.mpe_result.as_ref().map(|r| r.butteraugli_estimate)
-    }
-
-    /// Pre-compressed PNG data from the zoint pass, if [`OutputFormat::PngZoint`] was used.
-    pub fn zoint_data(&self) -> Option<&PngZointData> {
-        self.zoint_data.as_ref()
     }
 
     /// Remap an RGB image against this result's palette.
@@ -727,7 +684,6 @@ pub fn quantize(
             palette: pal,
             indices,
             mpe_result: None,
-            zoint_data: None,
         });
     }
 
@@ -865,8 +821,8 @@ pub fn quantize(
 
     // 7. Zoint: joint deflate+quantization optimization
     #[cfg(feature = "zoint")]
-    let (indices, zoint_data) = if config.output_format == OutputFormat::PngZoint {
-        let (opt_indices, zd) = zoint::optimize_rgb(
+    let indices = if config.output_format == OutputFormat::PngZoint {
+        zoint::optimize_rgb(
             pixels,
             width,
             height,
@@ -875,19 +831,15 @@ pub fn quantize(
             &indices,
             config.zoint_deflate_effort,
             config.zoint_tolerance,
-        );
-        (opt_indices, Some(zd))
+        )
     } else {
-        (indices, None)
+        indices
     };
-    #[cfg(not(feature = "zoint"))]
-    let zoint_data: Option<PngZointData> = None;
 
     Ok(QuantizeResult {
         palette: pal,
         indices,
         mpe_result,
-        zoint_data,
     })
 }
 
@@ -973,7 +925,6 @@ pub fn quantize_rgba(
             palette: pal,
             indices,
             mpe_result: None,
-            zoint_data: None,
         });
     }
 
@@ -1202,8 +1153,8 @@ pub fn quantize_rgba(
 
     // Zoint: joint deflate+quantization optimization
     #[cfg(feature = "zoint")]
-    let (indices, zoint_data) = if config.output_format == OutputFormat::PngZoint {
-        let (opt_indices, zd) = zoint::optimize_rgba(
+    let indices = if config.output_format == OutputFormat::PngZoint {
+        zoint::optimize_rgba(
             pixels,
             width,
             height,
@@ -1212,19 +1163,15 @@ pub fn quantize_rgba(
             &indices,
             config.zoint_deflate_effort,
             config.zoint_tolerance,
-        );
-        (opt_indices, Some(zd))
+        )
     } else {
-        (indices, None)
+        indices
     };
-    #[cfg(not(feature = "zoint"))]
-    let zoint_data: Option<PngZointData> = None;
 
     Ok(QuantizeResult {
         palette: pal,
         indices,
         mpe_result,
-        zoint_data,
     })
 }
 
@@ -1287,7 +1234,6 @@ pub fn build_palette(
             palette: pal,
             indices: Vec::new(),
             mpe_result: None,
-            zoint_data: None,
         });
     }
 
@@ -1357,7 +1303,6 @@ pub fn build_palette(
         palette: pal,
         indices: Vec::new(),
         mpe_result: None,
-        zoint_data: None,
     })
 }
 
@@ -1421,7 +1366,6 @@ pub fn build_palette_rgba(
                 palette: pal,
                 indices: Vec::new(),
                 mpe_result: None,
-                zoint_data: None,
             });
         } else {
             let centroids: Vec<oklab::OKLab> = exact_colors
@@ -1438,7 +1382,6 @@ pub fn build_palette_rgba(
                 palette: pal,
                 indices: Vec::new(),
                 mpe_result: None,
-                zoint_data: None,
             });
         }
     }
@@ -1552,7 +1495,6 @@ pub fn build_palette_rgba(
         palette: pal,
         indices: Vec::new(),
         mpe_result: None,
-        zoint_data: None,
     })
 }
 
@@ -1705,7 +1647,6 @@ fn remap_rgb_impl(
         palette: pal,
         indices,
         mpe_result,
-        zoint_data: None,
     })
 }
 
@@ -1872,7 +1813,6 @@ fn remap_rgba_impl(
         palette: pal,
         indices,
         mpe_result,
-        zoint_data: None,
     })
 }
 
