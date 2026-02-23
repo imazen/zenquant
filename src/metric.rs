@@ -36,8 +36,10 @@ pub struct MpeResult {
     pub block_cols: usize,
     /// Number of block rows.
     pub block_rows: usize,
-    /// Estimated butteraugli distance (calibrated mapping).
+    /// Estimated butteraugli distance (calibrated lookup table).
     pub butteraugli_estimate: f32,
+    /// Estimated SSIMULACRA2 score (calibrated lookup table, 100 = identical).
+    pub ssimulacra2_estimate: f32,
 }
 
 /// Accumulator for inline metric computation during dithering.
@@ -165,6 +167,7 @@ impl MpeAccumulator {
         // Minkowski-4 pooling: emphasizes worst-case blocks.
         let global = minkowski8_pool(&block_scores);
         let butteraugli_estimate = mpe_to_butteraugli(global);
+        let ssimulacra2_estimate = mpe_to_ssimulacra2(global);
 
         MpeResult {
             score: global,
@@ -172,6 +175,7 @@ impl MpeAccumulator {
             block_cols: self.block_cols,
             block_rows: self.block_rows,
             butteraugli_estimate,
+            ssimulacra2_estimate,
         }
     }
 }
@@ -269,13 +273,105 @@ fn minkowski8_pool(values: &[f32]) -> f32 {
     mean.powf(0.125) as f32
 }
 
-/// Map MPE score to estimated butteraugli distance.
+/// Lookup table: MPE (mink8) → estimated butteraugli distance.
 ///
-/// Calibrated from CID22 (209 photos), CLIC 2025 (62 images), and gb82-sc
-/// (11 screenshots) across 8–256 color quantization levels (N=1677).
-/// Power-law fit: BA ≈ 111 × MPE^0.95 (R²=0.70 log-log, Spearman 0.83).
+/// Calibrated from 1992 data points across CID22, CLIC 2025, gb82-sc,
+/// and KADID-10k corpuses at 8–256 color quantization levels.
+/// Median butteraugli per 0.01-wide MPE bin, monotonicity enforced.
+const MPE_BA_TABLE: [(f32, f32); 24] = [
+    (0.0, 0.0),
+    (0.005, 0.76),
+    (0.015, 2.32),
+    (0.025, 3.57),
+    (0.035, 4.85),
+    (0.045, 5.99),
+    (0.055, 7.34),
+    (0.065, 8.62),
+    (0.075, 9.73),
+    (0.085, 11.59),
+    (0.095, 12.83),
+    (0.105, 13.64),
+    (0.115, 16.65),
+    (0.125, 16.65),
+    (0.135, 18.80),
+    (0.145, 18.96),
+    (0.155, 19.98),
+    (0.165, 22.59),
+    (0.175, 22.77),
+    (0.185, 26.88),
+    (0.195, 26.88),
+    (0.205, 27.22),
+    (0.215, 27.22),
+    (0.225, 28.42),
+];
+
+/// Lookup table: MPE (mink8) → estimated SSIMULACRA2 score.
+///
+/// Same calibration dataset as `MPE_BA_TABLE`.
+/// Median SSIMULACRA2 per bin, monotonicity enforced (decreasing).
+const MPE_SSIM2_TABLE: [(f32, f32); 24] = [
+    (0.0, 100.0),
+    (0.005, 93.54),
+    (0.015, 84.18),
+    (0.025, 78.64),
+    (0.035, 73.18),
+    (0.045, 67.70),
+    (0.055, 61.83),
+    (0.065, 56.93),
+    (0.075, 51.84),
+    (0.085, 45.49),
+    (0.095, 36.74),
+    (0.105, 29.34),
+    (0.115, 18.84),
+    (0.125, 18.84),
+    (0.135, 11.19),
+    (0.145, 7.61),
+    (0.155, -1.61),
+    (0.165, -1.61),
+    (0.175, -12.30),
+    (0.185, -12.30),
+    (0.195, -16.69),
+    (0.205, -16.86),
+    (0.215, -19.89),
+    (0.225, -19.89),
+];
+
+/// Piecewise linear interpolation on a sorted lookup table.
+///
+/// Binary-searches for the bracketing interval, then linearly interpolates.
+/// Clamps to endpoint values for out-of-range inputs.
+fn interpolate(table: &[(f32, f32)], x: f32) -> f32 {
+    debug_assert!(!table.is_empty());
+
+    // Clamp to endpoints
+    if x <= table[0].0 {
+        return table[0].1;
+    }
+    let last = table.len() - 1;
+    if x >= table[last].0 {
+        return table[last].1;
+    }
+
+    // Binary search for the interval [table[i].0, table[i+1].0) containing x
+    let i = match table.binary_search_by(|entry| entry.0.partial_cmp(&x).unwrap()) {
+        Ok(exact) => return table[exact].1,
+        Err(pos) => pos - 1, // pos is where x would be inserted; i = pos-1
+    };
+
+    let (x0, y0) = table[i];
+    let (x1, y1) = table[i + 1];
+    let t = (x - x0) / (x1 - x0);
+    y0 + t * (y1 - y0)
+}
+
+/// Map MPE score to estimated butteraugli distance.
 fn mpe_to_butteraugli(mpe: f32) -> f32 {
-    111.0 * mpe.powf(0.948)
+    interpolate(&MPE_BA_TABLE, mpe)
+}
+
+/// Map MPE score to estimated SSIMULACRA2 score.
+fn mpe_to_ssimulacra2(mpe: f32) -> f32 {
+    interpolate(&MPE_SSIM2_TABLE, mpe)
 }
 
 #[cfg(test)]
@@ -500,6 +596,98 @@ mod tests {
         let result = compute_mpe(&pixels, &palette, &indices, 8, 8, None);
         assert!(result.butteraugli_estimate.is_finite());
         assert!(result.butteraugli_estimate >= 0.0);
+        assert!(result.ssimulacra2_estimate.is_finite());
+        assert!(result.ssimulacra2_estimate < 100.0);
+    }
+
+    #[test]
+    fn identical_image_estimates() {
+        let pixels = make_flat_image(128, 64, 32, 16);
+        let palette = [[128, 64, 32]];
+        let indices = vec![0u8; 16];
+
+        let result = compute_mpe(&pixels, &palette, &indices, 4, 4, None);
+        assert_eq!(result.butteraugli_estimate, 0.0, "identical → BA=0");
+        assert_eq!(result.ssimulacra2_estimate, 100.0, "identical → SS2=100");
+    }
+
+    #[test]
+    fn different_image_estimates() {
+        let pixels = make_flat_image(0, 0, 0, 16);
+        let palette = [[255, 255, 255]];
+        let indices = vec![0u8; 16];
+
+        let result = compute_mpe(&pixels, &palette, &indices, 4, 4, None);
+        assert!(
+            result.butteraugli_estimate > 0.0,
+            "different → BA > 0: {}",
+            result.butteraugli_estimate
+        );
+        assert!(
+            result.ssimulacra2_estimate < 100.0,
+            "different → SS2 < 100: {}",
+            result.ssimulacra2_estimate
+        );
+    }
+
+    #[test]
+    fn interpolate_endpoints() {
+        let table = [(0.0f32, 0.0f32), (1.0, 10.0), (2.0, 20.0)];
+        // Exact endpoints
+        assert_eq!(interpolate(&table, 0.0), 0.0);
+        assert_eq!(interpolate(&table, 2.0), 20.0);
+        // Below range → clamp to first
+        assert_eq!(interpolate(&table, -1.0), 0.0);
+        // Above range → clamp to last
+        assert_eq!(interpolate(&table, 5.0), 20.0);
+    }
+
+    #[test]
+    fn interpolate_midpoint() {
+        let table = [(0.0f32, 0.0f32), (1.0, 10.0), (2.0, 20.0)];
+        let mid = interpolate(&table, 0.5);
+        assert!((mid - 5.0).abs() < 1e-5, "expected 5.0, got {mid}");
+
+        let mid2 = interpolate(&table, 1.5);
+        assert!((mid2 - 15.0).abs() < 1e-5, "expected 15.0, got {mid2}");
+    }
+
+    #[test]
+    fn interpolate_exact_table_entry() {
+        let table = [(0.0f32, 0.0f32), (0.5, 7.0), (1.0, 10.0)];
+        assert_eq!(interpolate(&table, 0.5), 7.0);
+    }
+
+    #[test]
+    fn ba_table_monotonic() {
+        for i in 1..MPE_BA_TABLE.len() {
+            assert!(
+                MPE_BA_TABLE[i].0 > MPE_BA_TABLE[i - 1].0,
+                "MPE_BA_TABLE x not strictly increasing at index {i}"
+            );
+            assert!(
+                MPE_BA_TABLE[i].1 >= MPE_BA_TABLE[i - 1].1,
+                "MPE_BA_TABLE y not monotonically increasing at index {i}: {} < {}",
+                MPE_BA_TABLE[i].1,
+                MPE_BA_TABLE[i - 1].1
+            );
+        }
+    }
+
+    #[test]
+    fn ssim2_table_monotonic() {
+        for i in 1..MPE_SSIM2_TABLE.len() {
+            assert!(
+                MPE_SSIM2_TABLE[i].0 > MPE_SSIM2_TABLE[i - 1].0,
+                "MPE_SSIM2_TABLE x not strictly increasing at index {i}"
+            );
+            assert!(
+                MPE_SSIM2_TABLE[i].1 <= MPE_SSIM2_TABLE[i - 1].1,
+                "MPE_SSIM2_TABLE y not monotonically decreasing at index {i}: {} > {}",
+                MPE_SSIM2_TABLE[i].1,
+                MPE_SSIM2_TABLE[i - 1].1
+            );
+        }
     }
 
     #[test]

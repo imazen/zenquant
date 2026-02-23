@@ -9,6 +9,7 @@
 //! Defaults to CID22-512/training corpus.
 
 use butteraugli::ButteraugliParams;
+use fast_ssim2::compute_ssimulacra2;
 use imgref::ImgVec;
 use rgb::RGB8;
 use std::path::PathBuf;
@@ -70,7 +71,7 @@ fn main() {
     let color_counts: &[u32] = &[8, 16, 32, 64, 128, 256];
 
     // CSV header: multiple pooling variants for comparison
-    println!("image,colors,mink4,mink8,mink16,max,p95,p99,butteraugli");
+    println!("image,colors,mink4,mink8,mink16,max,p95,p99,butteraugli,ssim2");
 
     for path in &paths {
         let img = match image::open(path) {
@@ -124,7 +125,7 @@ fn main() {
             let p95 = percentile(&mut bs_copy.clone(), 95.0);
             let p99 = percentile(&mut bs_copy, 99.0);
 
-            // Butteraugli
+            // Reconstruct quantized image
             let quant_pixels: Vec<RGB8> = result
                 .indices()
                 .iter()
@@ -137,8 +138,18 @@ fn main() {
                     }
                 })
                 .collect();
-            let quant_img = ImgVec::new(quant_pixels, width, height);
 
+            // SSIMULACRA2 (takes ImgRef<[u8; 3]>)
+            let ref_pixels_ss: Vec<[u8; 3]> = pixels.iter().map(|p| [p.r, p.g, p.b]).collect();
+            let test_pixels_ss: Vec<[u8; 3]> =
+                quant_pixels.iter().map(|p| [p.r, p.g, p.b]).collect();
+            let ref_img_ss = ImgVec::new(ref_pixels_ss, width, height);
+            let test_img_ss = ImgVec::new(test_pixels_ss, width, height);
+            let ss2 =
+                compute_ssimulacra2(ref_img_ss.as_ref(), test_img_ss.as_ref()).unwrap_or(f64::NAN);
+
+            // Butteraugli
+            let quant_img = ImgVec::new(quant_pixels, width, height);
             let ba_result = butteraugli::butteraugli(
                 orig_img.as_ref(),
                 quant_img.as_ref(),
@@ -148,7 +159,7 @@ fn main() {
             match ba_result {
                 Ok(ba) => {
                     println!(
-                        "{fname},{colors},{mink4:.6},{mink8:.6},{mink16:.6},{max_score:.6},{p95:.6},{p99:.6},{:.4}",
+                        "{fname},{colors},{mink4:.6},{mink8:.6},{mink16:.6},{max_score:.6},{p95:.6},{p99:.6},{:.4},{ss2:.4}",
                         ba.score
                     );
                 }
