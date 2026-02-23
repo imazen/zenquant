@@ -541,112 +541,353 @@ fn optimize_inner(
     };
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Pass 2: Index optimization with per-row A/B deflate verification.
+    // Pass 2: Index optimization with row-pair lookahead.
     //
-    // For each row, try greedy-optimized indices vs initial indices.
-    // Fork the compressor and compress both. Keep whichever produces
-    // smaller output. This ensures we never make compression worse.
+    // Each row's A/B decision is deferred until the NEXT row is processed.
+    // This catches cases where optimizing row N looks good locally but
+    // hurts row N+1's compression via changed deflate state.
+    //
+    // For each row, we evaluate it under both the "prev kept initial" and
+    // "prev used optimized" compressor states, then pick the 2-row path
+    // that produces the best cumulative output.
     // ═══════════════════════════════════════════════════════════════════════
 
     let mut optimized_indices = initial_indices.to_vec();
-    let mut prev_packed_row = vec![0u8; row_bytes];
     let zero_row = vec![0u8; row_bytes];
 
     // New compressor for pass 2 (pass 1's was consumed)
     let pass2_effort = if eval_effort == 10 { 11 } else { eval_effort };
     let pass2_level = CompressionLevel::new(pass2_effort);
-    let mut compressor = Compressor::new(pass2_level);
     let compress_bound = Compressor::deflate_compress_bound(filtered_row_size * height);
-    let mut compress_buf = vec![0u8; compress_bound];
-    let mut cumulative: usize = 0;
-    let mut filtered_stream = Vec::with_capacity(filtered_row_size * height);
+
+    // A "path" tracks one possible compressor timeline
+    struct Path {
+        compressor: Compressor,
+        filtered: Vec<u8>,
+        cumulative: usize,
+        packed_row: Vec<u8>,         // last committed packed row (for filter context)
+        compress_buf: Vec<u8>,
+    }
+
+    impl Path {
+        fn eval_row(
+            &self,
+            filter: u8,
+            packed: &[u8],
+            above: &[u8],
+            is_final: bool,
+        ) -> Option<(Compressor, usize)> {
+            let mut filtered = self.filtered.clone();
+            apply_filter_bpp1(filter, packed, above, &mut filtered);
+            let mut fork = self.compressor.clone();
+            let mut buf = self.compress_buf.clone();
+            let size = fork
+                .deflate_compress_incremental(&filtered, &mut buf, is_final, Unstoppable)
+                .ok()?;
+            Some((fork, size))
+        }
+
+        /// Commit a row. Uses `self.packed_row` as the above context before
+        /// overwriting it with the new packed row.
+        fn commit_row(
+            &mut self,
+            filter: u8,
+            packed: &[u8],
+            compressor: Compressor,
+            size: usize,
+        ) {
+            // self.packed_row is the "above" row — use it before overwriting
+            let above: Vec<u8> = self.packed_row.clone();
+            apply_filter_bpp1(filter, packed, &above, &mut self.filtered);
+            self.compressor = compressor;
+            self.cumulative = self.cumulative.wrapping_add(size);
+            self.packed_row[..packed.len()].copy_from_slice(packed);
+        }
+
+        /// Like commit_row but uses a provided above context (for first row).
+        fn commit_row_with_above(
+            &mut self,
+            filter: u8,
+            packed: &[u8],
+            above: &[u8],
+            compressor: Compressor,
+            size: usize,
+        ) {
+            apply_filter_bpp1(filter, packed, above, &mut self.filtered);
+            self.compressor = compressor;
+            self.cumulative = self.cumulative.wrapping_add(size);
+            self.packed_row[..packed.len()].copy_from_slice(packed);
+        }
+    }
+
+    // Start with a single path (no pending decision yet)
+    let mut committed = Path {
+        compressor: Compressor::new(pass2_level),
+        filtered: Vec::with_capacity(filtered_row_size * height),
+        cumulative: 0,
+        packed_row: vec![0u8; row_bytes],
+        compress_buf: vec![0u8; compress_bound],
+    };
+
+    // Pending: the previous row has two possible states (init vs optimized)
+    // that we haven't decided between yet.
+    struct Pending {
+        // Path where previous row used INITIAL indices
+        path_init: Path,
+        // Path where previous row used OPTIMIZED indices
+        path_opt: Path,
+        // Row index and optimized indices for the pending row
+        pending_y: usize,
+        opt_indices: Vec<u8>,
+    }
+
+    let mut pending: Option<Pending> = None;
 
     for (y, &filter) in filter_choices.iter().enumerate() {
         let row_start = y * width;
         let is_final = y == height - 1;
-        let above = if y > 0 {
-            &prev_packed_row[..]
-        } else {
-            &zero_row[..]
-        };
 
-        // Option A: initial indices
         let initial_row = &initial_indices[row_start..row_start + width];
-        let mut packed_a = vec![0u8; row_bytes];
-        pack_row(initial_row, bit_depth, &mut packed_a);
+        let mut packed_init = vec![0u8; row_bytes];
+        pack_row(initial_row, bit_depth, &mut packed_init);
 
-        let start_a = filtered_stream.len();
-        apply_filter_bpp1(filter, &packed_a, above, &mut filtered_stream);
-        let mut fork_a = compressor.clone();
-        let size_a = fork_a
-            .deflate_compress_incremental(
-                &filtered_stream,
-                &mut compress_buf,
-                is_final,
-                Unstoppable,
-            )
-            .ok();
-        filtered_stream.truncate(start_a);
-
-        // Option B: greedy-optimized indices
         let opt_row = greedy_row_optimize(
             width,
             filter,
             &candidates,
             row_start,
-            above,
+            // above: use committed packed row (or pending's — resolved below)
+            if y > 0 {
+                &committed.packed_row[..]
+            } else {
+                &zero_row[..]
+            },
             bit_depth,
             row_bytes,
         );
-        let mut packed_b = vec![0u8; row_bytes];
-        pack_row(&opt_row, bit_depth, &mut packed_b);
+        let mut packed_opt = vec![0u8; row_bytes];
+        pack_row(&opt_row, bit_depth, &mut packed_opt);
 
-        // Only evaluate B if it differs from A
         let indices_differ = initial_row != &opt_row[..];
-        let use_optimized = if indices_differ {
-            let start_b = filtered_stream.len();
-            apply_filter_bpp1(filter, &packed_b, above, &mut filtered_stream);
-            let mut fork_b = compressor.clone();
-            let size_b = fork_b
-                .deflate_compress_incremental(
-                    &filtered_stream,
-                    &mut compress_buf,
-                    is_final,
-                    Unstoppable,
-                )
-                .ok();
-            filtered_stream.truncate(start_b);
 
-            // Use optimized only if it's strictly smaller
-            match (size_a, size_b) {
-                (Some(a), Some(b)) if b + 2 < a => {
-                    // Commit B
-                    apply_filter_bpp1(filter, &packed_b, above, &mut filtered_stream);
-                    compressor = fork_b;
-                    cumulative = cumulative.wrapping_add(b);
-                    true
+        if let Some(pend) = pending.take() {
+            // We have a deferred decision from the previous row.
+            // Evaluate current row under BOTH previous-row paths to decide
+            // which version of the previous row to keep.
+
+            let above_init = &pend.path_init.packed_row[..];
+            let above_opt = &pend.path_opt.packed_row[..];
+
+            // Best current-row outcome starting from prev=initial
+            let eval_on_init = pend.path_init.eval_row(filter, &packed_init, above_init, is_final);
+            let eval_opt_on_init = if indices_differ {
+                // Re-optimize for the init context since above row differs
+                let opt_for_init = greedy_row_optimize(
+                    width, filter, &candidates, row_start,
+                    above_init, bit_depth, row_bytes,
+                );
+                let mut packed_for_init = vec![0u8; row_bytes];
+                pack_row(&opt_for_init, bit_depth, &mut packed_for_init);
+                let eval = pend.path_init.eval_row(filter, &packed_for_init, above_init, is_final);
+                eval.map(|e| (e, opt_for_init, packed_for_init))
+            } else {
+                None
+            };
+
+            // Best current-row outcome starting from prev=optimized
+            let eval_on_opt = pend.path_opt.eval_row(filter, &packed_init, above_opt, is_final);
+            let eval_opt_on_opt = if indices_differ {
+                let opt_for_opt = greedy_row_optimize(
+                    width, filter, &candidates, row_start,
+                    above_opt, bit_depth, row_bytes,
+                );
+                let mut packed_for_opt = vec![0u8; row_bytes];
+                pack_row(&opt_for_opt, bit_depth, &mut packed_for_opt);
+                let eval = pend.path_opt.eval_row(filter, &packed_for_opt, above_opt, is_final);
+                eval.map(|e| (e, opt_for_opt, packed_for_opt))
+            } else {
+                None
+            };
+
+            // Find best total across all 4 combinations:
+            // (prev=init, cur=init), (prev=init, cur=opt),
+            // (prev=opt, cur=init), (prev=opt, cur=opt)
+            struct Candidate {
+                total: usize,
+                use_prev_opt: bool,
+                use_cur_opt: bool,
+                cur_fork: Compressor,
+                cur_size: usize,
+                cur_packed: Vec<u8>,
+                cur_indices: Vec<u8>,
+            }
+            let mut best: Option<Candidate> = None;
+
+            // (prev=init, cur=init)
+            if let Some((fork, size)) = eval_on_init {
+                let total = pend.path_init.cumulative.wrapping_add(size);
+                if best.as_ref().map_or(true, |b| total < b.total) {
+                    best = Some(Candidate {
+                        total,
+                        use_prev_opt: false,
+                        use_cur_opt: false,
+                        cur_fork: fork,
+                        cur_size: size,
+                        cur_packed: packed_init.clone(),
+                        cur_indices: initial_row.to_vec(),
+                    });
                 }
-                _ => false,
+            }
+
+            // (prev=init, cur=opt)
+            if let Some(((fork, size), ref indices, ref packed)) = eval_opt_on_init {
+                let total = pend.path_init.cumulative.wrapping_add(size);
+                if best.as_ref().map_or(true, |b| total < b.total) {
+                    best = Some(Candidate {
+                        total,
+                        use_prev_opt: false,
+                        use_cur_opt: true,
+                        cur_fork: fork,
+                        cur_size: size,
+                        cur_packed: packed.clone(),
+                        cur_indices: indices.clone(),
+                    });
+                }
+            }
+
+            // (prev=opt, cur=init)
+            if let Some((fork, size)) = eval_on_opt {
+                let total = pend.path_opt.cumulative.wrapping_add(size);
+                if best.as_ref().map_or(true, |b| total < b.total) {
+                    best = Some(Candidate {
+                        total,
+                        use_prev_opt: true,
+                        use_cur_opt: false,
+                        cur_fork: fork,
+                        cur_size: size,
+                        cur_packed: packed_init.clone(),
+                        cur_indices: initial_row.to_vec(),
+                    });
+                }
+            }
+
+            // (prev=opt, cur=opt)
+            if let Some(((fork, size), ref indices, ref packed)) = eval_opt_on_opt {
+                let total = pend.path_opt.cumulative.wrapping_add(size);
+                if best.as_ref().map_or(true, |b| total < b.total) {
+                    best = Some(Candidate {
+                        total,
+                        use_prev_opt: true,
+                        use_cur_opt: true,
+                        cur_fork: fork,
+                        cur_size: size,
+                        cur_packed: packed.clone(),
+                        cur_indices: indices.clone(),
+                    });
+                }
+            }
+
+            if let Some(winner) = best {
+                // Decide the previous row
+                let prev_start = pend.pending_y * width;
+                committed = if winner.use_prev_opt {
+                    optimized_indices[prev_start..prev_start + width]
+                        .copy_from_slice(&pend.opt_indices);
+                    pend.path_opt
+                } else {
+                    pend.path_init
+                };
+
+                // Decide the current row
+                if winner.use_cur_opt {
+                    optimized_indices[row_start..row_start + width]
+                        .copy_from_slice(&winner.cur_indices);
+                }
+
+                committed.commit_row(
+                    filter,
+                    &winner.cur_packed,
+                    winner.cur_fork,
+                    winner.cur_size,
+                );
             }
         } else {
-            false
-        };
+            // No pending decision — first row or after a non-optimizable row.
+            let above = if y > 0 {
+                committed.packed_row.as_slice()
+            } else {
+                zero_row.as_slice()
+            };
 
-        if !use_optimized {
-            // Commit A (initial indices)
-            apply_filter_bpp1(filter, &packed_a, above, &mut filtered_stream);
-            if let Some(size) = size_a {
-                compressor = fork_a;
-                cumulative = cumulative.wrapping_add(size);
+            if indices_differ {
+                let eval_init = committed.eval_row(filter, &packed_init, above, is_final);
+                let eval_opt = committed.eval_row(filter, &packed_opt, above, is_final);
+
+                match (eval_init, eval_opt) {
+                    (Some((fork_a, size_a)), Some((fork_b, size_b))) if size_b + 2 < size_a => {
+                        // Optimization looks promising — defer decision
+                        let mut path_init = Path {
+                            compressor: committed.compressor.clone(),
+                            filtered: committed.filtered.clone(),
+                            cumulative: committed.cumulative,
+                            packed_row: committed.packed_row.clone(),
+                            compress_buf: committed.compress_buf.clone(),
+                        };
+                        if y == 0 {
+                            path_init.commit_row_with_above(filter, &packed_init, &zero_row, fork_a, size_a);
+                        } else {
+                            path_init.commit_row(filter, &packed_init, fork_a, size_a);
+                        }
+
+                        let mut path_opt = Path {
+                            compressor: committed.compressor.clone(),
+                            filtered: committed.filtered.clone(),
+                            cumulative: committed.cumulative,
+                            packed_row: committed.packed_row.clone(),
+                            compress_buf: committed.compress_buf.clone(),
+                        };
+                        if y == 0 {
+                            path_opt.commit_row_with_above(filter, &packed_opt, &zero_row, fork_b, size_b);
+                        } else {
+                            path_opt.commit_row(filter, &packed_opt, fork_b, size_b);
+                        }
+
+                        pending = Some(Pending {
+                            path_init,
+                            path_opt,
+                            pending_y: y,
+                            opt_indices: opt_row,
+                        });
+                        continue; // Don't update committed yet
+                    }
+                    (Some((fork_a, size_a)), _) => {
+                        if y == 0 {
+                            committed.commit_row_with_above(filter, &packed_init, &zero_row, fork_a, size_a);
+                        } else {
+                            committed.commit_row(filter, &packed_init, fork_a, size_a);
+                        }
+                    }
+                    _ => {} // shouldn't happen, but safe fallback
+                }
+            } else {
+                // No optimization possible
+                if let Some((fork, size)) = committed.eval_row(filter, &packed_init, above, is_final) {
+                    if y == 0 {
+                        committed.commit_row_with_above(filter, &packed_init, &zero_row, fork, size);
+                    } else {
+                        committed.commit_row(filter, &packed_init, fork, size);
+                    }
+                }
             }
         }
+    }
 
-        if use_optimized {
-            optimized_indices[row_start..row_start + width].copy_from_slice(&opt_row);
-            prev_packed_row.copy_from_slice(&packed_b);
-        } else {
-            // Keep initial indices (already there)
-            prev_packed_row.copy_from_slice(&packed_a);
+    // If the last row is still pending, resolve it (no next row to compare against)
+    if let Some(pend) = pending {
+        let prev_start = pend.pending_y * width;
+        if pend.path_opt.cumulative < pend.path_init.cumulative {
+            optimized_indices[prev_start..prev_start + width]
+                .copy_from_slice(&pend.opt_indices);
         }
     }
 

@@ -159,8 +159,15 @@ impl QuantizeTuning {
                 AlphaMode::Binary,
                 3.0, // GIF's LZW rewards long runs heavily
             ),
-            OutputFormat::Png | OutputFormat::PngZoint => (
+            OutputFormat::Png => (
                 0.5,
+                palette::PaletteSortStrategy::Luminance,
+                false,
+                AlphaMode::Full,
+                1.0,
+            ),
+            OutputFormat::PngZoint => (
+                0.3, // lower dither — zoint exploits compressible patterns better
                 palette::PaletteSortStrategy::Luminance,
                 false,
                 AlphaMode::Full,
@@ -234,7 +241,7 @@ impl QuantizeConfig {
             target_ssim2: None,
             min_ssim2: None,
             zoint_deflate_effort: 10,
-            zoint_tolerance: 0.01,
+            zoint_tolerance: 0.02,
         }
     }
 
