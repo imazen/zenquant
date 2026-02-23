@@ -278,6 +278,21 @@ fn minkowski8_pool(values: &[f32]) -> f32 {
 /// Calibrated from 1992 data points across CID22, CLIC 2025, gb82-sc,
 /// and KADID-10k corpuses at 8–256 color quantization levels.
 /// Median butteraugli per 0.01-wide MPE bin, monotonicity enforced.
+///
+/// For reference, JPEG quality equivalences (median across same corpuses, N=3320):
+///
+/// | JPEG q | butteraugli | SSIMULACRA2 | ≈ MPE  |
+/// |--------|-------------|-------------|--------|
+/// |     95 |        1.18 |        91.1 | 0.0077 |
+/// |     90 |        1.80 |        87.5 | 0.0117 |
+/// |     85 |        2.26 |        84.2 | 0.0146 |
+/// |     80 |        2.62 |        81.5 | 0.0174 |
+/// |     75 |        2.96 |        78.9 | 0.0201 |
+/// |     70 |        3.20 |        76.5 | 0.0221 |
+/// |     60 |        3.57 |        72.1 | 0.0250 |
+/// |     50 |        3.90 |        68.6 | 0.0276 |
+/// |     40 |        4.26 |        63.5 | 0.0304 |
+/// |     30 |        4.72 |        55.8 | 0.0339 |
 const MPE_BA_TABLE: [(f32, f32); 24] = [
     (0.0, 0.0),
     (0.005, 0.76),
