@@ -48,6 +48,7 @@ macro_rules! dev_modules {
         )*
     };
 }
+pub(crate) mod blue_noise;
 dev_modules!(
     dither, histogram, masking, median_cut, metric, oklab, palette, remap
 );

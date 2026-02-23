@@ -12,8 +12,340 @@ use crate::remap::RunPriority;
 pub enum DitherMode {
     /// No dithering — nearest color only.
     None,
-    /// AQ-adaptive dithering — modulated by masking weights.
+    /// AQ-adaptive Floyd-Steinberg dithering — modulated by masking weights.
     Adaptive,
+    /// Sierra Lite (Sierra-2-4-A) — lighter error diffusion with 3 neighbors,
+    /// less temporal cascade than Floyd-Steinberg. Good for animation.
+    SierraLite,
+    /// Position-deterministic blue noise ordered dithering — zero temporal
+    /// flicker, slightly lower single-frame quality than error diffusion.
+    BlueNoise,
+}
+
+/// Apply serpentine error diffusion kernel for 3-channel (L,a,b) error.
+///
+/// With 4 weights: Floyd-Steinberg (right, below-back, below, below-forward)
+/// With 3 weights: Sierra Lite (right, below-back, below; no diagonal forward)
+///
+/// The optional opacity guard wraps each neighbor check in `$pixels[$ti].a > 0`.
+macro_rules! diffuse_kernel_3ch {
+    // Without opacity guard (RGB)
+    ($forward:expr, $x:expr, $y:expr, $width:expr, $height:expr, $idx:expr,
+     $lab_buf:expr, $diffuse_err:expr, $weights:expr, $adaptive:expr,
+     $err_l:expr, $err_a:expr, $err_b:expr,
+     $w_right:expr, $w_below_back:expr, $w_below:expr $(, $w_below_fwd:expr)?) => {{
+        #[allow(unused_variables)]
+        let (forward, x, y, width, height, idx) = ($forward, $x, $y, $width, $height, $idx);
+        if forward {
+            if x + 1 < width {
+                let w = if $adaptive { $weights[idx + 1] } else { 1.0 };
+                ($diffuse_err)(&mut $lab_buf, idx + 1, $w_right, $err_l, $err_a, $err_b, w);
+            }
+            if y + 1 < height {
+                if x > 0 {
+                    let ti = (y + 1) * width + (x - 1);
+                    let w = if $adaptive { $weights[ti] } else { 1.0 };
+                    ($diffuse_err)(&mut $lab_buf, ti, $w_below_back, $err_l, $err_a, $err_b, w);
+                }
+                {
+                    let ti = (y + 1) * width + x;
+                    let w = if $adaptive { $weights[ti] } else { 1.0 };
+                    ($diffuse_err)(&mut $lab_buf, ti, $w_below, $err_l, $err_a, $err_b, w);
+                }
+                $(
+                    if x + 1 < width {
+                        let ti = (y + 1) * width + (x + 1);
+                        let w = if $adaptive { $weights[ti] } else { 1.0 };
+                        ($diffuse_err)(&mut $lab_buf, ti, $w_below_fwd, $err_l, $err_a, $err_b, w);
+                    }
+                )?
+            }
+        } else {
+            if x > 0 {
+                let w = if $adaptive { $weights[idx - 1] } else { 1.0 };
+                ($diffuse_err)(&mut $lab_buf, idx - 1, $w_right, $err_l, $err_a, $err_b, w);
+            }
+            if y + 1 < height {
+                if x + 1 < width {
+                    let ti = (y + 1) * width + (x + 1);
+                    let w = if $adaptive { $weights[ti] } else { 1.0 };
+                    ($diffuse_err)(&mut $lab_buf, ti, $w_below_back, $err_l, $err_a, $err_b, w);
+                }
+                {
+                    let ti = (y + 1) * width + x;
+                    let w = if $adaptive { $weights[ti] } else { 1.0 };
+                    ($diffuse_err)(&mut $lab_buf, ti, $w_below, $err_l, $err_a, $err_b, w);
+                }
+                $(
+                    if x > 0 {
+                        let ti = (y + 1) * width + (x - 1);
+                        let w = if $adaptive { $weights[ti] } else { 1.0 };
+                        ($diffuse_err)(&mut $lab_buf, ti, $w_below_fwd, $err_l, $err_a, $err_b, w);
+                    }
+                )?
+            }
+        }
+    }};
+}
+
+/// Same as `diffuse_kernel_3ch!` but with an opacity guard — only diffuses
+/// to neighbors where `$pixels[ti].a > 0`.
+macro_rules! diffuse_kernel_3ch_opaque {
+    ($forward:expr, $x:expr, $y:expr, $width:expr, $height:expr, $idx:expr,
+     $lab_buf:expr, $diffuse_err:expr, $weights:expr, $adaptive:expr,
+     $pixels:expr, $err_l:expr, $err_a:expr, $err_b:expr,
+     $w_right:expr, $w_below_back:expr, $w_below:expr $(, $w_below_fwd:expr)?) => {{
+        #[allow(unused_variables)]
+        let (forward, x, y, width, height, idx) = ($forward, $x, $y, $width, $height, $idx);
+        if forward {
+            if x + 1 < width && $pixels[idx + 1].a > 0 {
+                let w = if $adaptive { $weights[idx + 1] } else { 1.0 };
+                ($diffuse_err)(&mut $lab_buf, idx + 1, $w_right, $err_l, $err_a, $err_b, w);
+            }
+            if y + 1 < height {
+                if x > 0 {
+                    let ti = (y + 1) * width + (x - 1);
+                    if $pixels[ti].a > 0 {
+                        let w = if $adaptive { $weights[ti] } else { 1.0 };
+                        ($diffuse_err)(&mut $lab_buf, ti, $w_below_back, $err_l, $err_a, $err_b, w);
+                    }
+                }
+                {
+                    let ti = (y + 1) * width + x;
+                    if $pixels[ti].a > 0 {
+                        let w = if $adaptive { $weights[ti] } else { 1.0 };
+                        ($diffuse_err)(&mut $lab_buf, ti, $w_below, $err_l, $err_a, $err_b, w);
+                    }
+                }
+                $(
+                    if x + 1 < width {
+                        let ti = (y + 1) * width + (x + 1);
+                        if $pixels[ti].a > 0 {
+                            let w = if $adaptive { $weights[ti] } else { 1.0 };
+                            ($diffuse_err)(&mut $lab_buf, ti, $w_below_fwd, $err_l, $err_a, $err_b, w);
+                        }
+                    }
+                )?
+            }
+        } else {
+            if x > 0 && $pixels[idx - 1].a > 0 {
+                let w = if $adaptive { $weights[idx - 1] } else { 1.0 };
+                ($diffuse_err)(&mut $lab_buf, idx - 1, $w_right, $err_l, $err_a, $err_b, w);
+            }
+            if y + 1 < height {
+                if x + 1 < width {
+                    let ti = (y + 1) * width + (x + 1);
+                    if $pixels[ti].a > 0 {
+                        let w = if $adaptive { $weights[ti] } else { 1.0 };
+                        ($diffuse_err)(&mut $lab_buf, ti, $w_below_back, $err_l, $err_a, $err_b, w);
+                    }
+                }
+                {
+                    let ti = (y + 1) * width + x;
+                    if $pixels[ti].a > 0 {
+                        let w = if $adaptive { $weights[ti] } else { 1.0 };
+                        ($diffuse_err)(&mut $lab_buf, ti, $w_below, $err_l, $err_a, $err_b, w);
+                    }
+                }
+                $(
+                    if x > 0 {
+                        let ti = (y + 1) * width + (x - 1);
+                        if $pixels[ti].a > 0 {
+                            let w = if $adaptive { $weights[ti] } else { 1.0 };
+                            ($diffuse_err)(&mut $lab_buf, ti, $w_below_fwd, $err_l, $err_a, $err_b, w);
+                        }
+                    }
+                )?
+            }
+        }
+    }};
+}
+
+/// 4-channel (L,a,b,alpha) error diffusion kernel with opacity guard.
+macro_rules! diffuse_kernel_4ch_opaque {
+    ($forward:expr, $x:expr, $y:expr, $width:expr, $height:expr, $idx:expr,
+     $lab_buf:expr, $diffuse_err:expr, $weights:expr, $adaptive:expr,
+     $pixels:expr, $err_l:expr, $err_a:expr, $err_b:expr, $err_al:expr,
+     $w_right:expr, $w_below_back:expr, $w_below:expr $(, $w_below_fwd:expr)?) => {{
+        #[allow(unused_variables)]
+        let (forward, x, y, width, height, idx) = ($forward, $x, $y, $width, $height, $idx);
+        if forward {
+            if x + 1 < width && $pixels[idx + 1].a > 0 {
+                let w = if $adaptive { $weights[idx + 1] } else { 1.0 };
+                ($diffuse_err)(&mut $lab_buf, idx + 1, $w_right, $err_l, $err_a, $err_b, $err_al, w);
+            }
+            if y + 1 < height {
+                if x > 0 {
+                    let ti = (y + 1) * width + (x - 1);
+                    if $pixels[ti].a > 0 {
+                        let w = if $adaptive { $weights[ti] } else { 1.0 };
+                        ($diffuse_err)(&mut $lab_buf, ti, $w_below_back, $err_l, $err_a, $err_b, $err_al, w);
+                    }
+                }
+                {
+                    let ti = (y + 1) * width + x;
+                    if $pixels[ti].a > 0 {
+                        let w = if $adaptive { $weights[ti] } else { 1.0 };
+                        ($diffuse_err)(&mut $lab_buf, ti, $w_below, $err_l, $err_a, $err_b, $err_al, w);
+                    }
+                }
+                $(
+                    if x + 1 < width {
+                        let ti = (y + 1) * width + (x + 1);
+                        if $pixels[ti].a > 0 {
+                            let w = if $adaptive { $weights[ti] } else { 1.0 };
+                            ($diffuse_err)(&mut $lab_buf, ti, $w_below_fwd, $err_l, $err_a, $err_b, $err_al, w);
+                        }
+                    }
+                )?
+            }
+        } else {
+            if x > 0 && $pixels[idx - 1].a > 0 {
+                let w = if $adaptive { $weights[idx - 1] } else { 1.0 };
+                ($diffuse_err)(&mut $lab_buf, idx - 1, $w_right, $err_l, $err_a, $err_b, $err_al, w);
+            }
+            if y + 1 < height {
+                if x + 1 < width {
+                    let ti = (y + 1) * width + (x + 1);
+                    if $pixels[ti].a > 0 {
+                        let w = if $adaptive { $weights[ti] } else { 1.0 };
+                        ($diffuse_err)(&mut $lab_buf, ti, $w_below_back, $err_l, $err_a, $err_b, $err_al, w);
+                    }
+                }
+                {
+                    let ti = (y + 1) * width + x;
+                    if $pixels[ti].a > 0 {
+                        let w = if $adaptive { $weights[ti] } else { 1.0 };
+                        ($diffuse_err)(&mut $lab_buf, ti, $w_below, $err_l, $err_a, $err_b, $err_al, w);
+                    }
+                }
+                $(
+                    if x > 0 {
+                        let ti = (y + 1) * width + (x - 1);
+                        if $pixels[ti].a > 0 {
+                            let w = if $adaptive { $weights[ti] } else { 1.0 };
+                            ($diffuse_err)(&mut $lab_buf, ti, $w_below_fwd, $err_l, $err_a, $err_b, $err_al, w);
+                        }
+                    }
+                )?
+            }
+        }
+    }};
+}
+
+/// 3-channel error diffusion with proportional overflow control and gamut clamping.
+///
+/// Preserves error direction (critical for hue consistency) by scaling all
+/// channels uniformly when any would overflow the gamut bounds.
+#[inline(always)]
+fn diffuse_err_3ch(
+    buf: &mut [[f32; 3]],
+    target_idx: usize,
+    fraction: f32,
+    el: f32,
+    ea: f32,
+    eb: f32,
+    w_mod: f32,
+) {
+    let f = fraction * w_mod;
+    let v = &mut buf[target_idx];
+    let dl = el * f;
+    let da = ea * f;
+    let db = eb * f;
+    let new_l = v[0] + dl;
+    let new_a = v[1] + da;
+    let new_b = v[2] + db;
+    let mut ratio = 1.0f32;
+    if dl != 0.0 {
+        if new_l > 1.05 {
+            ratio = ratio.min((1.05 - v[0]) / dl);
+        }
+        if new_l < -0.05 {
+            ratio = ratio.min((-0.05 - v[0]) / dl);
+        }
+    }
+    if da != 0.0 {
+        if new_a > 0.55 {
+            ratio = ratio.min((0.55 - v[1]) / da);
+        }
+        if new_a < -0.55 {
+            ratio = ratio.min((-0.55 - v[1]) / da);
+        }
+    }
+    if db != 0.0 {
+        if new_b > 0.55 {
+            ratio = ratio.min((0.55 - v[2]) / db);
+        }
+        if new_b < -0.55 {
+            ratio = ratio.min((-0.55 - v[2]) / db);
+        }
+    }
+    ratio = ratio.max(0.0);
+    v[0] += dl * ratio;
+    v[1] += da * ratio;
+    v[2] += db * ratio;
+}
+
+/// 4-channel error diffusion with proportional overflow control and gamut clamping.
+#[inline(always)]
+fn diffuse_err_4ch(
+    buf: &mut [[f32; 4]],
+    target_idx: usize,
+    fraction: f32,
+    el: f32,
+    ea: f32,
+    eb: f32,
+    eal: f32,
+    w_mod: f32,
+) {
+    let f = fraction * w_mod;
+    let v = &mut buf[target_idx];
+    let dl = el * f;
+    let da = ea * f;
+    let db = eb * f;
+    let dal = eal * f;
+    let new_l = v[0] + dl;
+    let new_a = v[1] + da;
+    let new_b = v[2] + db;
+    let new_al = v[3] + dal;
+    let mut ratio = 1.0f32;
+    if dl != 0.0 {
+        if new_l > 1.05 {
+            ratio = ratio.min((1.05 - v[0]) / dl);
+        }
+        if new_l < -0.05 {
+            ratio = ratio.min((-0.05 - v[0]) / dl);
+        }
+    }
+    if da != 0.0 {
+        if new_a > 0.55 {
+            ratio = ratio.min((0.55 - v[1]) / da);
+        }
+        if new_a < -0.55 {
+            ratio = ratio.min((-0.55 - v[1]) / da);
+        }
+    }
+    if db != 0.0 {
+        if new_b > 0.55 {
+            ratio = ratio.min((0.55 - v[2]) / db);
+        }
+        if new_b < -0.55 {
+            ratio = ratio.min((-0.55 - v[2]) / db);
+        }
+    }
+    if dal != 0.0 {
+        if new_al > 1.05 {
+            ratio = ratio.min((1.05 - v[3]) / dal);
+        }
+        if new_al < -0.05 {
+            ratio = ratio.min((-0.05 - v[3]) / dal);
+        }
+    }
+    ratio = ratio.max(0.0);
+    v[0] += dl * ratio;
+    v[1] += da * ratio;
+    v[2] += db * ratio;
+    v[3] += dal * ratio;
 }
 
 /// Compute a per-pixel dither ratio based on local edge contrast.
@@ -183,7 +515,8 @@ pub fn dither_image(
     // Error magnitude threshold — errors beyond this get damped.
     let max_err_sq = 0.002 * dither_strength;
 
-    let adaptive = mode == DitherMode::Adaptive;
+    let adaptive = matches!(mode, DitherMode::Adaptive | DitherMode::SierraLite);
+    let use_sierra = mode == DitherMode::SierraLite;
 
     for y in 0..height {
         // Serpentine: even rows L→R, odd rows R→L
@@ -200,10 +533,6 @@ pub fn dither_image(
             let idx = y * width + x;
             let current = OKLab::new(lab_buf[idx][0], lab_buf[idx][1], lab_buf[idx][2]);
 
-            // Find nearest palette entry to the error-adjusted pixel.
-            // Two-seed search: seed1 from original pixel, seed2 from error-adjusted
-            // pixel converted back to sRGB. This catches palette boundary crossings
-            // where the error-adjusted color is in a different cache cell.
             let p = pixels[idx];
             let orig_lab = srgb_to_oklab(p.r, p.g, p.b);
             let seed = palette.nearest_cached(p.r, p.g, p.b);
@@ -211,9 +540,6 @@ pub fn dither_image(
             let seed2 = palette.nearest_cached(adj_r, adj_g, adj_b);
             let dithered_best = palette.nearest_seeded_2(current, seed, seed2);
 
-            // Undithered fallback (high dither only): if error diffusion
-            // pushed us to a palette entry much farther from the *original*
-            // pixel than the naive nearest match, reject it.
             let best = if use_fallback {
                 let undithered_best = palette.nearest_seeded(orig_lab, seed);
                 if dithered_best == undithered_best {
@@ -234,8 +560,6 @@ pub fn dither_image(
             };
             let best_lab = palette.entries_oklab()[best as usize];
 
-            // Run-aware dither suppression: if we'd extend a run, and we're in
-            // compression mode, consider using the previous index
             let chosen = if run_bias > 0.0 {
                 if let Some(prev) = prev_index {
                     let prev_dist = current.distance_sq(palette.entries_oklab()[prev as usize]);
@@ -260,21 +584,15 @@ pub fn dither_image(
 
             let chosen_lab = palette.entries_oklab()[chosen as usize];
 
-            // MPE accumulation — reuses orig_lab + chosen_lab already computed.
             if let Some(ref mut acc) = mpe_acc {
                 acc.accumulate(idx, orig_lab, chosen_lab, weights[idx]);
             }
 
-            // Compute quantization error, scaled by dither strength and
-            // edge-aware dither map. Edge pixels generate less error to
-            // prevent bleeding across color boundaries.
             let scale = dither_strength * dither_map[idx];
             let mut err_l = (current.l - chosen_lab.l) * scale;
             let mut err_a = (current.a - chosen_lab.a) * scale;
             let mut err_b = (current.b - chosen_lab.b) * scale;
 
-            // Error magnitude reduction: damp large errors to prevent
-            // runaway accumulation (gated at dither_strength > 0.3).
             if use_damping {
                 let err_mag = err_l * err_l + err_a * err_a + err_b * err_b;
                 if err_mag > max_err_sq {
@@ -284,106 +602,18 @@ pub fn dither_image(
                 }
             }
 
-            // Diffuse error with AQ modulation and gamut clamping.
-            let diffuse_err = |buf: &mut [[f32; 3]],
-                               target_idx: usize,
-                               fraction: f32,
-                               el: f32,
-                               ea: f32,
-                               eb: f32,
-                               w_mod: f32| {
-                let f = fraction * w_mod;
-                let v = &mut buf[target_idx];
-                // Proportional overflow control: scale the entire error vector
-                // so all channels stay within gamut + small overflow margin.
-                // Preserves error direction (critical for hue consistency).
-                let dl = el * f;
-                let da = ea * f;
-                let db = eb * f;
-                let new_l = v[0] + dl;
-                let new_a = v[1] + da;
-                let new_b = v[2] + db;
-                let mut ratio = 1.0f32;
-                // L: allow small overflow [-0.05, 1.05]
-                if dl != 0.0 {
-                    if new_l > 1.05 {
-                        ratio = ratio.min((1.05 - v[0]) / dl);
-                    }
-                    if new_l < -0.05 {
-                        ratio = ratio.min((-0.05 - v[0]) / dl);
-                    }
-                }
-                // a: allow overflow [-0.55, 0.55]
-                if da != 0.0 {
-                    if new_a > 0.55 {
-                        ratio = ratio.min((0.55 - v[1]) / da);
-                    }
-                    if new_a < -0.55 {
-                        ratio = ratio.min((-0.55 - v[1]) / da);
-                    }
-                }
-                // b: allow overflow [-0.55, 0.55]
-                if db != 0.0 {
-                    if new_b > 0.55 {
-                        ratio = ratio.min((0.55 - v[2]) / db);
-                    }
-                    if new_b < -0.55 {
-                        ratio = ratio.min((-0.55 - v[2]) / db);
-                    }
-                }
-                ratio = ratio.max(0.0);
-                v[0] += dl * ratio;
-                v[1] += da * ratio;
-                v[2] += db * ratio;
-            };
+            let diffuse_err = diffuse_err_3ch;
 
-            // Serpentine Floyd-Steinberg kernel:
-            //   Forward (L→R): right 7/16, bottom-left 3/16, bottom 5/16, bottom-right 1/16
-            //   Reverse (R→L): left 7/16, bottom-right 3/16, bottom 5/16, bottom-left 1/16
-            if forward {
-                if x + 1 < width {
-                    let w = if adaptive { weights[idx + 1] } else { 1.0 };
-                    diffuse_err(&mut lab_buf, idx + 1, 7.0 / 16.0, err_l, err_a, err_b, w);
-                }
-                if y + 1 < height {
-                    if x > 0 {
-                        let ti = (y + 1) * width + (x - 1);
-                        let w = if adaptive { weights[ti] } else { 1.0 };
-                        diffuse_err(&mut lab_buf, ti, 3.0 / 16.0, err_l, err_a, err_b, w);
-                    }
-                    {
-                        let ti = (y + 1) * width + x;
-                        let w = if adaptive { weights[ti] } else { 1.0 };
-                        diffuse_err(&mut lab_buf, ti, 5.0 / 16.0, err_l, err_a, err_b, w);
-                    }
-                    if x + 1 < width {
-                        let ti = (y + 1) * width + (x + 1);
-                        let w = if adaptive { weights[ti] } else { 1.0 };
-                        diffuse_err(&mut lab_buf, ti, 1.0 / 16.0, err_l, err_a, err_b, w);
-                    }
-                }
+            if use_sierra {
+                diffuse_kernel_3ch!(forward, x, y, width, height, idx,
+                    lab_buf, diffuse_err, weights, adaptive,
+                    err_l, err_a, err_b,
+                    2.0 / 4.0, 1.0 / 4.0, 1.0 / 4.0);
             } else {
-                if x > 0 {
-                    let w = if adaptive { weights[idx - 1] } else { 1.0 };
-                    diffuse_err(&mut lab_buf, idx - 1, 7.0 / 16.0, err_l, err_a, err_b, w);
-                }
-                if y + 1 < height {
-                    if x + 1 < width {
-                        let ti = (y + 1) * width + (x + 1);
-                        let w = if adaptive { weights[ti] } else { 1.0 };
-                        diffuse_err(&mut lab_buf, ti, 3.0 / 16.0, err_l, err_a, err_b, w);
-                    }
-                    {
-                        let ti = (y + 1) * width + x;
-                        let w = if adaptive { weights[ti] } else { 1.0 };
-                        diffuse_err(&mut lab_buf, ti, 5.0 / 16.0, err_l, err_a, err_b, w);
-                    }
-                    if x > 0 {
-                        let ti = (y + 1) * width + (x - 1);
-                        let w = if adaptive { weights[ti] } else { 1.0 };
-                        diffuse_err(&mut lab_buf, ti, 1.0 / 16.0, err_l, err_a, err_b, w);
-                    }
-                }
+                diffuse_kernel_3ch!(forward, x, y, width, height, idx,
+                    lab_buf, diffuse_err, weights, adaptive,
+                    err_l, err_a, err_b,
+                    7.0 / 16.0, 3.0 / 16.0, 5.0 / 16.0, 1.0 / 16.0);
             }
         }
     }
@@ -425,9 +655,10 @@ pub fn dither_image_rgba(
 
     let run_bias = run_priority.bias();
     let max_err_sq = 0.002 * dither_strength;
-    let adaptive = mode == DitherMode::Adaptive;
+    let adaptive = matches!(mode, DitherMode::Adaptive | DitherMode::SierraLite);
     let use_fallback = dither_strength > 0.4;
     let use_damping = dither_strength > 0.3;
+    let use_sierra = mode == DitherMode::SierraLite;
 
     let mut lab_buf: Vec<[f32; 3]> = pixels
         .iter()
@@ -514,7 +745,6 @@ pub fn dither_image_rgba(
 
             let chosen_lab = palette.entries_oklab()[chosen as usize];
 
-            // MPE accumulation — reuses orig_lab + chosen_lab already computed.
             if let Some(ref mut acc) = mpe_acc {
                 acc.accumulate(idx, orig_lab, chosen_lab, weights[idx]);
             }
@@ -533,110 +763,18 @@ pub fn dither_image_rgba(
                 }
             }
 
-            let diffuse_err = |buf: &mut [[f32; 3]],
-                               ti: usize,
-                               fraction: f32,
-                               el: f32,
-                               ea: f32,
-                               eb: f32,
-                               w_mod: f32| {
-                let f = fraction * w_mod;
-                let v = &mut buf[ti];
-                let dl = el * f;
-                let da = ea * f;
-                let db = eb * f;
-                let new_l = v[0] + dl;
-                let new_a = v[1] + da;
-                let new_b = v[2] + db;
-                let mut ratio = 1.0f32;
-                if dl != 0.0 {
-                    if new_l > 1.05 {
-                        ratio = ratio.min((1.05 - v[0]) / dl);
-                    }
-                    if new_l < -0.05 {
-                        ratio = ratio.min((-0.05 - v[0]) / dl);
-                    }
-                }
-                if da != 0.0 {
-                    if new_a > 0.55 {
-                        ratio = ratio.min((0.55 - v[1]) / da);
-                    }
-                    if new_a < -0.55 {
-                        ratio = ratio.min((-0.55 - v[1]) / da);
-                    }
-                }
-                if db != 0.0 {
-                    if new_b > 0.55 {
-                        ratio = ratio.min((0.55 - v[2]) / db);
-                    }
-                    if new_b < -0.55 {
-                        ratio = ratio.min((-0.55 - v[2]) / db);
-                    }
-                }
-                ratio = ratio.max(0.0);
-                v[0] += dl * ratio;
-                v[1] += da * ratio;
-                v[2] += db * ratio;
-            };
+            let diffuse_err = diffuse_err_3ch;
 
-            let opaque_at = |px: usize| pixels[px].a > 0;
-
-            if forward {
-                if x + 1 < width && opaque_at(idx + 1) {
-                    let w = if adaptive { weights[idx + 1] } else { 1.0 };
-                    diffuse_err(&mut lab_buf, idx + 1, 7.0 / 16.0, err_l, err_a, err_b, w);
-                }
-                if y + 1 < height {
-                    if x > 0 {
-                        let ti = (y + 1) * width + (x - 1);
-                        if opaque_at(ti) {
-                            let w = if adaptive { weights[ti] } else { 1.0 };
-                            diffuse_err(&mut lab_buf, ti, 3.0 / 16.0, err_l, err_a, err_b, w);
-                        }
-                    }
-                    {
-                        let ti = (y + 1) * width + x;
-                        if opaque_at(ti) {
-                            let w = if adaptive { weights[ti] } else { 1.0 };
-                            diffuse_err(&mut lab_buf, ti, 5.0 / 16.0, err_l, err_a, err_b, w);
-                        }
-                    }
-                    if x + 1 < width {
-                        let ti = (y + 1) * width + (x + 1);
-                        if opaque_at(ti) {
-                            let w = if adaptive { weights[ti] } else { 1.0 };
-                            diffuse_err(&mut lab_buf, ti, 1.0 / 16.0, err_l, err_a, err_b, w);
-                        }
-                    }
-                }
+            if use_sierra {
+                diffuse_kernel_3ch_opaque!(forward, x, y, width, height, idx,
+                    lab_buf, diffuse_err, weights, adaptive,
+                    pixels, err_l, err_a, err_b,
+                    2.0 / 4.0, 1.0 / 4.0, 1.0 / 4.0);
             } else {
-                if x > 0 && opaque_at(idx - 1) {
-                    let w = if adaptive { weights[idx - 1] } else { 1.0 };
-                    diffuse_err(&mut lab_buf, idx - 1, 7.0 / 16.0, err_l, err_a, err_b, w);
-                }
-                if y + 1 < height {
-                    if x + 1 < width {
-                        let ti = (y + 1) * width + (x + 1);
-                        if opaque_at(ti) {
-                            let w = if adaptive { weights[ti] } else { 1.0 };
-                            diffuse_err(&mut lab_buf, ti, 3.0 / 16.0, err_l, err_a, err_b, w);
-                        }
-                    }
-                    {
-                        let ti = (y + 1) * width + x;
-                        if opaque_at(ti) {
-                            let w = if adaptive { weights[ti] } else { 1.0 };
-                            diffuse_err(&mut lab_buf, ti, 5.0 / 16.0, err_l, err_a, err_b, w);
-                        }
-                    }
-                    if x > 0 {
-                        let ti = (y + 1) * width + (x - 1);
-                        if opaque_at(ti) {
-                            let w = if adaptive { weights[ti] } else { 1.0 };
-                            diffuse_err(&mut lab_buf, ti, 1.0 / 16.0, err_l, err_a, err_b, w);
-                        }
-                    }
-                }
+                diffuse_kernel_3ch_opaque!(forward, x, y, width, height, idx,
+                    lab_buf, diffuse_err, weights, adaptive,
+                    pixels, err_l, err_a, err_b,
+                    7.0 / 16.0, 3.0 / 16.0, 5.0 / 16.0, 1.0 / 16.0);
             }
         }
     }
@@ -678,9 +816,10 @@ pub fn dither_image_rgba_alpha(
 
     let run_bias = run_priority.bias();
     let max_err_sq = 0.002 * dither_strength;
-    let adaptive = mode == DitherMode::Adaptive;
+    let adaptive = matches!(mode, DitherMode::Adaptive | DitherMode::SierraLite);
     let use_fallback = dither_strength > 0.4;
     let use_damping = dither_strength > 0.3;
+    let use_sierra = mode == DitherMode::SierraLite;
 
     // Working buffer: [L, a, b, alpha]
     let mut lab_buf: Vec<[f32; 4]> = pixels
@@ -771,7 +910,6 @@ pub fn dither_image_rgba_alpha(
             let chosen_lab = palette.entries_oklab()[chosen as usize];
             let chosen_alpha = palette.entries_rgba()[chosen as usize][3] as f32 / 255.0;
 
-            // MPE accumulation — reuses orig_lab + chosen_lab already computed.
             if let Some(ref mut acc) = mpe_acc {
                 acc.accumulate(idx, orig_lab, chosen_lab, weights[idx]);
             }
@@ -792,194 +930,18 @@ pub fn dither_image_rgba_alpha(
                 }
             }
 
-            let diffuse_err = |buf: &mut [[f32; 4]],
-                               ti: usize,
-                               fraction: f32,
-                               el: f32,
-                               ea: f32,
-                               eb: f32,
-                               eal: f32,
-                               w_mod: f32| {
-                let f = fraction * w_mod;
-                let v = &mut buf[ti];
-                let dl = el * f;
-                let da = ea * f;
-                let db = eb * f;
-                let dal = eal * f;
-                let new_l = v[0] + dl;
-                let new_a = v[1] + da;
-                let new_b = v[2] + db;
-                let new_al = v[3] + dal;
-                let mut ratio = 1.0f32;
-                if dl != 0.0 {
-                    if new_l > 1.05 {
-                        ratio = ratio.min((1.05 - v[0]) / dl);
-                    }
-                    if new_l < -0.05 {
-                        ratio = ratio.min((-0.05 - v[0]) / dl);
-                    }
-                }
-                if da != 0.0 {
-                    if new_a > 0.55 {
-                        ratio = ratio.min((0.55 - v[1]) / da);
-                    }
-                    if new_a < -0.55 {
-                        ratio = ratio.min((-0.55 - v[1]) / da);
-                    }
-                }
-                if db != 0.0 {
-                    if new_b > 0.55 {
-                        ratio = ratio.min((0.55 - v[2]) / db);
-                    }
-                    if new_b < -0.55 {
-                        ratio = ratio.min((-0.55 - v[2]) / db);
-                    }
-                }
-                if dal != 0.0 {
-                    if new_al > 1.05 {
-                        ratio = ratio.min((1.05 - v[3]) / dal);
-                    }
-                    if new_al < -0.05 {
-                        ratio = ratio.min((-0.05 - v[3]) / dal);
-                    }
-                }
-                ratio = ratio.max(0.0);
-                v[0] += dl * ratio;
-                v[1] += da * ratio;
-                v[2] += db * ratio;
-                v[3] += dal * ratio;
-            };
+            let diffuse_err = diffuse_err_4ch;
 
-            let opaque_at = |px: usize| pixels[px].a > 0;
-
-            if forward {
-                if x + 1 < width && opaque_at(idx + 1) {
-                    let w = if adaptive { weights[idx + 1] } else { 1.0 };
-                    diffuse_err(
-                        &mut lab_buf,
-                        idx + 1,
-                        7.0 / 16.0,
-                        err_l,
-                        err_a,
-                        err_b,
-                        err_al,
-                        w,
-                    );
-                }
-                if y + 1 < height {
-                    if x > 0 {
-                        let ti = (y + 1) * width + (x - 1);
-                        if opaque_at(ti) {
-                            let w = if adaptive { weights[ti] } else { 1.0 };
-                            diffuse_err(
-                                &mut lab_buf,
-                                ti,
-                                3.0 / 16.0,
-                                err_l,
-                                err_a,
-                                err_b,
-                                err_al,
-                                w,
-                            );
-                        }
-                    }
-                    {
-                        let ti = (y + 1) * width + x;
-                        if opaque_at(ti) {
-                            let w = if adaptive { weights[ti] } else { 1.0 };
-                            diffuse_err(
-                                &mut lab_buf,
-                                ti,
-                                5.0 / 16.0,
-                                err_l,
-                                err_a,
-                                err_b,
-                                err_al,
-                                w,
-                            );
-                        }
-                    }
-                    if x + 1 < width {
-                        let ti = (y + 1) * width + (x + 1);
-                        if opaque_at(ti) {
-                            let w = if adaptive { weights[ti] } else { 1.0 };
-                            diffuse_err(
-                                &mut lab_buf,
-                                ti,
-                                1.0 / 16.0,
-                                err_l,
-                                err_a,
-                                err_b,
-                                err_al,
-                                w,
-                            );
-                        }
-                    }
-                }
+            if use_sierra {
+                diffuse_kernel_4ch_opaque!(forward, x, y, width, height, idx,
+                    lab_buf, diffuse_err, weights, adaptive,
+                    pixels, err_l, err_a, err_b, err_al,
+                    2.0 / 4.0, 1.0 / 4.0, 1.0 / 4.0);
             } else {
-                if x > 0 && opaque_at(idx - 1) {
-                    let w = if adaptive { weights[idx - 1] } else { 1.0 };
-                    diffuse_err(
-                        &mut lab_buf,
-                        idx - 1,
-                        7.0 / 16.0,
-                        err_l,
-                        err_a,
-                        err_b,
-                        err_al,
-                        w,
-                    );
-                }
-                if y + 1 < height {
-                    if x + 1 < width {
-                        let ti = (y + 1) * width + (x + 1);
-                        if opaque_at(ti) {
-                            let w = if adaptive { weights[ti] } else { 1.0 };
-                            diffuse_err(
-                                &mut lab_buf,
-                                ti,
-                                3.0 / 16.0,
-                                err_l,
-                                err_a,
-                                err_b,
-                                err_al,
-                                w,
-                            );
-                        }
-                    }
-                    {
-                        let ti = (y + 1) * width + x;
-                        if opaque_at(ti) {
-                            let w = if adaptive { weights[ti] } else { 1.0 };
-                            diffuse_err(
-                                &mut lab_buf,
-                                ti,
-                                5.0 / 16.0,
-                                err_l,
-                                err_a,
-                                err_b,
-                                err_al,
-                                w,
-                            );
-                        }
-                    }
-                    if x > 0 {
-                        let ti = (y + 1) * width + (x - 1);
-                        if opaque_at(ti) {
-                            let w = if adaptive { weights[ti] } else { 1.0 };
-                            diffuse_err(
-                                &mut lab_buf,
-                                ti,
-                                1.0 / 16.0,
-                                err_l,
-                                err_a,
-                                err_b,
-                                err_al,
-                                w,
-                            );
-                        }
-                    }
-                }
+                diffuse_kernel_4ch_opaque!(forward, x, y, width, height, idx,
+                    lab_buf, diffuse_err, weights, adaptive,
+                    pixels, err_l, err_a, err_b, err_al,
+                    7.0 / 16.0, 3.0 / 16.0, 5.0 / 16.0, 1.0 / 16.0);
             }
         }
     }
