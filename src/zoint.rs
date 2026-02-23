@@ -572,3 +572,142 @@ fn optimize_inner(
 
     (optimized_indices, zoint_data)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paeth_predictor_basic() {
+        // When a=b=c, all distances are 0, so a is returned
+        assert_eq!(paeth_predictor(100, 100, 100), 100);
+        // a=10, b=20, c=15 → p=15, pa=5, pb=5, pc=0 → c
+        assert_eq!(paeth_predictor(10, 20, 15), 15);
+        // a=0, b=0, c=0 → p=0, returns a=0
+        assert_eq!(paeth_predictor(0, 0, 0), 0);
+    }
+
+    #[test]
+    fn filter_none_is_identity() {
+        assert_eq!(compute_filtered_byte(0, 42, 0, 0, 0), 42);
+        assert_eq!(compute_filtered_byte(0, 255, 100, 200, 50), 255);
+    }
+
+    #[test]
+    fn filter_sub() {
+        // Sub: raw - left
+        assert_eq!(compute_filtered_byte(1, 100, 50, 0, 0), 50);
+        // Wrapping: 10 - 20 = 246 (mod 256)
+        assert_eq!(compute_filtered_byte(1, 10, 20, 0, 0), 246);
+    }
+
+    #[test]
+    fn filter_up() {
+        // Up: raw - above
+        assert_eq!(compute_filtered_byte(2, 100, 0, 50, 0), 50);
+    }
+
+    #[test]
+    fn select_bit_depth_correct() {
+        assert_eq!(select_bit_depth(2), 1);
+        assert_eq!(select_bit_depth(4), 2);
+        assert_eq!(select_bit_depth(16), 4);
+        assert_eq!(select_bit_depth(17), 8);
+        assert_eq!(select_bit_depth(256), 8);
+    }
+
+    #[test]
+    fn pack_row_8bit() {
+        let indices = [0, 1, 2, 3];
+        let mut out = [0u8; 4];
+        pack_row(&indices, 8, &mut out);
+        assert_eq!(out, [0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn pack_row_4bit() {
+        let indices = [0x0A, 0x0B, 0x0C];
+        let mut out = [0u8; 2]; // 3 pixels at 4 bits = 2 bytes (ceil)
+        pack_row(&indices, 4, &mut out);
+        // pixel 0 → high nibble byte 0, pixel 1 → low nibble byte 0
+        // pixel 2 → high nibble byte 1
+        assert_eq!(out[0], 0xAB);
+        assert_eq!(out[1], 0xC0);
+    }
+
+    #[test]
+    fn optimize_rgb_produces_valid_output() {
+        // Create a simple 4x2 image with 4 colors
+        let pixels: Vec<rgb::RGB<u8>> = vec![
+            rgb::RGB::new(255, 0, 0),
+            rgb::RGB::new(0, 255, 0),
+            rgb::RGB::new(0, 0, 255),
+            rgb::RGB::new(255, 255, 0),
+            rgb::RGB::new(255, 0, 0),
+            rgb::RGB::new(0, 255, 0),
+            rgb::RGB::new(0, 0, 255),
+            rgb::RGB::new(255, 255, 0),
+        ];
+        let width = 4;
+        let height = 2;
+        let weights = vec![1.0f32; 8];
+
+        // Build a palette
+        let centroids: Vec<OKLab> = [
+            rgb::RGB::new(255u8, 0, 0),
+            rgb::RGB::new(0, 255, 0),
+            rgb::RGB::new(0, 0, 255),
+            rgb::RGB::new(255, 255, 0),
+        ]
+        .iter()
+        .map(|c| crate::oklab::srgb_to_oklab(c.r, c.g, c.b))
+        .collect();
+        let pal = Palette::from_centroids_sorted(
+            centroids,
+            false,
+            crate::palette::PaletteSortStrategy::Luminance,
+        );
+
+        // Simple nearest-neighbor remap
+        let indices: Vec<u8> = pixels
+            .iter()
+            .map(|p| {
+                let lab = crate::oklab::srgb_to_oklab(p.r, p.g, p.b);
+                pal.nearest(lab)
+            })
+            .collect();
+
+        let (opt_indices, zd) =
+            optimize_rgb(&pixels, width, height, &weights, &pal, &indices, 7, 0.01);
+
+        // Basic validity checks
+        assert_eq!(opt_indices.len(), width * height);
+        assert_eq!(zd.filter_choices().len(), height);
+        assert!(zd.bit_depth() <= 8);
+        assert!(!zd.deflate_stream().is_empty());
+        assert_ne!(zd.adler32(), 0);
+
+        // All indices must be valid palette indices
+        for &idx in &opt_indices {
+            assert!((idx as usize) < pal.len(), "invalid index {idx}");
+        }
+
+        // All filter choices must be 0-4
+        for &f in zd.filter_choices() {
+            assert!(f <= 4, "invalid filter type {f}");
+        }
+
+        // Verify deflate stream can be decompressed
+        let mut decompressor = zenflate::Decompressor::new();
+        let expected_size = (packed_row_bytes(width, zd.bit_depth()) + 1) * height;
+        let mut decompressed = vec![0u8; expected_size];
+        let result = decompressor
+            .deflate_decompress(zd.deflate_stream(), &mut decompressed, Unstoppable)
+            .expect("deflate decompression should succeed");
+        assert_eq!(result.output_written, expected_size);
+
+        // Verify Adler-32 matches
+        let adler = zenflate::adler32(1, &decompressed[..result.output_written]);
+        assert_eq!(adler, zd.adler32(), "adler32 mismatch");
+    }
+}
