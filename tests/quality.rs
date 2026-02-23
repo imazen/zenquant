@@ -731,3 +731,469 @@ fn remap_with_prev_enforces_min_ssim2() {
         "remap_with_prev should enforce min_ssim2: got {result:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Animation coverage gap tests
+// ---------------------------------------------------------------------------
+
+/// Blue noise: static regions produce identical indices when only another region changes.
+/// This directly tests the "zero temporal flicker" claim.
+#[test]
+fn blue_noise_zero_flicker_static_region() {
+    let width = 32;
+    let height = 32;
+
+    // Frame 1: gradient top half, solid blue bottom half
+    let mut frame1 = Vec::with_capacity(width * height);
+    for y in 0..height {
+        for x in 0..width {
+            if y < height / 2 {
+                let r = (x * 255 / width) as u8;
+                let g = (y * 255 / (height / 2)) as u8;
+                frame1.push(rgb::RGB { r, g, b: 100 });
+            } else {
+                frame1.push(rgb::RGB {
+                    r: 50,
+                    g: 50,
+                    b: 200,
+                });
+            }
+        }
+    }
+
+    // Frame 2: different top half (inverted gradient), same bottom half
+    let mut frame2 = Vec::with_capacity(width * height);
+    for y in 0..height {
+        for x in 0..width {
+            if y < height / 2 {
+                let r = 255 - (x * 255 / width) as u8;
+                let g = 255 - (y * 255 / (height / 2)) as u8;
+                frame2.push(rgb::RGB { r, g, b: 50 });
+            } else {
+                // Identical to frame 1
+                frame2.push(rgb::RGB {
+                    r: 50,
+                    g: 50,
+                    b: 200,
+                });
+            }
+        }
+    }
+
+    let config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(32)
+        ._blue_noise_dither();
+
+    let frames = [
+        zenquant::ImgRef::new(&frame1, width, height),
+        zenquant::ImgRef::new(&frame2, width, height),
+    ];
+    let shared = zenquant::build_palette(&frames, &config).unwrap();
+
+    let r1 = shared.remap(&frame1, width, height, &config).unwrap();
+    let r2 = shared.remap(&frame2, width, height, &config).unwrap();
+
+    // Bottom half (static region) should have identical indices
+    let static_start = (height / 2) * width;
+    let static_indices_1 = &r1.indices()[static_start..];
+    let static_indices_2 = &r2.indices()[static_start..];
+    assert_eq!(
+        static_indices_1, static_indices_2,
+        "blue noise: static region indices should be identical across frames"
+    );
+
+    // Top half (changed region) should differ
+    let changed_indices_1 = &r1.indices()[..static_start];
+    let changed_indices_2 = &r2.indices()[..static_start];
+    let diffs = changed_indices_1
+        .iter()
+        .zip(changed_indices_2.iter())
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(
+        diffs > 0,
+        "blue noise: changed region should produce different indices"
+    );
+}
+
+/// Sierra Lite produces less temporal cascade than Floyd-Steinberg.
+/// When a single region changes, fewer downstream pixels are affected.
+#[test]
+fn sierra_lite_less_cascade_than_floyd_steinberg() {
+    let width = 32;
+    let height = 32;
+
+    // Frame 1: smooth gradient
+    let frame1: Vec<rgb::RGB<u8>> = (0..width * height)
+        .map(|i| {
+            let x = i % width;
+            let y = i / width;
+            rgb::RGB {
+                r: (x * 255 / width) as u8,
+                g: (y * 255 / height) as u8,
+                b: 128,
+            }
+        })
+        .collect();
+
+    // Frame 2: same except top-left 4x4 block is different
+    let mut frame2 = frame1.clone();
+    for y in 0..4 {
+        for x in 0..4 {
+            let idx = y * width + x;
+            frame2[idx] = rgb::RGB {
+                r: 255 - frame1[idx].r,
+                g: 255 - frame1[idx].g,
+                b: 255 - frame1[idx].b,
+            };
+        }
+    }
+
+    let config_fs = QuantizeConfig::new(OutputFormat::Png).max_colors(16);
+    let config_sl = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(16)
+        ._sierra_lite_dither();
+
+    // Build shared palettes from both frames for each config
+    let frames = [
+        zenquant::ImgRef::new(&frame1, width, height),
+        zenquant::ImgRef::new(&frame2, width, height),
+    ];
+    let shared_fs = zenquant::build_palette(&frames, &config_fs).unwrap();
+    let shared_sl = zenquant::build_palette(&frames, &config_sl).unwrap();
+
+    let r1_fs = shared_fs.remap(&frame1, width, height, &config_fs).unwrap();
+    let r2_fs = shared_fs.remap(&frame2, width, height, &config_fs).unwrap();
+
+    let r1_sl = shared_sl.remap(&frame1, width, height, &config_sl).unwrap();
+    let r2_sl = shared_sl.remap(&frame2, width, height, &config_sl).unwrap();
+
+    // Count how many pixels changed outside the 4x4 modified block
+    let count_cascade = |r1: &[u8], r2: &[u8]| -> usize {
+        let mut cascade = 0;
+        for y in 0..height {
+            for x in 0..width {
+                if x < 4 && y < 4 {
+                    continue; // skip the actually-modified block
+                }
+                let idx = y * width + x;
+                if r1[idx] != r2[idx] {
+                    cascade += 1;
+                }
+            }
+        }
+        cascade
+    };
+
+    let fs_cascade = count_cascade(r1_fs.indices(), r2_fs.indices());
+    let sl_cascade = count_cascade(r1_sl.indices(), r2_sl.indices());
+
+    assert!(
+        sl_cascade <= fs_cascade,
+        "Sierra Lite should have <= cascade than Floyd-Steinberg: SL={sl_cascade}, FS={fs_cascade}"
+    );
+}
+
+/// Blue noise and Sierra Lite produce valid results through the RGBA quantize + remap path.
+#[test]
+fn blue_noise_and_sierra_lite_rgba_paths() {
+    let width = 16;
+    let height = 16;
+    let pixels: Vec<rgb::RGBA<u8>> = (0..width * height)
+        .map(|i| {
+            let v = (i * 4 % 256) as u8;
+            let a = if i < 16 { 0 } else { 255 };
+            rgb::RGBA {
+                r: v,
+                g: 255 - v,
+                b: 128,
+                a,
+            }
+        })
+        .collect();
+
+    for (mode_name, config) in [
+        (
+            "blue_noise",
+            QuantizeConfig::new(OutputFormat::Gif)
+                .max_colors(16)
+                ._blue_noise_dither(),
+        ),
+        (
+            "sierra_lite",
+            QuantizeConfig::new(OutputFormat::Gif)
+                .max_colors(16)
+                ._sierra_lite_dither(),
+        ),
+    ] {
+        let result = zenquant::quantize_rgba(&pixels, width, height, &config).unwrap();
+
+        assert!(result.palette_len() <= 16, "{mode_name}: palette too large");
+        assert!(
+            result.transparent_index().is_some(),
+            "{mode_name}: should have transparent index"
+        );
+        for &idx in result.indices() {
+            assert!(
+                (idx as usize) < result.palette_len(),
+                "{mode_name}: index {idx} >= palette len {}",
+                result.palette_len()
+            );
+        }
+
+        // Transparent pixels should map to transparent index
+        let ti = result.transparent_index().unwrap();
+        for i in 0..16 {
+            assert_eq!(
+                result.indices()[i],
+                ti,
+                "{mode_name}: pixel {i} should be transparent"
+            );
+        }
+
+        // Remap should also work
+        let remapped = result.remap_rgba(&pixels, width, height, &config).unwrap();
+        assert_eq!(remapped.palette(), result.palette());
+    }
+}
+
+/// Full-alpha temporal clamping with semi-transparent pixels (PNG path).
+#[test]
+fn temporal_clamping_full_alpha_path() {
+    let width = 16;
+    let height = 16;
+
+    // Semi-transparent gradient
+    let pixels: Vec<rgb::RGBA<u8>> = (0..width * height)
+        .map(|i| {
+            let v = (i * 4 % 256) as u8;
+            let a = (i * 2 % 256) as u8; // varying alpha 0-254
+            rgb::RGBA {
+                r: v,
+                g: v,
+                b: v,
+                a,
+            }
+        })
+        .collect();
+
+    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(32);
+    let shared = zenquant::quantize_rgba(&pixels, width, height, &config).unwrap();
+
+    // Remap frame 1
+    let r1 = shared.remap_rgba(&pixels, width, height, &config).unwrap();
+
+    // Remap frame 2 with prev_indices — same pixels, should be stable
+    let r2 = shared
+        .remap_rgba_with_prev(&pixels, width, height, &config, r1.indices())
+        .unwrap();
+
+    assert_eq!(
+        r1.indices(),
+        r2.indices(),
+        "full-alpha temporal clamping: static semi-transparent pixels should produce identical indices"
+    );
+}
+
+/// Sequential multi-frame remap loop with temporal clamping chain.
+#[test]
+fn sequential_multi_frame_remap_chain() {
+    let width = 16;
+    let height = 16;
+
+    // Three frames with gradually shifting colors
+    let make_frame = |offset: u8| -> Vec<rgb::RGBA<u8>> {
+        (0..width * height)
+            .map(|i| {
+                let v = ((i * 3 % 256) as u8).wrapping_add(offset);
+                let a = if i < 8 { 0 } else { 255 };
+                rgb::RGBA {
+                    r: v,
+                    g: v.wrapping_add(30),
+                    b: v.wrapping_add(60),
+                    a,
+                }
+            })
+            .collect()
+    };
+
+    let frame1 = make_frame(0);
+    let frame2 = make_frame(5); // slight shift
+    let frame3 = make_frame(10); // more shift
+
+    let config = QuantizeConfig::new(OutputFormat::Gif)
+        .max_colors(32)
+        ._sierra_lite_dither();
+
+    // Build shared palette from all frames
+    let frames = [
+        zenquant::ImgRef::new(&frame1, width, height),
+        zenquant::ImgRef::new(&frame2, width, height),
+        zenquant::ImgRef::new(&frame3, width, height),
+    ];
+    let shared = zenquant::build_palette_rgba(&frames, &config).unwrap();
+
+    // Remap frame 1 (no prev)
+    let r1 = shared.remap_rgba(&frame1, width, height, &config).unwrap();
+
+    // Remap frame 2 with prev from frame 1
+    let r2 = shared
+        .remap_rgba_with_prev(&frame2, width, height, &config, r1.indices())
+        .unwrap();
+
+    // Remap frame 3 with prev from frame 2
+    let r3 = shared
+        .remap_rgba_with_prev(&frame3, width, height, &config, r2.indices())
+        .unwrap();
+
+    // All frames should share the same palette
+    assert_eq!(r1.palette(), r2.palette());
+    assert_eq!(r2.palette(), r3.palette());
+
+    // All indices should be valid
+    for (frame_name, result) in [("frame1", &r1), ("frame2", &r2), ("frame3", &r3)] {
+        assert_eq!(result.indices().len(), width * height);
+        for &idx in result.indices() {
+            assert!(
+                (idx as usize) < result.palette_len(),
+                "{frame_name}: index {idx} >= palette len {}",
+                result.palette_len()
+            );
+        }
+    }
+
+    // Transparent indices should be consistent
+    assert_eq!(r1.transparent_index(), r2.transparent_index());
+    assert_eq!(r2.transparent_index(), r3.transparent_index());
+}
+
+/// Error diffusion continues through locked pixels — unlocked pixels near
+/// locked regions should still get proper dithered quality.
+#[test]
+fn error_diffuses_through_locked_pixels() {
+    let width = 32;
+    let height = 32;
+
+    // Frame where the left half is a smooth gradient (will be locked)
+    // and the right half is also a gradient (will be unlocked in frame 2)
+    let frame1: Vec<rgb::RGB<u8>> = (0..width * height)
+        .map(|i| {
+            let x = i % width;
+            let y = i / width;
+            rgb::RGB {
+                r: (y * 255 / height) as u8,
+                g: (x * 255 / width) as u8,
+                b: 128,
+            }
+        })
+        .collect();
+
+    // Frame 2: left half identical (locked), right half inverted (unlocked)
+    let mut frame2 = frame1.clone();
+    for y in 0..height {
+        for x in (width / 2)..width {
+            let idx = y * width + x;
+            frame2[idx] = rgb::RGB {
+                r: 255 - frame1[idx].r,
+                g: 255 - frame1[idx].g,
+                b: 255 - frame1[idx].b,
+            };
+        }
+    }
+
+    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(32);
+
+    let frames = [
+        zenquant::ImgRef::new(&frame1, width, height),
+        zenquant::ImgRef::new(&frame2, width, height),
+    ];
+    let shared = zenquant::build_palette(&frames, &config).unwrap();
+
+    let r1 = shared.remap(&frame1, width, height, &config).unwrap();
+
+    // Remap frame 2 with clamping
+    let r2_clamped = shared
+        .remap_with_prev(&frame2, width, height, &config, r1.indices())
+        .unwrap();
+
+    // Remap frame 2 without clamping (for comparison)
+    let r2_unclamped = shared.remap(&frame2, width, height, &config).unwrap();
+
+    // Left half should be mostly locked (identical to frame 1)
+    let mut locked_count = 0;
+    for y in 0..height {
+        for x in 0..(width / 2) {
+            let idx = y * width + x;
+            if r2_clamped.indices()[idx] == r1.indices()[idx] {
+                locked_count += 1;
+            }
+        }
+    }
+    let total_left = (width / 2) * height;
+    assert!(
+        locked_count as f32 / total_left as f32 > 0.9,
+        "most left-half pixels should be locked: {locked_count}/{total_left}"
+    );
+
+    // Right half should still produce reasonable results (not degenerate)
+    // Compare quality: clamped right half should have similar MSE to unclamped
+    let right_mse = |indices: &[u8], palette: &[[u8; 3]]| -> f32 {
+        let mut total = 0.0f32;
+        let mut count = 0;
+        for y in 0..height {
+            for x in (width / 2)..width {
+                let idx = y * width + x;
+                let orig = srgb_to_oklab(frame2[idx].r, frame2[idx].g, frame2[idx].b);
+                let p = palette[indices[idx] as usize];
+                let quant = srgb_to_oklab(p[0], p[1], p[2]);
+                total += orig.distance_sq(quant);
+                count += 1;
+            }
+        }
+        total / count as f32
+    };
+
+    let mse_clamped = right_mse(r2_clamped.indices(), r2_clamped.palette());
+    let mse_unclamped = right_mse(r2_unclamped.indices(), r2_unclamped.palette());
+
+    // Clamped MSE on the unlocked region should be within 3x of unclamped
+    // (some degradation is expected since error flows through locked pixels
+    // which may differ from what free error diffusion would produce)
+    assert!(
+        mse_clamped < mse_unclamped * 3.0,
+        "clamped right-half MSE should be reasonable: clamped={mse_clamped:.6}, unclamped={mse_unclamped:.6}"
+    );
+}
+
+/// Blue noise + temporal clamping: remap_with_prev should produce identical
+/// results to remap (since blue noise is already position-deterministic).
+#[test]
+fn blue_noise_unaffected_by_temporal_clamping() {
+    let width = 16;
+    let height = 16;
+    let pixels = gradient_image(width, height);
+
+    let config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(16)
+        ._blue_noise_dither();
+
+    let shared = zenquant::quantize(&pixels, width, height, &config).unwrap();
+
+    // Remap without prev
+    let r1 = shared.remap(&pixels, width, height, &config).unwrap();
+
+    // Fabricate some arbitrary prev_indices
+    let prev: Vec<u8> = (0..width * height).map(|i| (i % 16) as u8).collect();
+
+    // Remap with prev_indices — should produce same result since blue noise
+    // ignores prev_indices (position-deterministic)
+    let r2 = shared
+        .remap_with_prev(&pixels, width, height, &config, &prev)
+        .unwrap();
+
+    assert_eq!(
+        r1.indices(),
+        r2.indices(),
+        "blue noise should produce identical indices regardless of prev_indices"
+    );
+}
