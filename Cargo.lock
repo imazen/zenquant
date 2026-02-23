@@ -33,7 +33,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b6d08808218c9a8bb39ac0490adc5d65a666cc38ddb730baf9ed57e32d803ee"
 dependencies = [
  "archmage-macros",
- "safe_unaligned_simd",
 ]
 
 [[package]]
@@ -1104,15 +1103,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "zenflate"
-version = "0.2.1"
-dependencies = [
- "archmage",
- "enough",
- "safe_unaligned_simd",
-]
-
-[[package]]
 name = "zengif"
 version = "0.6.0"
 dependencies = [
@@ -1147,7 +1137,6 @@ dependencies = [
  "quantizr",
  "rgb",
  "thiserror",
- "zenflate",
  "zengif",
  "zenwebp",
 ]

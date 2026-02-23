@@ -55,6 +55,8 @@ dev_modules!(
 pub mod error;
 #[cfg(feature = "zoint")]
 pub(crate) mod zoint;
+#[cfg(feature = "zoint")]
+mod zoint_predict;
 
 pub use error::QuantizeError;
 pub use imgref::{Img, ImgRef, ImgVec};
@@ -218,9 +220,10 @@ pub struct QuantizeConfig {
     compute_metric: bool,
     target_ssim2: Option<f32>,
     min_ssim2: Option<f32>,
-    /// Zenflate effort for the zoint evaluation pass (1–22). Default: 10.
+    /// Deflate effort for the zoint evaluation pass (1–22). Default: 10.
+    /// (Retained for API compatibility; the vendored predictor ignores this.)
     zoint_deflate_effort: u32,
-    /// Base OKLab distance tolerance for zoint candidate selection. Default: 0.002.
+    /// Base OKLab distance tolerance for zoint candidate selection. Default: 0.015.
     zoint_tolerance: f32,
 }
 
@@ -241,7 +244,7 @@ impl QuantizeConfig {
             target_ssim2: None,
             min_ssim2: None,
             zoint_deflate_effort: 10,
-            zoint_tolerance: 0.01,
+            zoint_tolerance: 0.015,
         }
     }
 
@@ -340,6 +343,7 @@ impl QuantizeConfig {
     }
 
     /// Override zoint deflate effort (clamped to 1–22). Not part of the public API.
+    /// (Retained for API compatibility; the vendored predictor ignores this.)
     #[doc(hidden)]
     pub fn _zoint_deflate_effort(mut self, effort: u32) -> Self {
         self.zoint_deflate_effort = effort.clamp(1, 22);

@@ -3,28 +3,30 @@
 //! After normal quantization produces indices and AQ weights, this module
 //! post-processes them: for each pixel with multiple perceptually acceptable
 //! palette candidates, it picks the candidate that compresses best under
-//! PNG scanline filters. The optimized indices are returned for the downstream
-//! encoder to compress through its standard filter selection + deflate pipeline.
+//! PNG scanline filters.
 //!
-//! Two-pass approach:
-//! 1. **Filter selection**: Evaluate multiple filter strategies on the initial
-//!    indices using incremental deflate compression forking. Pick the best
-//!    per-row filter assignment.
-//! 2. **Index optimization**: With filters locked, greedily optimize indices
-//!    per pixel to minimize filtered byte residuals (prefer zeros and runs).
-//!    The downstream encoder then re-selects filters on these improved indices.
+//! Single-pass approach with a vendored LZ77 predictor:
+//!  1. Pre-score all 5 PNG filters per row → keep top K=3.
+//!  2. For each top-K filter, run greedy index optimization.
+//!  3. Feed (filter, optimized indices) through the predictor → size estimate.
+//!  4. Row-pair lookahead defers decisions using predictor snapshots.
+//!
+//! The predictor uses Shannon entropy estimation over LZ77 match frequencies,
+//! which correlates well with actual deflate output for relative ranking.
 
 extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use zenflate::{CompressionLevel, Compressor, Unstoppable};
-
 use crate::oklab::OKLab;
 use crate::palette::Palette;
+use crate::zoint_predict::{Predictor, PredictorSnapshot};
 
 /// Maximum candidates per pixel. Higher = more options but slower.
 const MAX_CANDIDATES: usize = 6;
+
+/// Number of top-scoring filters to fully evaluate per row.
+const TOP_K_FILTERS: usize = 3;
 
 // ── PNG bit-depth and packing (duplicated from zenpng to avoid cross-dep) ──
 
@@ -102,15 +104,60 @@ fn compute_filtered_byte(filter: u8, raw: u8, left: u8, above: u8, above_left: u
     }
 }
 
-/// Apply a PNG filter to a packed row (bpp=1). Writes filter byte + filtered data to `out`.
-fn apply_filter_bpp1(filter: u8, row: &[u8], prev_row: &[u8], out: &mut Vec<u8>) {
-    out.push(filter);
+/// Apply a PNG filter to a packed row, writing into a pre-allocated slice.
+/// Returns the number of bytes written (row.len() + 1).
+fn apply_filter_bpp1_into(filter: u8, row: &[u8], prev_row: &[u8], out: &mut [u8]) -> usize {
+    out[0] = filter;
     for (x, &raw) in row.iter().enumerate() {
         let left = if x > 0 { row[x - 1] } else { 0 };
         let above = prev_row[x];
         let above_left = if x > 0 { prev_row[x - 1] } else { 0 };
-        out.push(compute_filtered_byte(filter, raw, left, above, above_left));
+        out[1 + x] = compute_filtered_byte(filter, raw, left, above, above_left);
     }
+    row.len() + 1
+}
+
+// ── Top-K filter pre-selection ──
+
+/// Cheap heuristic score for a filter (no LZ77, just byte statistics).
+/// Higher score = more compressible.
+fn filter_prescore(filter: u8, packed: &[u8], prev: &[u8]) -> u32 {
+    let mut zeros = 0u32;
+    let mut near_zero = 0u32;
+
+    for x in 0..packed.len() {
+        let left = if x > 0 { packed[x - 1] } else { 0 };
+        let above = prev[x];
+        let above_left = if x > 0 { prev[x - 1] } else { 0 };
+        let filtered = compute_filtered_byte(filter, packed[x], left, above, above_left);
+        if filtered == 0 {
+            zeros += 1;
+        }
+        // Symmetric residual: bytes near 0 or 255 compress well
+        let dist_from_zero = filtered.min(filtered.wrapping_neg());
+        if dist_from_zero <= 2 {
+            near_zero += 1;
+        }
+    }
+
+    // Weight zeros heavily, near-zero bytes less so
+    zeros * 256 + near_zero * 64
+}
+
+/// Select top-K filters by pre-scoring. Returns up to TOP_K_FILTERS filter types.
+fn select_top_k_filters(packed: &[u8], prev: &[u8]) -> [u8; TOP_K_FILTERS] {
+    let mut scores: [(u32, u8); 5] = [
+        (filter_prescore(0, packed, prev), 0),
+        (filter_prescore(1, packed, prev), 1),
+        (filter_prescore(2, packed, prev), 2),
+        (filter_prescore(3, packed, prev), 3),
+        (filter_prescore(4, packed, prev), 4),
+    ];
+
+    // Sort descending by score (higher = better)
+    scores.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+
+    [scores[0].1, scores[1].1, scores[2].1]
 }
 
 // ── Candidate building ──
@@ -369,7 +416,7 @@ pub(crate) fn optimize_rgb(
     weights: &[f32],
     palette: &Palette,
     initial_indices: &[u8],
-    deflate_effort: u32,
+    _deflate_effort: u32,
     base_tolerance: f32,
 ) -> Vec<u8> {
     let pixel_oklab: Vec<OKLab> = pixels
@@ -385,7 +432,6 @@ pub(crate) fn optimize_rgb(
         palette,
         initial_indices,
         None,
-        deflate_effort,
         base_tolerance,
     )
 }
@@ -402,7 +448,7 @@ pub(crate) fn optimize_rgba(
     weights: &[f32],
     palette: &Palette,
     initial_indices: &[u8],
-    deflate_effort: u32,
+    _deflate_effort: u32,
     base_tolerance: f32,
 ) -> Vec<u8> {
     let pixel_oklab: Vec<OKLab> = pixels
@@ -420,20 +466,18 @@ pub(crate) fn optimize_rgba(
         palette,
         initial_indices,
         transparent_index,
-        deflate_effort,
         base_tolerance,
     )
 }
 
-/// Core two-pass optimization.
+/// Core single-pass optimization.
 ///
-/// Pass 1: Select per-row filters using incremental compression evaluation
-///         on the initial (unmodified) indices — same quality as the downstream
-///         encoder's own filter selection.
-///
-/// Pass 2: With filters locked, greedily optimize indices per pixel to minimize
-///         filtered byte residuals. The downstream encoder will re-select filters
-///         on these improved indices, potentially finding even better filters.
+/// Merges filter selection and index optimization into one pass using the
+/// vendored LZ77 predictor. For each row:
+/// 1. Pre-score 5 filters → keep top K=3
+/// 2. For each top-K filter: run greedy_row_optimize → get optimized indices
+/// 3. Feed (filter, optimized indices) through predictor → size estimate
+/// 4. Row-pair lookahead defers decisions using predictor snapshots
 #[allow(clippy::too_many_arguments)]
 fn optimize_inner(
     pixel_oklab: &[OKLab],
@@ -443,7 +487,6 @@ fn optimize_inner(
     palette: &Palette,
     initial_indices: &[u8],
     transparent_index: Option<u8>,
-    deflate_effort: u32,
     base_tolerance: f32,
 ) -> Vec<u8> {
     let n_colors = palette.len();
@@ -471,426 +514,282 @@ fn optimize_inner(
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Pass 1: Filter selection via incremental compression forking
-    // ═══════════════════════════════════════════════════════════════════════
-
-    let eval_effort = deflate_effort.clamp(1, 22);
-    let inc_effort = if eval_effort == 10 { 11 } else { eval_effort };
-    let inc_level = CompressionLevel::new(inc_effort);
-
-    let filter_choices = {
-        let mut compressor = Compressor::new(inc_level);
-        let total_filtered = filtered_row_size * height;
-        let compress_bound = Compressor::deflate_compress_bound(total_filtered);
-        let mut compress_buf = vec![0u8; compress_bound];
-        let mut cumulative: usize = 0;
-        let mut filters = Vec::with_capacity(height);
-        let mut filtered_stream = Vec::with_capacity(total_filtered);
-        let mut prev_packed = vec![0u8; row_bytes];
-        let zero_row = vec![0u8; row_bytes];
-
-        for y in 0..height {
-            let row_start = y * width;
-            let is_final = y == height - 1;
-            let row_indices = &initial_indices[row_start..row_start + width];
-            let mut packed = vec![0u8; row_bytes];
-            pack_row(row_indices, bit_depth, &mut packed);
-
-            let prev = if y > 0 {
-                &prev_packed[..]
-            } else {
-                &zero_row[..]
-            };
-
-            let mut best_size = usize::MAX;
-            let mut best_filter = 0u8;
-            let mut best_fork: Option<(Compressor, usize)> = None;
-
-            for f in 0..5u8 {
-                let start = filtered_stream.len();
-                apply_filter_bpp1(f, &packed, prev, &mut filtered_stream);
-
-                let mut fork = compressor.clone();
-                let result = fork.deflate_compress_incremental(
-                    &filtered_stream,
-                    &mut compress_buf,
-                    is_final,
-                    Unstoppable,
-                );
-                filtered_stream.truncate(start);
-
-                if let Ok(size) = result {
-                    let total = cumulative + size;
-                    if total < best_size {
-                        best_size = total;
-                        best_filter = f;
-                        best_fork = Some((fork, size));
-                    }
-                }
-            }
-
-            apply_filter_bpp1(best_filter, &packed, prev, &mut filtered_stream);
-            filters.push(best_filter);
-            if let Some((fork, size)) = best_fork {
-                compressor = fork;
-                cumulative = cumulative.wrapping_add(size);
-            }
-            prev_packed.copy_from_slice(&packed);
-        }
-        filters
-    };
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // Pass 2: Index optimization with row-pair lookahead.
-    //
-    // Each row's A/B decision is deferred until the NEXT row is processed.
-    // This catches cases where optimizing row N looks good locally but
-    // hurts row N+1's compression via changed deflate state.
-    //
-    // For each row, we evaluate it under both the "prev kept initial" and
-    // "prev used optimized" compressor states, then pick the 2-row path
-    // that produces the best cumulative output.
+    // Single-pass: merged filter selection + index optimization
+    // with row-pair lookahead via predictor snapshots
     // ═══════════════════════════════════════════════════════════════════════
 
     let mut optimized_indices = initial_indices.to_vec();
     let zero_row = vec![0u8; row_bytes];
 
-    // New compressor for pass 2 (pass 1's was consumed)
-    let pass2_effort = if eval_effort == 10 { 11 } else { eval_effort };
-    let pass2_level = CompressionLevel::new(pass2_effort);
-    let compress_bound = Compressor::deflate_compress_bound(filtered_row_size * height);
+    // Working buffers
+    let mut filtered_buf = vec![0u8; filtered_row_size];
 
-    // A "path" tracks one possible compressor timeline
-    struct Path {
-        compressor: Compressor,
-        filtered: Vec<u8>,
-        cumulative: usize,
-        packed_row: Vec<u8>,         // last committed packed row (for filter context)
-        compress_buf: Vec<u8>,
-    }
+    // The predictor tracks cumulative LZ77 state
+    let mut predictor = Predictor::new();
 
-    impl Path {
-        fn eval_row(
-            &self,
-            filter: u8,
-            packed: &[u8],
-            above: &[u8],
-            is_final: bool,
-        ) -> Option<(Compressor, usize)> {
-            let mut filtered = self.filtered.clone();
-            apply_filter_bpp1(filter, packed, above, &mut filtered);
-            let mut fork = self.compressor.clone();
-            let mut buf = self.compress_buf.clone();
-            let size = fork
-                .deflate_compress_incremental(&filtered, &mut buf, is_final, Unstoppable)
-                .ok()?;
-            Some((fork, size))
-        }
+    // Committed state: the packed row for the last committed row (used as "above")
+    let mut committed_packed = vec![0u8; row_bytes];
+    let mut committed_size: usize = 0;
 
-        /// Commit a row. Uses `self.packed_row` as the above context before
-        /// overwriting it with the new packed row.
-        fn commit_row(
-            &mut self,
-            filter: u8,
-            packed: &[u8],
-            compressor: Compressor,
-            size: usize,
-        ) {
-            // self.packed_row is the "above" row — use it before overwriting
-            let above: Vec<u8> = self.packed_row.clone();
-            apply_filter_bpp1(filter, packed, &above, &mut self.filtered);
-            self.compressor = compressor;
-            self.cumulative = self.cumulative.wrapping_add(size);
-            self.packed_row[..packed.len()].copy_from_slice(packed);
-        }
-
-        /// Like commit_row but uses a provided above context (for first row).
-        fn commit_row_with_above(
-            &mut self,
-            filter: u8,
-            packed: &[u8],
-            above: &[u8],
-            compressor: Compressor,
-            size: usize,
-        ) {
-            apply_filter_bpp1(filter, packed, above, &mut self.filtered);
-            self.compressor = compressor;
-            self.cumulative = self.cumulative.wrapping_add(size);
-            self.packed_row[..packed.len()].copy_from_slice(packed);
-        }
-    }
-
-    // Start with a single path (no pending decision yet)
-    let mut committed = Path {
-        compressor: Compressor::new(pass2_level),
-        filtered: Vec::with_capacity(filtered_row_size * height),
-        cumulative: 0,
-        packed_row: vec![0u8; row_bytes],
-        compress_buf: vec![0u8; compress_bound],
-    };
-
-    // Pending: the previous row has two possible states (init vs optimized)
-    // that we haven't decided between yet.
+    // Pending row-pair lookahead state
     struct Pending {
-        // Path where previous row used INITIAL indices
-        path_init: Path,
-        // Path where previous row used OPTIMIZED indices
-        path_opt: Path,
-        // Row index and optimized indices for the pending row
+        // Snapshot where previous row used INITIAL indices
+        snap_init: PredictorSnapshot,
+        packed_init: Vec<u8>,
+        size_init: usize,
+        // Snapshot where previous row used OPTIMIZED indices
+        snap_opt: PredictorSnapshot,
+        packed_opt: Vec<u8>,
+        size_opt: usize,
+        // Pending row info
         pending_y: usize,
         opt_indices: Vec<u8>,
     }
 
     let mut pending: Option<Pending> = None;
 
-    for (y, &filter) in filter_choices.iter().enumerate() {
+    for y in 0..height {
         let row_start = y * width;
-        let is_final = y == height - 1;
 
+        // Pack initial row
         let initial_row = &initial_indices[row_start..row_start + width];
         let mut packed_init = vec![0u8; row_bytes];
         pack_row(initial_row, bit_depth, &mut packed_init);
 
-        let opt_row = greedy_row_optimize(
-            width,
-            filter,
-            &candidates,
-            row_start,
-            // above: use committed packed row (or pending's — resolved below)
-            if y > 0 {
-                &committed.packed_row[..]
-            } else {
-                &zero_row[..]
-            },
-            bit_depth,
-            row_bytes,
-        );
-        let mut packed_opt = vec![0u8; row_bytes];
-        pack_row(&opt_row, bit_depth, &mut packed_opt);
-
-        let indices_differ = initial_row != &opt_row[..];
-
-        if let Some(pend) = pending.take() {
-            // We have a deferred decision from the previous row.
-            // Evaluate current row under BOTH previous-row paths to decide
-            // which version of the previous row to keep.
-
-            let above_init = &pend.path_init.packed_row[..];
-            let above_opt = &pend.path_opt.packed_row[..];
-
-            // Best current-row outcome starting from prev=initial
-            let eval_on_init = pend.path_init.eval_row(filter, &packed_init, above_init, is_final);
-            let eval_opt_on_init = if indices_differ {
-                // Re-optimize for the init context since above row differs
-                let opt_for_init = greedy_row_optimize(
-                    width, filter, &candidates, row_start,
-                    above_init, bit_depth, row_bytes,
-                );
-                let mut packed_for_init = vec![0u8; row_bytes];
-                pack_row(&opt_for_init, bit_depth, &mut packed_for_init);
-                let eval = pend.path_init.eval_row(filter, &packed_for_init, above_init, is_final);
-                eval.map(|e| (e, opt_for_init, packed_for_init))
-            } else {
-                None
-            };
-
-            // Best current-row outcome starting from prev=optimized
-            let eval_on_opt = pend.path_opt.eval_row(filter, &packed_init, above_opt, is_final);
-            let eval_opt_on_opt = if indices_differ {
-                let opt_for_opt = greedy_row_optimize(
-                    width, filter, &candidates, row_start,
-                    above_opt, bit_depth, row_bytes,
-                );
-                let mut packed_for_opt = vec![0u8; row_bytes];
-                pack_row(&opt_for_opt, bit_depth, &mut packed_for_opt);
-                let eval = pend.path_opt.eval_row(filter, &packed_for_opt, above_opt, is_final);
-                eval.map(|e| (e, opt_for_opt, packed_for_opt))
-            } else {
-                None
-            };
-
-            // Find best total across all 4 combinations:
-            // (prev=init, cur=init), (prev=init, cur=opt),
-            // (prev=opt, cur=init), (prev=opt, cur=opt)
-            struct Candidate {
-                total: usize,
-                use_prev_opt: bool,
-                use_cur_opt: bool,
-                cur_fork: Compressor,
-                cur_size: usize,
-                cur_packed: Vec<u8>,
-                cur_indices: Vec<u8>,
-            }
-            let mut best: Option<Candidate> = None;
-
-            // (prev=init, cur=init)
-            if let Some((fork, size)) = eval_on_init {
-                let total = pend.path_init.cumulative.wrapping_add(size);
-                if best.as_ref().map_or(true, |b| total < b.total) {
-                    best = Some(Candidate {
-                        total,
-                        use_prev_opt: false,
-                        use_cur_opt: false,
-                        cur_fork: fork,
-                        cur_size: size,
-                        cur_packed: packed_init.clone(),
-                        cur_indices: initial_row.to_vec(),
-                    });
-                }
-            }
-
-            // (prev=init, cur=opt)
-            if let Some(((fork, size), ref indices, ref packed)) = eval_opt_on_init {
-                let total = pend.path_init.cumulative.wrapping_add(size);
-                if best.as_ref().map_or(true, |b| total < b.total) {
-                    best = Some(Candidate {
-                        total,
-                        use_prev_opt: false,
-                        use_cur_opt: true,
-                        cur_fork: fork,
-                        cur_size: size,
-                        cur_packed: packed.clone(),
-                        cur_indices: indices.clone(),
-                    });
-                }
-            }
-
-            // (prev=opt, cur=init)
-            if let Some((fork, size)) = eval_on_opt {
-                let total = pend.path_opt.cumulative.wrapping_add(size);
-                if best.as_ref().map_or(true, |b| total < b.total) {
-                    best = Some(Candidate {
-                        total,
-                        use_prev_opt: true,
-                        use_cur_opt: false,
-                        cur_fork: fork,
-                        cur_size: size,
-                        cur_packed: packed_init.clone(),
-                        cur_indices: initial_row.to_vec(),
-                    });
-                }
-            }
-
-            // (prev=opt, cur=opt)
-            if let Some(((fork, size), ref indices, ref packed)) = eval_opt_on_opt {
-                let total = pend.path_opt.cumulative.wrapping_add(size);
-                if best.as_ref().map_or(true, |b| total < b.total) {
-                    best = Some(Candidate {
-                        total,
-                        use_prev_opt: true,
-                        use_cur_opt: true,
-                        cur_fork: fork,
-                        cur_size: size,
-                        cur_packed: packed.clone(),
-                        cur_indices: indices.clone(),
-                    });
-                }
-            }
-
-            if let Some(winner) = best {
-                // Decide the previous row
-                let prev_start = pend.pending_y * width;
-                committed = if winner.use_prev_opt {
-                    optimized_indices[prev_start..prev_start + width]
-                        .copy_from_slice(&pend.opt_indices);
-                    pend.path_opt
-                } else {
-                    pend.path_init
-                };
-
-                // Decide the current row
-                if winner.use_cur_opt {
-                    optimized_indices[row_start..row_start + width]
-                        .copy_from_slice(&winner.cur_indices);
-                }
-
-                committed.commit_row(
-                    filter,
-                    &winner.cur_packed,
-                    winner.cur_fork,
-                    winner.cur_size,
-                );
-            }
+        // Determine the "above" row for filter context
+        let above = if y > 0 {
+            &committed_packed[..]
         } else {
-            // No pending decision — first row or after a non-optimizable row.
-            let above = if y > 0 {
-                committed.packed_row.as_slice()
-            } else {
-                zero_row.as_slice()
-            };
+            &zero_row[..]
+        };
 
-            if indices_differ {
-                let eval_init = committed.eval_row(filter, &packed_init, above, is_final);
-                let eval_opt = committed.eval_row(filter, &packed_opt, above, is_final);
+        // Top-K filter pre-selection
+        let top_filters = select_top_k_filters(&packed_init, above);
 
-                match (eval_init, eval_opt) {
-                    (Some((fork_a, size_a)), Some((fork_b, size_b))) if size_b + 2 < size_a => {
-                        // Optimization looks promising — defer decision
-                        let mut path_init = Path {
-                            compressor: committed.compressor.clone(),
-                            filtered: committed.filtered.clone(),
-                            cumulative: committed.cumulative,
-                            packed_row: committed.packed_row.clone(),
-                            compress_buf: committed.compress_buf.clone(),
-                        };
-                        if y == 0 {
-                            path_init.commit_row_with_above(filter, &packed_init, &zero_row, fork_a, size_a);
-                        } else {
-                            path_init.commit_row(filter, &packed_init, fork_a, size_a);
-                        }
+        // Evaluate all top-K filters with optimized indices
+        // Find the best (filter, indices, packed) combination
+        struct FilterResult {
+            filter: u8,
+            indices: Vec<u8>,
+            packed: Vec<u8>,
+            size: usize,
+        }
 
-                        let mut path_opt = Path {
-                            compressor: committed.compressor.clone(),
-                            filtered: committed.filtered.clone(),
-                            cumulative: committed.cumulative,
-                            packed_row: committed.packed_row.clone(),
-                            compress_buf: committed.compress_buf.clone(),
-                        };
-                        if y == 0 {
-                            path_opt.commit_row_with_above(filter, &packed_opt, &zero_row, fork_b, size_b);
-                        } else {
-                            path_opt.commit_row(filter, &packed_opt, fork_b, size_b);
-                        }
+        let snap_before = predictor.snapshot();
+        let mut best_init: Option<FilterResult> = None;
+        let mut best_opt: Option<FilterResult> = None;
 
-                        pending = Some(Pending {
-                            path_init,
-                            path_opt,
-                            pending_y: y,
-                            opt_indices: opt_row,
-                        });
-                        continue; // Don't update committed yet
-                    }
-                    (Some((fork_a, size_a)), _) => {
-                        if y == 0 {
-                            committed.commit_row_with_above(filter, &packed_init, &zero_row, fork_a, size_a);
-                        } else {
-                            committed.commit_row(filter, &packed_init, fork_a, size_a);
-                        }
-                    }
-                    _ => {} // shouldn't happen, but safe fallback
-                }
-            } else {
-                // No optimization possible
-                if let Some((fork, size)) = committed.eval_row(filter, &packed_init, above, is_final) {
-                    if y == 0 {
-                        committed.commit_row_with_above(filter, &packed_init, &zero_row, fork, size);
-                    } else {
-                        committed.commit_row(filter, &packed_init, fork, size);
-                    }
+        for &f in &top_filters {
+            // Evaluate initial indices with this filter
+            predictor.restore(&snap_before);
+            let n = apply_filter_bpp1_into(f, &packed_init, above, &mut filtered_buf);
+            let size_init = predictor.feed_row(&filtered_buf[..n]);
+
+            if best_init.as_ref().is_none_or(|b| size_init < b.size) {
+                best_init = Some(FilterResult {
+                    filter: f,
+                    indices: initial_row.to_vec(),
+                    packed: packed_init.clone(),
+                    size: size_init,
+                });
+            }
+
+            // Evaluate optimized indices with this filter
+            let opt_row = greedy_row_optimize(
+                width,
+                f,
+                &candidates,
+                row_start,
+                above,
+                bit_depth,
+                row_bytes,
+            );
+            let mut packed_opt = vec![0u8; row_bytes];
+            pack_row(&opt_row, bit_depth, &mut packed_opt);
+
+            if packed_opt != packed_init {
+                predictor.restore(&snap_before);
+                let n = apply_filter_bpp1_into(f, &packed_opt, above, &mut filtered_buf);
+                let size_opt = predictor.feed_row(&filtered_buf[..n]);
+
+                if best_opt.as_ref().is_none_or(|b| size_opt < b.size) {
+                    best_opt = Some(FilterResult {
+                        filter: f,
+                        indices: opt_row,
+                        packed: packed_opt,
+                        size: size_opt,
+                    });
                 }
             }
         }
+
+        let bi = best_init.unwrap(); // always exists
+        let indices_differ = best_opt.as_ref().is_some_and(|bo| bo.packed != bi.packed);
+
+        if let Some(pend) = pending.take() {
+            // Resolve the pending row by evaluating current row under both paths
+
+            // Current row under prev=initial path
+            predictor.restore_owned(pend.snap_init);
+            let above_init = &pend.packed_init;
+            let top_init = select_top_k_filters(&packed_init, above_init);
+
+            let mut best_on_init: Option<(usize, Vec<u8>, Vec<u8>, u8)> = None;
+            let snap_init_base = predictor.snapshot();
+
+            for &f in &top_init {
+                // Initial indices
+                predictor.restore(&snap_init_base);
+                let n = apply_filter_bpp1_into(f, &packed_init, above_init, &mut filtered_buf);
+                let s = predictor.feed_row(&filtered_buf[..n]);
+                if best_on_init.as_ref().is_none_or(|b| s < b.0) {
+                    best_on_init = Some((s, initial_row.to_vec(), packed_init.clone(), f));
+                }
+
+                // Optimized indices (re-optimize for this context)
+                let opt = greedy_row_optimize(
+                    width, f, &candidates, row_start,
+                    above_init, bit_depth, row_bytes,
+                );
+                let mut po = vec![0u8; row_bytes];
+                pack_row(&opt, bit_depth, &mut po);
+                if po != packed_init {
+                    predictor.restore(&snap_init_base);
+                    let n = apply_filter_bpp1_into(f, &po, above_init, &mut filtered_buf);
+                    let s = predictor.feed_row(&filtered_buf[..n]);
+                    if best_on_init.as_ref().is_none_or(|b| s < b.0) {
+                        best_on_init = Some((s, opt, po, f));
+                    }
+                }
+            }
+
+            // Current row under prev=optimized path
+            predictor.restore_owned(pend.snap_opt);
+            let above_opt = &pend.packed_opt;
+            let top_opt = select_top_k_filters(&packed_init, above_opt);
+
+            let mut best_on_opt: Option<(usize, Vec<u8>, Vec<u8>, u8)> = None;
+            let snap_opt_base = predictor.snapshot();
+
+            for &f in &top_opt {
+                predictor.restore(&snap_opt_base);
+                let n = apply_filter_bpp1_into(f, &packed_init, above_opt, &mut filtered_buf);
+                let s = predictor.feed_row(&filtered_buf[..n]);
+                if best_on_opt.as_ref().is_none_or(|b| s < b.0) {
+                    best_on_opt = Some((s, initial_row.to_vec(), packed_init.clone(), f));
+                }
+
+                let opt = greedy_row_optimize(
+                    width, f, &candidates, row_start,
+                    above_opt, bit_depth, row_bytes,
+                );
+                let mut po = vec![0u8; row_bytes];
+                pack_row(&opt, bit_depth, &mut po);
+                if po != packed_init {
+                    predictor.restore(&snap_opt_base);
+                    let n = apply_filter_bpp1_into(f, &po, above_opt, &mut filtered_buf);
+                    let s = predictor.feed_row(&filtered_buf[..n]);
+                    if best_on_opt.as_ref().is_none_or(|b| s < b.0) {
+                        best_on_opt = Some((s, opt, po, f));
+                    }
+                }
+            }
+
+            // Compare: (prev=init total, prev=opt total) to decide both rows
+            let total_init = pend.size_init + best_on_init.as_ref().map_or(usize::MAX, |b| b.0);
+            let total_opt = pend.size_opt + best_on_opt.as_ref().map_or(usize::MAX, |b| b.0);
+
+            let prev_start = pend.pending_y * width;
+            if total_opt < total_init {
+                // Use optimized for previous row
+                optimized_indices[prev_start..prev_start + width]
+                    .copy_from_slice(&pend.opt_indices);
+                committed_packed.copy_from_slice(&pend.packed_opt);
+
+                if let Some((size, ref cur_indices, ref cur_packed, cur_f)) = best_on_opt {
+                    if cur_indices != initial_row {
+                        optimized_indices[row_start..row_start + width]
+                            .copy_from_slice(cur_indices);
+                    }
+                    // Commit to predictor on the opt path
+                    predictor.restore_owned(snap_opt_base);
+                    let n = apply_filter_bpp1_into(cur_f, cur_packed, above_opt, &mut filtered_buf);
+                    predictor.feed_row(&filtered_buf[..n]);
+                    committed_packed.copy_from_slice(cur_packed);
+                    committed_size = size;
+                }
+            } else {
+                // Use initial for previous row (no change needed)
+                committed_packed.copy_from_slice(&pend.packed_init);
+
+                if let Some((size, ref cur_indices, ref cur_packed, cur_f)) = best_on_init {
+                    if cur_indices != initial_row {
+                        optimized_indices[row_start..row_start + width]
+                            .copy_from_slice(cur_indices);
+                    }
+                    predictor.restore_owned(snap_init_base);
+                    let n = apply_filter_bpp1_into(cur_f, cur_packed, above_init, &mut filtered_buf);
+                    predictor.feed_row(&filtered_buf[..n]);
+                    committed_packed.copy_from_slice(cur_packed);
+                    committed_size = size;
+                }
+            }
+        } else if indices_differ {
+            let bo = best_opt.unwrap();
+
+            // Check if optimization looks promising (2+ bytes smaller)
+            if bo.size + 2 < bi.size {
+                // Defer decision to next row via row-pair lookahead
+
+                // Create snapshot for init path
+                predictor.restore(&snap_before);
+                let n = apply_filter_bpp1_into(bi.filter, &bi.packed, above, &mut filtered_buf);
+                let size_init = predictor.feed_row(&filtered_buf[..n]);
+                let snap_init = predictor.snapshot();
+
+                // Create snapshot for opt path
+                predictor.restore(&snap_before);
+                let n = apply_filter_bpp1_into(bo.filter, &bo.packed, above, &mut filtered_buf);
+                let size_opt = predictor.feed_row(&filtered_buf[..n]);
+                let snap_opt = predictor.snapshot();
+
+                pending = Some(Pending {
+                    snap_init,
+                    packed_init: bi.packed,
+                    size_init,
+                    snap_opt,
+                    packed_opt: bo.packed,
+                    size_opt,
+                    pending_y: y,
+                    opt_indices: bo.indices,
+                });
+                continue; // Don't update committed yet
+            }
+
+            // Not promising enough to defer — commit initial
+            predictor.restore(&snap_before);
+            let n = apply_filter_bpp1_into(bi.filter, &bi.packed, above, &mut filtered_buf);
+            committed_size = predictor.feed_row(&filtered_buf[..n]);
+            committed_packed.copy_from_slice(&bi.packed);
+        } else {
+            // No optimization possible — commit best initial
+            predictor.restore(&snap_before);
+            let n = apply_filter_bpp1_into(bi.filter, &bi.packed, above, &mut filtered_buf);
+            committed_size = predictor.feed_row(&filtered_buf[..n]);
+            committed_packed.copy_from_slice(&bi.packed);
+        }
     }
 
-    // If the last row is still pending, resolve it (no next row to compare against)
+    // Resolve any pending last row
     if let Some(pend) = pending {
         let prev_start = pend.pending_y * width;
-        if pend.path_opt.cumulative < pend.path_init.cumulative {
+        if pend.size_opt < pend.size_init {
             optimized_indices[prev_start..prev_start + width]
                 .copy_from_slice(&pend.opt_indices);
         }
     }
 
+    let _ = committed_size; // used for size tracking, final value unused
     optimized_indices
 }
 
@@ -946,6 +845,19 @@ mod tests {
         pack_row(&indices, 4, &mut out);
         assert_eq!(out[0], 0xAB);
         assert_eq!(out[1], 0xC0);
+    }
+
+    #[test]
+    fn top_k_filter_selection() {
+        // All zeros — None filter should score well (already 0)
+        let packed = vec![0u8; 100];
+        let prev = vec![0u8; 100];
+        let top = select_top_k_filters(&packed, &prev);
+        // Filter 0 (None) should be in top 3 since all bytes are 0
+        assert!(
+            top.contains(&0),
+            "filter None should be top-K for all-zero data"
+        );
     }
 
     #[test]

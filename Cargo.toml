@@ -19,7 +19,8 @@ rgb = "0.8"
 imgref = "1"
 thiserror = { version = "2", default-features = false }
 linear-srgb = { version = "0.5.5", default-features = false }
-zenflate = { path = "../zenflate", optional = true, default-features = false, features = ["alloc"] }
+# zenflate is no longer needed — zoint uses a vendored LZ77 predictor
+# zenflate = { path = "../zenflate", optional = true, default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
@@ -43,7 +44,8 @@ gif = { version = "0.14", default-features = false, features = ["std"] }
 default = ["std"]
 std = ["linear-srgb/std"]
 # Joint deflate+quantization optimization for PNG.
-zoint = ["dep:zenflate"]
+# Uses a vendored LZ77 predictor — no external dependency.
+zoint = []
 # Expose internal modules for profiling/debugging examples. Not public API.
 _dev = []
 
