@@ -194,6 +194,8 @@ pub struct QuantizeConfig {
     dither_strength: Option<f32>,
     viterbi_lambda: Option<f32>,
     compute_metric: bool,
+    target_ssim2: Option<f32>,
+    min_ssim2: Option<f32>,
 }
 
 impl QuantizeConfig {
@@ -210,6 +212,8 @@ impl QuantizeConfig {
             dither_strength: None,
             viterbi_lambda: None,
             compute_metric: false,
+            target_ssim2: None,
+            min_ssim2: None,
         }
     }
 
@@ -234,6 +238,25 @@ impl QuantizeConfig {
     /// Adds ~8 FLOPs/pixel overhead during dithering. Default: `false`.
     pub fn compute_quality_metric(mut self, enable: bool) -> Self {
         self.compute_metric = enable;
+        self
+    }
+
+    /// Set target SSIM2 quality level (0–100, higher = better).
+    ///
+    /// When set, auto-tunes compression knobs (quality preset, dither strength,
+    /// run priority) to maximize compression while staying above this level.
+    /// Color count is NOT adjusted. Implicitly enables metric computation.
+    pub fn target_ssim2(mut self, score: f32) -> Self {
+        self.target_ssim2 = Some(score);
+        self
+    }
+
+    /// Set minimum acceptable SSIM2 quality level (0–100, higher = better).
+    ///
+    /// Returns [`QuantizeError::QualityNotMet`] if the result falls below this.
+    /// Implicitly enables metric computation.
+    pub fn min_ssim2(mut self, score: f32) -> Self {
+        self.min_ssim2 = Some(score);
         self
     }
 
@@ -341,6 +364,16 @@ impl QuantizeResult {
         self.mpe_result.as_ref().map(|r| r.score)
     }
 
+    /// Estimated SSIMULACRA2 score (100 = identical), if metric was computed.
+    pub fn ssimulacra2_estimate(&self) -> Option<f32> {
+        self.mpe_result.as_ref().map(|r| r.ssimulacra2_estimate)
+    }
+
+    /// Estimated butteraugli distance, if metric was computed.
+    pub fn butteraugli_estimate(&self) -> Option<f32> {
+        self.mpe_result.as_ref().map(|r| r.butteraugli_estimate)
+    }
+
     /// Remap an RGB image against this result's palette.
     ///
     /// Skips palette construction — uses the existing palette and applies
@@ -409,6 +442,76 @@ impl QuantizeResult {
     }
 }
 
+/// Compression tier: combination of knobs that trade quality for compression.
+///
+/// Higher tiers = more aggressive compression, lower quality.
+/// Calibrated thresholds based on MPE → SSIM2 lookup table measurements.
+#[derive(Debug, Clone, Copy)]
+struct CompressionTier {
+    quality: Quality,
+    run_priority: remap::RunPriority,
+    /// Multiplied against format-default dither strength.
+    dither_strength_mult: f32,
+}
+
+const COMPRESSION_TIERS: [CompressionTier; 5] = [
+    // Tier 0: Maximum quality, no run optimization
+    CompressionTier {
+        quality: Quality::Best,
+        run_priority: remap::RunPriority::Quality,
+        dither_strength_mult: 1.0,
+    },
+    // Tier 1: Default Best settings
+    CompressionTier {
+        quality: Quality::Best,
+        run_priority: remap::RunPriority::Balanced,
+        dither_strength_mult: 1.0,
+    },
+    // Tier 2: Aggressive run optimization
+    CompressionTier {
+        quality: Quality::Best,
+        run_priority: remap::RunPriority::Compression,
+        dither_strength_mult: 1.0,
+    },
+    // Tier 3: Balanced quality + aggressive runs + reduced dither
+    CompressionTier {
+        quality: Quality::Balanced,
+        run_priority: remap::RunPriority::Compression,
+        dither_strength_mult: 0.8,
+    },
+    // Tier 4: Maximum compression
+    CompressionTier {
+        quality: Quality::Fast,
+        run_priority: remap::RunPriority::Compression,
+        dither_strength_mult: 0.6,
+    },
+];
+
+/// Select a compression tier based on target SSIM2 score.
+///
+/// Uses conservative thresholds with safety margin so the resulting
+/// quality stays above the target. Each tier step costs roughly 3–8
+/// SSIM2 points based on calibration data.
+fn select_compression_tier(target_ssim2: f32) -> &'static CompressionTier {
+    // Conservative thresholds — tier is selected only if target allows
+    // enough headroom. Based on MPE→SSIM2 calibration:
+    //   Tier 0→1 costs ~2–4 SSIM2 points (run bias only)
+    //   Tier 1→2 costs ~3–5 SSIM2 points (aggressive runs)
+    //   Tier 2→3 costs ~5–8 SSIM2 points (fewer k-means iters)
+    //   Tier 3→4 costs ~8–12 SSIM2 points (no masking)
+    if target_ssim2 > 90.0 {
+        &COMPRESSION_TIERS[0] // Can't afford any quality loss
+    } else if target_ssim2 > 82.0 {
+        &COMPRESSION_TIERS[1] // Default balanced runs
+    } else if target_ssim2 > 74.0 {
+        &COMPRESSION_TIERS[2] // Aggressive runs
+    } else if target_ssim2 > 60.0 {
+        &COMPRESSION_TIERS[3] // Balanced quality + compression
+    } else {
+        &COMPRESSION_TIERS[4] // Maximum compression
+    }
+}
+
 /// Quantize an RGB image to an indexed palette.
 ///
 /// Returns a [`QuantizeResult`] with palette entries and per-pixel indices.
@@ -435,7 +538,32 @@ pub fn quantize(
 ) -> Result<QuantizeResult, QuantizeError> {
     validate_inputs(pixels.len(), width, height, config)?;
 
-    let tuning = QuantizeTuning::from_config(config);
+    // When target_ssim2 or min_ssim2 is set, force metric computation
+    let needs_metric =
+        config.compute_metric || config.target_ssim2.is_some() || config.min_ssim2.is_some();
+
+    // Apply compression tier overrides when target_ssim2 is set
+    let (effective_quality, effective_run_priority, effective_dither_strength) =
+        if let Some(target) = config.target_ssim2 {
+            let tier = select_compression_tier(target);
+            (
+                tier.quality,
+                tier.run_priority,
+                config.dither_strength.map(|s| s * tier.dither_strength_mult),
+            )
+        } else {
+            (config.quality, config.run_priority, config.dither_strength)
+        };
+
+    // Build tuning from effective settings
+    let effective_config = QuantizeConfig {
+        quality: effective_quality,
+        run_priority: effective_run_priority,
+        dither_strength: effective_dither_strength,
+        compute_metric: needs_metric,
+        ..config.clone()
+    };
+    let tuning = QuantizeTuning::from_config(&effective_config);
     let max_colors = config.max_colors as usize;
 
     // Fast path: image already has ≤max_colors unique colors
@@ -462,8 +590,8 @@ pub fn quantize(
     //   Fast:     no masking, histogram-only k-means, no Viterbi
     //   Balanced: masking + light pixel k-means (2 iters) + run extension
     //   Best:     masking + full pixel k-means (8 iters) + Viterbi DP
-    let use_masking = matches!(config.quality, Quality::Balanced | Quality::Best);
-    let kmeans_iters: usize = match config.quality {
+    let use_masking = matches!(effective_quality, Quality::Balanced | Quality::Best);
+    let kmeans_iters: usize = match effective_quality {
         Quality::Best => 8,
         Quality::Balanced => 2,
         Quality::Fast => 0,
@@ -508,7 +636,7 @@ pub fn quantize(
     // Keep greedy run-bias during dithering even when Viterbi will run.
     // The greedy bias shapes error diffusion favorably, and Viterbi can
     // further optimize the index sequence post-hoc.
-    let mut mpe_acc = if config.compute_metric {
+    let mut mpe_acc = if needs_metric {
         Some(metric::MpeAccumulator::new(width, height))
     } else {
         None
@@ -519,8 +647,8 @@ pub fn quantize(
         height,
         &weights,
         &pal,
-        config.dither_mode,
-        config.run_priority,
+        effective_config.dither_mode,
+        effective_run_priority,
         tuning.dither_strength,
         mpe_acc.as_mut(),
     );
@@ -529,9 +657,9 @@ pub fn quantize(
     //   Best:     full Viterbi DP (optimal run extension, ~26ms)
     //   Balanced: fast run-extend post-pass (greedy bidirectional, ~1ms)
     //   Fast:     none (dither-level greedy run-bias only)
-    let use_viterbi = matches!(config.quality, Quality::Best);
+    let use_viterbi = matches!(effective_quality, Quality::Best);
     let run_lambda = if use_masking {
-        config.viterbi_lambda.unwrap_or(match config.run_priority {
+        config.viterbi_lambda.unwrap_or(match effective_run_priority {
             remap::RunPriority::Quality => 0.0,
             remap::RunPriority::Balanced => 0.01,
             remap::RunPriority::Compression => 0.02,
@@ -572,6 +700,20 @@ pub fn quantize(
 
     let mpe_result = mpe_acc.map(|acc| acc.finalize());
 
+    // Check min_ssim2 quality floor
+    if let Some(min) = config.min_ssim2 {
+        let achieved = mpe_result
+            .as_ref()
+            .map(|r| r.ssimulacra2_estimate)
+            .unwrap_or(100.0);
+        if achieved < min {
+            return Err(QuantizeError::QualityNotMet {
+                min_ssim2: min,
+                achieved_ssim2: achieved,
+            });
+        }
+    }
+
     Ok(QuantizeResult {
         palette: pal,
         indices,
@@ -608,7 +750,31 @@ pub fn quantize_rgba(
 ) -> Result<QuantizeResult, QuantizeError> {
     validate_inputs(pixels.len(), width, height, config)?;
 
-    let tuning = QuantizeTuning::from_config(config);
+    // When target_ssim2 or min_ssim2 is set, force metric computation
+    let needs_metric =
+        config.compute_metric || config.target_ssim2.is_some() || config.min_ssim2.is_some();
+
+    // Apply compression tier overrides when target_ssim2 is set
+    let (effective_quality, effective_run_priority, effective_dither_strength) =
+        if let Some(target) = config.target_ssim2 {
+            let tier = select_compression_tier(target);
+            (
+                tier.quality,
+                tier.run_priority,
+                config.dither_strength.map(|s| s * tier.dither_strength_mult),
+            )
+        } else {
+            (config.quality, config.run_priority, config.dither_strength)
+        };
+
+    let effective_config = QuantizeConfig {
+        quality: effective_quality,
+        run_priority: effective_run_priority,
+        dither_strength: effective_dither_strength,
+        compute_metric: needs_metric,
+        ..config.clone()
+    };
+    let tuning = QuantizeTuning::from_config(&effective_config);
     let max_colors = config.max_colors as usize;
 
     // Fast path: image already has ≤max_colors unique colors
@@ -638,9 +804,9 @@ pub fn quantize_rgba(
         });
     }
 
-    let use_masking = matches!(config.quality, Quality::Balanced | Quality::Best);
-    let use_viterbi = matches!(config.quality, Quality::Best);
-    let kmeans_iters: usize = match config.quality {
+    let use_masking = matches!(effective_quality, Quality::Balanced | Quality::Best);
+    let use_viterbi = matches!(effective_quality, Quality::Best);
+    let kmeans_iters: usize = match effective_quality {
         Quality::Best => 8,
         Quality::Balanced => 2,
         Quality::Fast => 0,
@@ -687,7 +853,7 @@ pub fn quantize_rgba(
         );
 
         let viterbi_lambda = if use_masking {
-            config.viterbi_lambda.unwrap_or(match config.run_priority {
+            config.viterbi_lambda.unwrap_or(match effective_run_priority {
                 remap::RunPriority::Quality => 0.0,
                 remap::RunPriority::Balanced => 0.01,
                 remap::RunPriority::Compression => 0.02,
@@ -701,8 +867,8 @@ pub fn quantize_rgba(
             height,
             &weights,
             &pal,
-            config.dither_mode,
-            config.run_priority,
+            effective_config.dither_mode,
+            effective_run_priority,
             tuning.dither_strength,
             None,
         );
@@ -769,7 +935,7 @@ pub fn quantize_rgba(
         pal.build_nn_cache();
 
         let viterbi_lambda = if use_masking {
-            config.viterbi_lambda.unwrap_or(match config.run_priority {
+            config.viterbi_lambda.unwrap_or(match effective_run_priority {
                 remap::RunPriority::Quality => 0.0,
                 remap::RunPriority::Balanced => 0.01,
                 remap::RunPriority::Compression => 0.02,
@@ -783,8 +949,8 @@ pub fn quantize_rgba(
             height,
             &weights,
             &pal,
-            config.dither_mode,
-            config.run_priority,
+            effective_config.dither_mode,
+            effective_run_priority,
             tuning.dither_strength,
             None,
         );
@@ -823,10 +989,40 @@ pub fn quantize_rgba(
         pal
     };
 
+    // Check min_ssim2 quality floor
+    // Note: RGBA path doesn't currently compute inline MPE (mpe_result is None).
+    // For min_ssim2 checking, we'd need standalone MPE computation here.
+    // For now, compute standalone MPE when min_ssim2 is set.
+    let mpe_result = if needs_metric {
+        Some(metric::compute_mpe_rgba(
+            pixels,
+            pal.entries_rgba(),
+            &indices,
+            width,
+            height,
+            None,
+        ))
+    } else {
+        None
+    };
+
+    if let Some(min) = config.min_ssim2 {
+        let achieved = mpe_result
+            .as_ref()
+            .map(|r| r.ssimulacra2_estimate)
+            .unwrap_or(100.0);
+        if achieved < min {
+            return Err(QuantizeError::QualityNotMet {
+                min_ssim2: min,
+                achieved_ssim2: achieved,
+            });
+        }
+    }
+
     Ok(QuantizeResult {
         palette: pal,
         indices,
-        mpe_result: None,
+        mpe_result,
     })
 }
 

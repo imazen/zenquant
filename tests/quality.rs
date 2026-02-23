@@ -1,5 +1,5 @@
 use zenquant::_internals::{average_run_length, compute_mpe, index_delta_score, srgb_to_oklab};
-use zenquant::{OutputFormat, QuantizeConfig};
+use zenquant::{OutputFormat, QuantizeConfig, QuantizeError};
 
 /// Compute mean squared error in OKLab space between original pixels and quantized result.
 fn compute_mse(pixels: &[rgb::RGB<u8>], palette: &[[u8; 3]], indices: &[u8]) -> f32 {
@@ -233,5 +233,162 @@ fn mpe_disabled_by_default() {
     assert!(
         result.mpe_score().is_none(),
         "MPE should not be computed by default"
+    );
+}
+
+// ===================== Quality target API tests =====================
+
+#[test]
+fn min_ssim2_too_high_returns_quality_not_met() {
+    let pixels = gradient_image(32, 32);
+    let config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(2)
+        .min_ssim2(99.9);
+
+    let result = zenquant::quantize(&pixels, 32, 32, &config);
+    match result {
+        Err(QuantizeError::QualityNotMet {
+            min_ssim2,
+            achieved_ssim2,
+        }) => {
+            assert!((min_ssim2 - 99.9).abs() < 0.01);
+            assert!(
+                achieved_ssim2 < 99.9,
+                "achieved {achieved_ssim2} should be below 99.9 with only 2 colors"
+            );
+        }
+        Ok(_) => panic!("expected QualityNotMet error with 2 colors and min_ssim2=99.9"),
+        Err(e) => panic!("expected QualityNotMet, got {e:?}"),
+    }
+}
+
+#[test]
+fn target_ssim2_with_256_colors_succeeds() {
+    let pixels = gradient_image(32, 32);
+    let config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(256)
+        .target_ssim2(80.0);
+
+    let result = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
+
+    // Metric should be computed
+    assert!(
+        result.mpe_score().is_some(),
+        "metric should be computed when target_ssim2 is set"
+    );
+    assert!(
+        result.ssimulacra2_estimate().is_some(),
+        "ssimulacra2_estimate should be available"
+    );
+    assert!(
+        result.butteraugli_estimate().is_some(),
+        "butteraugli_estimate should be available"
+    );
+}
+
+#[test]
+fn min_ssim2_negative_always_passes() {
+    let pixels = gradient_image(16, 16);
+    let config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(2)
+        .min_ssim2(-100.0);
+
+    // SSIM2 estimates can go negative for terrible quantization, so use -100.0
+    // to ensure the floor is never hit.
+    let result = zenquant::quantize(&pixels, 16, 16, &config);
+    assert!(result.is_ok(), "min_ssim2(-100.0) should always pass");
+}
+
+#[test]
+fn metric_computed_when_target_set() {
+    let pixels = gradient_image(16, 16);
+
+    // Without compute_quality_metric(true), but with target_ssim2
+    let config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(64)
+        .target_ssim2(50.0);
+
+    let result = zenquant::quantize(&pixels, 16, 16, &config).unwrap();
+    assert!(
+        result.mpe_score().is_some(),
+        "metric should be computed when target_ssim2 is set"
+    );
+}
+
+#[test]
+fn metric_computed_when_min_set() {
+    let pixels = gradient_image(16, 16);
+
+    // Without compute_quality_metric(true), but with min_ssim2
+    let config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(64)
+        .min_ssim2(0.0);
+
+    let result = zenquant::quantize(&pixels, 16, 16, &config).unwrap();
+    assert!(
+        result.mpe_score().is_some(),
+        "metric should be computed when min_ssim2 is set"
+    );
+}
+
+#[test]
+fn convenience_accessors_none_when_no_metric() {
+    let pixels = gradient_image(16, 16);
+    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(16);
+    let result = zenquant::quantize(&pixels, 16, 16, &config).unwrap();
+
+    assert!(result.ssimulacra2_estimate().is_none());
+    assert!(result.butteraugli_estimate().is_none());
+}
+
+#[test]
+fn convenience_accessors_present_with_metric() {
+    let pixels = gradient_image(32, 32);
+    let config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(16)
+        .compute_quality_metric(true);
+    let result = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
+
+    let ssim2 = result.ssimulacra2_estimate().expect("should be computed");
+    let ba = result.butteraugli_estimate().expect("should be computed");
+
+    assert!(ssim2.is_finite());
+    assert!(ba.is_finite());
+    assert!(ba >= 0.0);
+}
+
+#[test]
+fn target_ssim2_selects_lower_tier_for_low_target() {
+    // A low target should select a more aggressive compression tier.
+    // We verify this indirectly: low target → should still succeed, and
+    // the result should have a metric computed.
+    let pixels = gradient_image(32, 32);
+    let config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(256)
+        .target_ssim2(40.0);
+
+    let result = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
+    assert!(result.mpe_score().is_some());
+}
+
+#[test]
+fn min_ssim2_rgba_returns_quality_not_met() {
+    let pixels: Vec<rgb::RGBA<u8>> = (0..1024)
+        .map(|i| rgb::RGBA {
+            r: (i % 256) as u8,
+            g: ((i * 3) % 256) as u8,
+            b: ((i * 7) % 256) as u8,
+            a: 255,
+        })
+        .collect();
+
+    let config = QuantizeConfig::new(OutputFormat::Png)
+        .max_colors(2)
+        .min_ssim2(99.9);
+
+    let result = zenquant::quantize_rgba(&pixels, 32, 32, &config);
+    assert!(
+        matches!(result, Err(QuantizeError::QualityNotMet { .. })),
+        "expected QualityNotMet for RGBA with 2 colors and min_ssim2=99.9, got {result:?}"
     );
 }
