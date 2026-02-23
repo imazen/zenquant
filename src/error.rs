@@ -16,8 +16,5 @@ pub enum QuantizeError {
     InvalidMaxColors(u32),
 
     #[error("quality target not met: wanted SSIM2 >= {min_ssim2:.1}, got {achieved_ssim2:.1}")]
-    QualityNotMet {
-        min_ssim2: f32,
-        achieved_ssim2: f32,
-    },
+    QualityNotMet { min_ssim2: f32, achieved_ssim2: f32 },
 }

@@ -549,7 +549,9 @@ pub fn quantize(
             (
                 tier.quality,
                 tier.run_priority,
-                config.dither_strength.map(|s| s * tier.dither_strength_mult),
+                config
+                    .dither_strength
+                    .map(|s| s * tier.dither_strength_mult),
             )
         } else {
             (config.quality, config.run_priority, config.dither_strength)
@@ -659,11 +661,14 @@ pub fn quantize(
     //   Fast:     none (dither-level greedy run-bias only)
     let use_viterbi = matches!(effective_quality, Quality::Best);
     let run_lambda = if use_masking {
-        config.viterbi_lambda.unwrap_or(match effective_run_priority {
-            remap::RunPriority::Quality => 0.0,
-            remap::RunPriority::Balanced => 0.01,
-            remap::RunPriority::Compression => 0.02,
-        }) * tuning.viterbi_lambda_scale
+        config
+            .viterbi_lambda
+            .unwrap_or(match effective_run_priority {
+                remap::RunPriority::Quality => 0.0,
+                remap::RunPriority::Balanced => 0.01,
+                remap::RunPriority::Compression => 0.02,
+            })
+            * tuning.viterbi_lambda_scale
     } else {
         config.viterbi_lambda.unwrap_or(0.0)
     };
@@ -761,7 +766,9 @@ pub fn quantize_rgba(
             (
                 tier.quality,
                 tier.run_priority,
-                config.dither_strength.map(|s| s * tier.dither_strength_mult),
+                config
+                    .dither_strength
+                    .map(|s| s * tier.dither_strength_mult),
             )
         } else {
             (config.quality, config.run_priority, config.dither_strength)
@@ -853,11 +860,14 @@ pub fn quantize_rgba(
         );
 
         let viterbi_lambda = if use_masking {
-            config.viterbi_lambda.unwrap_or(match effective_run_priority {
-                remap::RunPriority::Quality => 0.0,
-                remap::RunPriority::Balanced => 0.01,
-                remap::RunPriority::Compression => 0.02,
-            }) * tuning.viterbi_lambda_scale
+            config
+                .viterbi_lambda
+                .unwrap_or(match effective_run_priority {
+                    remap::RunPriority::Quality => 0.0,
+                    remap::RunPriority::Balanced => 0.01,
+                    remap::RunPriority::Compression => 0.02,
+                })
+                * tuning.viterbi_lambda_scale
         } else {
             config.viterbi_lambda.unwrap_or(0.0)
         };
@@ -935,11 +945,14 @@ pub fn quantize_rgba(
         pal.build_nn_cache();
 
         let viterbi_lambda = if use_masking {
-            config.viterbi_lambda.unwrap_or(match effective_run_priority {
-                remap::RunPriority::Quality => 0.0,
-                remap::RunPriority::Balanced => 0.01,
-                remap::RunPriority::Compression => 0.02,
-            }) * tuning.viterbi_lambda_scale
+            config
+                .viterbi_lambda
+                .unwrap_or(match effective_run_priority {
+                    remap::RunPriority::Quality => 0.0,
+                    remap::RunPriority::Balanced => 0.01,
+                    remap::RunPriority::Compression => 0.02,
+                })
+                * tuning.viterbi_lambda_scale
         } else {
             config.viterbi_lambda.unwrap_or(0.0)
         };
