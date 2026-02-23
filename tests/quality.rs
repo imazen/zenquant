@@ -546,7 +546,11 @@ fn blue_noise_is_deterministic() {
         ._blue_noise_dither();
     let r1 = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
     let r2 = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
-    assert_eq!(r1.indices(), r2.indices(), "blue noise should be deterministic");
+    assert_eq!(
+        r1.indices(),
+        r2.indices(),
+        "blue noise should be deterministic"
+    );
 }
 
 #[test]

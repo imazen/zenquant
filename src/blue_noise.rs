@@ -262,7 +262,6 @@ pub(crate) const BLUE_NOISE_64: [u8; 4096] = [
     251,  92, 138, 230, 118,  15, 241,  67,  39, 255, 102, 196,  41, 142,  74, 119,
 ];
 
-
 pub(crate) const BLUE_NOISE_SIZE: usize = 64;
 
 /// Look up the blue noise threshold at pixel position (x, y).
@@ -301,7 +300,10 @@ mod tests {
         for y in 0..BLUE_NOISE_SIZE {
             for x in 0..BLUE_NOISE_SIZE {
                 let t = threshold(x, y);
-                assert!((-0.5..=0.5).contains(&t), "threshold({x},{y}) = {t} out of range");
+                assert!(
+                    (-0.5..=0.5).contains(&t),
+                    "threshold({x},{y}) = {t} out of range"
+                );
             }
         }
     }
