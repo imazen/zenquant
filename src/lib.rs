@@ -457,7 +457,15 @@ impl QuantizeResult {
     }
 
     /// Remap with temporal clamping. Pixels whose undithered nearest palette
-    /// match matches prev_indices\[i\] retain that index, preventing flicker.
+    /// match matches `prev_indices[i]` retain that index, preventing flicker.
+    ///
+    /// Both `pixels` and `prev_indices` must be full-frame buffers
+    /// (`width × height` elements). Subframe cropping and disposal are the
+    /// caller's responsibility — composite subframes onto the full canvas
+    /// before calling this. Blue noise dithering relies on frame-absolute
+    /// pixel coordinates for position-deterministic patterns; passing a
+    /// cropped subregion would shift the noise tile and break temporal
+    /// stability.
     #[doc(hidden)]
     pub fn remap_with_prev(
         &self,
@@ -477,7 +485,8 @@ impl QuantizeResult {
         )
     }
 
-    /// Remap RGBA with temporal clamping.
+    /// Remap RGBA with temporal clamping. See [`remap_with_prev`](Self::remap_with_prev)
+    /// for full-frame buffer requirements.
     #[doc(hidden)]
     pub fn remap_rgba_with_prev(
         &self,
