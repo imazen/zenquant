@@ -654,6 +654,7 @@ pub fn quantize(
         effective_run_priority,
         tuning.dither_strength,
         mpe_acc.as_mut(),
+        None,
     );
 
     // 5b. Run optimization
@@ -882,6 +883,7 @@ pub fn quantize_rgba(
             effective_run_priority,
             tuning.dither_strength,
             None,
+            None,
         );
 
         if viterbi_lambda > 0.0 {
@@ -966,6 +968,7 @@ pub fn quantize_rgba(
             effective_config.dither_mode,
             effective_run_priority,
             tuning.dither_strength,
+            None,
             None,
         );
 
@@ -1434,6 +1437,7 @@ fn remap_rgb_impl(
         effective_run_priority,
         tuning.dither_strength,
         None,
+        None,
     );
 
     let run_lambda = if use_masking {
@@ -1589,6 +1593,7 @@ fn remap_rgba_impl(
             effective_run_priority,
             tuning.dither_strength,
             None,
+            None,
         )
     } else {
         dither::dither_image_rgba(
@@ -1600,6 +1605,7 @@ fn remap_rgba_impl(
             config.dither_mode,
             effective_run_priority,
             tuning.dither_strength,
+            None,
             None,
         )
     };

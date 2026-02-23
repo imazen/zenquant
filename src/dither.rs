@@ -477,6 +477,7 @@ pub fn dither_image(
     run_priority: RunPriority,
     dither_strength: f32,
     mut mpe_acc: Option<&mut MpeAccumulator>,
+    prev_indices: Option<&[u8]>,
 ) -> Vec<u8> {
     if mode == DitherMode::None {
         let indices = simple_remap(pixels, palette);
@@ -551,47 +552,56 @@ pub fn dither_image(
             let p = pixels[idx];
             let orig_lab = srgb_to_oklab(p.r, p.g, p.b);
             let seed = palette.nearest_cached(p.r, p.g, p.b);
-            let (adj_r, adj_g, adj_b) = oklab_to_srgb(current);
-            let seed2 = palette.nearest_cached(adj_r, adj_g, adj_b);
-            let dithered_best = palette.nearest_seeded_2(current, seed, seed2);
 
-            let best = if use_fallback {
-                let undithered_best = palette.nearest_seeded(orig_lab, seed);
-                if dithered_best == undithered_best {
-                    dithered_best
-                } else {
-                    let d_dithered =
-                        orig_lab.distance_sq(palette.entries_oklab()[dithered_best as usize]);
-                    let d_undithered =
-                        orig_lab.distance_sq(palette.entries_oklab()[undithered_best as usize]);
-                    if d_dithered <= d_undithered * 2.0 {
+            // Temporal clamping: if undithered nearest matches prev frame, lock it
+            let locked = prev_indices.is_some_and(|pi| seed == pi[idx]);
+
+            let chosen = if locked {
+                prev_indices.unwrap()[idx]
+            } else {
+                let (adj_r, adj_g, adj_b) = oklab_to_srgb(current);
+                let seed2 = palette.nearest_cached(adj_r, adj_g, adj_b);
+                let dithered_best = palette.nearest_seeded_2(current, seed, seed2);
+
+                let best = if use_fallback {
+                    let undithered_best = palette.nearest_seeded(orig_lab, seed);
+                    if dithered_best == undithered_best {
                         dithered_best
                     } else {
-                        undithered_best
+                        let d_dithered =
+                            orig_lab.distance_sq(palette.entries_oklab()[dithered_best as usize]);
+                        let d_undithered =
+                            orig_lab.distance_sq(palette.entries_oklab()[undithered_best as usize]);
+                        if d_dithered <= d_undithered * 2.0 {
+                            dithered_best
+                        } else {
+                            undithered_best
+                        }
                     }
-                }
-            } else {
-                dithered_best
-            };
-            let best_lab = palette.entries_oklab()[best as usize];
+                } else {
+                    dithered_best
+                };
+                let best_lab = palette.entries_oklab()[best as usize];
 
-            let chosen = if run_bias > 0.0 {
-                if let Some(prev) = prev_index {
-                    let prev_dist = current.distance_sq(palette.entries_oklab()[prev as usize]);
-                    let best_dist = current.distance_sq(best_lab);
-                    let w = weights[idx];
-                    let threshold = run_bias * best_dist * 2.0 * (1.1 - w);
+                if run_bias > 0.0 {
+                    if let Some(prev) = prev_index {
+                        let prev_dist =
+                            current.distance_sq(palette.entries_oklab()[prev as usize]);
+                        let best_dist = current.distance_sq(best_lab);
+                        let w = weights[idx];
+                        let threshold = run_bias * best_dist * 2.0 * (1.1 - w);
 
-                    if prev_dist < best_dist + threshold {
-                        prev
+                        if prev_dist < best_dist + threshold {
+                            prev
+                        } else {
+                            best
+                        }
                     } else {
                         best
                     }
                 } else {
                     best
                 }
-            } else {
-                best
             };
 
             indices[idx] = chosen;
@@ -603,6 +613,7 @@ pub fn dither_image(
                 acc.accumulate(idx, orig_lab, chosen_lab, weights[idx]);
             }
 
+            // Error diffusion: flows through both locked and unlocked pixels
             let scale = dither_strength * dither_map[idx];
             let mut err_l = (current.l - chosen_lab.l) * scale;
             let mut err_a = (current.a - chosen_lab.a) * scale;
@@ -649,6 +660,7 @@ pub fn dither_image_rgba(
     run_priority: RunPriority,
     dither_strength: f32,
     mut mpe_acc: Option<&mut MpeAccumulator>,
+    prev_indices: Option<&[u8]>,
 ) -> Vec<u8> {
     let transparent_idx = palette.transparent_index().unwrap_or(0);
 
@@ -722,39 +734,50 @@ pub fn dither_image_rgba(
             let p = pixels[idx];
             let orig_lab = srgb_to_oklab(p.r, p.g, p.b);
             let seed = palette.nearest_cached(p.r, p.g, p.b);
-            let (adj_r, adj_g, adj_b) = oklab_to_srgb(current);
-            let seed2 = palette.nearest_cached(adj_r, adj_g, adj_b);
-            let dithered_best = palette.nearest_seeded_2(current, seed, seed2);
 
-            let best = if use_fallback {
-                let undithered_best = palette.nearest_seeded(orig_lab, seed);
-                if dithered_best == undithered_best {
-                    dithered_best
-                } else {
-                    let d_dithered =
-                        orig_lab.distance_sq(palette.entries_oklab()[dithered_best as usize]);
-                    let d_undithered =
-                        orig_lab.distance_sq(palette.entries_oklab()[undithered_best as usize]);
-                    if d_dithered <= d_undithered * 2.0 {
+            // Temporal clamping: if undithered nearest matches prev frame, lock it
+            let locked = prev_indices.is_some_and(|pi| seed == pi[idx]);
+
+            let chosen = if locked {
+                prev_indices.unwrap()[idx]
+            } else {
+                let (adj_r, adj_g, adj_b) = oklab_to_srgb(current);
+                let seed2 = palette.nearest_cached(adj_r, adj_g, adj_b);
+                let dithered_best = palette.nearest_seeded_2(current, seed, seed2);
+
+                let best = if use_fallback {
+                    let undithered_best = palette.nearest_seeded(orig_lab, seed);
+                    if dithered_best == undithered_best {
                         dithered_best
                     } else {
-                        undithered_best
+                        let d_dithered =
+                            orig_lab.distance_sq(palette.entries_oklab()[dithered_best as usize]);
+                        let d_undithered =
+                            orig_lab.distance_sq(palette.entries_oklab()[undithered_best as usize]);
+                        if d_dithered <= d_undithered * 2.0 {
+                            dithered_best
+                        } else {
+                            undithered_best
+                        }
                     }
-                }
-            } else {
-                dithered_best
-            };
-            let best_lab = palette.entries_oklab()[best as usize];
+                } else {
+                    dithered_best
+                };
+                let best_lab = palette.entries_oklab()[best as usize];
 
-            let chosen = if run_bias > 0.0 {
-                if let Some(prev) = prev_index {
-                    if prev != transparent_idx {
-                        let prev_dist = current.distance_sq(palette.entries_oklab()[prev as usize]);
-                        let best_dist = current.distance_sq(best_lab);
-                        let w = weights[idx];
-                        let threshold = run_bias * best_dist * 2.0 * (1.1 - w);
-                        if prev_dist < best_dist + threshold {
-                            prev
+                if run_bias > 0.0 {
+                    if let Some(prev) = prev_index {
+                        if prev != transparent_idx {
+                            let prev_dist =
+                                current.distance_sq(palette.entries_oklab()[prev as usize]);
+                            let best_dist = current.distance_sq(best_lab);
+                            let w = weights[idx];
+                            let threshold = run_bias * best_dist * 2.0 * (1.1 - w);
+                            if prev_dist < best_dist + threshold {
+                                prev
+                            } else {
+                                best
+                            }
                         } else {
                             best
                         }
@@ -764,8 +787,6 @@ pub fn dither_image_rgba(
                 } else {
                     best
                 }
-            } else {
-                best
             };
 
             indices[idx] = chosen;
@@ -777,6 +798,7 @@ pub fn dither_image_rgba(
                 acc.accumulate(idx, orig_lab, chosen_lab, weights[idx]);
             }
 
+            // Error diffusion: flows through both locked and unlocked pixels
             let scale = dither_strength * dither_map[idx];
             let mut err_l = (current.l - chosen_lab.l) * scale;
             let mut err_a = (current.a - chosen_lab.a) * scale;
@@ -823,6 +845,7 @@ pub fn dither_image_rgba_alpha(
     run_priority: RunPriority,
     dither_strength: f32,
     mut mpe_acc: Option<&mut MpeAccumulator>,
+    prev_indices: Option<&[u8]>,
 ) -> Vec<u8> {
     let transparent_idx = palette.transparent_index().unwrap_or(0);
 
@@ -900,38 +923,48 @@ pub fn dither_image_rgba_alpha(
             let p = pixels[idx];
             let orig_lab = srgb_to_oklab(p.r, p.g, p.b);
             let orig_alpha = p.a as f32 / 255.0;
-            let dithered_best = palette.nearest_with_alpha(current, current_alpha);
 
-            let best = if use_fallback {
-                let undithered_best = palette.nearest_with_alpha(orig_lab, orig_alpha);
-                if dithered_best == undithered_best {
-                    dithered_best
-                } else {
-                    let d_dithered =
-                        orig_lab.distance_sq(palette.entries_oklab()[dithered_best as usize]);
-                    let d_undithered =
-                        orig_lab.distance_sq(palette.entries_oklab()[undithered_best as usize]);
-                    if d_dithered <= d_undithered * 2.0 {
+            // Temporal clamping: use alpha-aware undithered nearest for lock check
+            let undithered_nearest = palette.nearest_with_alpha(orig_lab, orig_alpha);
+            let locked = prev_indices.is_some_and(|pi| undithered_nearest == pi[idx]);
+
+            let chosen = if locked {
+                prev_indices.unwrap()[idx]
+            } else {
+                let dithered_best = palette.nearest_with_alpha(current, current_alpha);
+
+                let best = if use_fallback {
+                    if dithered_best == undithered_nearest {
                         dithered_best
                     } else {
-                        undithered_best
+                        let d_dithered =
+                            orig_lab.distance_sq(palette.entries_oklab()[dithered_best as usize]);
+                        let d_undithered = orig_lab
+                            .distance_sq(palette.entries_oklab()[undithered_nearest as usize]);
+                        if d_dithered <= d_undithered * 2.0 {
+                            dithered_best
+                        } else {
+                            undithered_nearest
+                        }
                     }
-                }
-            } else {
-                dithered_best
-            };
-            let best_lab = palette.entries_oklab()[best as usize];
+                } else {
+                    dithered_best
+                };
+                let best_lab = palette.entries_oklab()[best as usize];
 
-            let chosen = if run_bias > 0.0 {
-                if let Some(prev) = prev_index {
-                    if prev != transparent_idx {
-                        let prev_lab = palette.entries_oklab()[prev as usize];
-                        let prev_dist = current.distance_sq(prev_lab);
-                        let best_dist = current.distance_sq(best_lab);
-                        let w = weights[idx];
-                        let threshold = run_bias * best_dist * 2.0 * (1.1 - w);
-                        if prev_dist < best_dist + threshold {
-                            prev
+                if run_bias > 0.0 {
+                    if let Some(prev) = prev_index {
+                        if prev != transparent_idx {
+                            let prev_lab = palette.entries_oklab()[prev as usize];
+                            let prev_dist = current.distance_sq(prev_lab);
+                            let best_dist = current.distance_sq(best_lab);
+                            let w = weights[idx];
+                            let threshold = run_bias * best_dist * 2.0 * (1.1 - w);
+                            if prev_dist < best_dist + threshold {
+                                prev
+                            } else {
+                                best
+                            }
                         } else {
                             best
                         }
@@ -941,8 +974,6 @@ pub fn dither_image_rgba_alpha(
                 } else {
                     best
                 }
-            } else {
-                best
             };
 
             indices[idx] = chosen;
@@ -955,6 +986,7 @@ pub fn dither_image_rgba_alpha(
                 acc.accumulate(idx, orig_lab, chosen_lab, weights[idx]);
             }
 
+            // Error diffusion: flows through both locked and unlocked pixels
             let scale = dither_strength * dither_map[idx];
             let mut err_l = (current.l - chosen_lab.l) * scale;
             let mut err_a = (current.a - chosen_lab.a) * scale;
@@ -1367,6 +1399,7 @@ mod tests {
             RunPriority::Quality,
             0.5,
             None,
+            None,
         );
         assert_eq!(indices.len(), 64);
         for &idx in &indices {
@@ -1396,6 +1429,7 @@ mod tests {
             DitherMode::Adaptive,
             RunPriority::Balanced,
             0.5,
+            None,
             None,
         );
         assert_eq!(indices.len(), width * height);
