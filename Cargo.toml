@@ -66,3 +66,6 @@ name = "calibrate_mpe"
 
 [[example]]
 name = "calibrate_jpeg"
+
+[[example]]
+name = "calibrate_knobs"
