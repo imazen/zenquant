@@ -69,7 +69,7 @@ writer.write_image_data(result.indices()).unwrap();
 Build one palette from multiple frames, then remap each frame against it:
 
 ```rust
-use zenquant::{QuantizeConfig, OutputFormat, ImgRef};
+use zenquant::{QuantizeConfig, QuantizeError, OutputFormat, ImgRef};
 
 let config = QuantizeConfig::new(OutputFormat::Gif);
 
@@ -87,6 +87,65 @@ for frame_pixels in &frame_data {
 }
 ```
 
+For animation encoders (APNG, GIF), you can enforce per-frame quality with `min_ssim2` on the remap config. Frames that fail the quality floor return `QualityNotMet`, letting the encoder decide whether to fall back to truecolor for that frame:
+
+```rust
+let remap_config = QuantizeConfig::new(OutputFormat::Png)
+    .min_ssim2(75.0);
+
+for frame_pixels in &frame_data {
+    match shared.remap_rgba(frame_pixels, width, height, &remap_config) {
+        Ok(result) => {
+            let ssim2 = result.ssimulacra2_estimate().unwrap();
+            // encode as indexed
+        }
+        Err(QuantizeError::QualityNotMet { achieved_ssim2, .. }) => {
+            // this frame needs truecolor
+        }
+        Err(e) => panic!("{e}"),
+    }
+}
+```
+
+### Quality targets
+
+Specify quality in SSIMULACRA2 units instead of manually tuning compression knobs. zenquant auto-selects the internal quality preset, dither strength, and run priority to maximize compression while staying above your target.
+
+```rust
+use zenquant::{QuantizeConfig, OutputFormat};
+
+// Auto-tune compression: stay above SSIM2 80, compress as hard as possible
+let config = QuantizeConfig::new(OutputFormat::Png)
+    .max_colors(256)
+    .target_ssim2(80.0);
+
+let result = zenquant::quantize(&pixels, width, height, &config).unwrap();
+
+// Quality metrics are computed automatically when a target is set
+let ssim2 = result.ssimulacra2_estimate().unwrap();  // 0–100, higher = better
+let ba = result.butteraugli_estimate().unwrap();       // 0+, lower = better
+```
+
+Set a hard quality floor with `min_ssim2`. Returns `QuantizeError::QualityNotMet` if the result falls below — useful for animation encoders that need to decide per-frame whether to fall back to truecolor:
+
+```rust
+use zenquant::{QuantizeConfig, QuantizeError, OutputFormat};
+
+let config = QuantizeConfig::new(OutputFormat::Png)
+    .max_colors(256)
+    .min_ssim2(75.0);
+
+match zenquant::quantize(&pixels, width, height, &config) {
+    Ok(result) => { /* quality met, use indexed */ }
+    Err(QuantizeError::QualityNotMet { min_ssim2, achieved_ssim2 }) => {
+        // Fall back to truecolor for this frame
+    }
+    Err(e) => { /* other error */ }
+}
+```
+
+Quality metrics and `min_ssim2` enforcement also work on the `remap()` path, so you get per-frame quality measurement when using shared palettes for animation.
+
 ### Quality presets
 
 ```rust
@@ -101,6 +160,8 @@ let config = QuantizeConfig::new(OutputFormat::Png).quality(Quality::Balanced);
 // Best — ~120ms. AQ masking + 8 k-means iterations + Viterbi DP. (default)
 let config = QuantizeConfig::new(OutputFormat::Png).quality(Quality::Best);
 ```
+
+When `target_ssim2` is set, it overrides the quality preset, run priority, and dither strength with auto-tuned values based on calibrated compression tier data.
 
 ### Output formats
 
@@ -145,6 +206,7 @@ This generates side-by-side montages (requires ImageMagick `montage`).
 
 zenquant is used as the default quantizer in:
 
+- [**zenpng**](https://github.com/imazen/zenpng) — PNG/APNG codec (`features = ["quantize"]`)
 - [**zengif**](https://github.com/imazen/zengif) — GIF codec (`features = ["zenquant"]`)
 - [**zenwebp**](https://github.com/imazen/zenwebp) — WebP codec (`features = ["quantize"]`)
 
