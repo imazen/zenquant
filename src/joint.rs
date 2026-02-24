@@ -18,9 +18,9 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use crate::joint_predict::{Predictor, PredictorSnapshot};
 use crate::oklab::OKLab;
 use crate::palette::Palette;
-use crate::zoint_predict::{Predictor, PredictorSnapshot};
 
 /// Maximum candidates per pixel. Higher = more options but slower.
 const MAX_CANDIDATES: usize = 6;

@@ -53,10 +53,10 @@ dev_modules!(
     dither, histogram, masking, median_cut, metric, oklab, palette, remap
 );
 pub mod error;
-#[cfg(feature = "zoint")]
-pub(crate) mod zoint;
-#[cfg(feature = "zoint")]
-mod zoint_predict;
+#[cfg(feature = "joint")]
+pub(crate) mod joint;
+#[cfg(feature = "joint")]
+mod joint_predict;
 
 pub use error::QuantizeError;
 pub use imgref::{Img, ImgRef, ImgVec};
@@ -120,13 +120,13 @@ pub enum OutputFormat {
     /// The optimized indices are returned in the normal [`QuantizeResult::indices()`];
     /// downstream encoders compress them through their standard pipeline.
     ///
-    /// Requires the `zoint` feature.
-    PngZoint,
+    /// Requires the `joint` feature.
+    PngJoint,
     /// PNG optimized for minimum file size. Uses position-deterministic
     /// blue noise dithering at very low strength, aggressive run extension,
     /// and joint deflate+quantization optimization.
     ///
-    /// Requires the `zoint` feature.
+    /// Requires the `joint` feature.
     PngMinSize,
     /// WebP VP8L: Delta palette encoding + spatial prediction.
     /// Uses delta-minimize sort. Full RGBA palette.
@@ -174,8 +174,8 @@ impl QuantizeTuning {
                 AlphaMode::Full,
                 1.0,
             ),
-            OutputFormat::PngZoint => (
-                0.3, // lower dither — zoint exploits compressible patterns better
+            OutputFormat::PngJoint => (
+                0.3, // lower dither — joint exploits compressible patterns better
                 palette::PaletteSortStrategy::Luminance,
                 false,
                 AlphaMode::Full,
@@ -233,11 +233,11 @@ pub struct QuantizeConfig {
     compute_metric: bool,
     target_ssim2: Option<f32>,
     min_ssim2: Option<f32>,
-    /// Deflate effort for the zoint evaluation pass (1–22). Default: 10.
+    /// Deflate effort for the joint evaluation pass (1–22). Default: 10.
     /// (Retained for API compatibility; the vendored predictor ignores this.)
-    zoint_deflate_effort: u32,
-    /// Base OKLab distance tolerance for zoint candidate selection. Default: 0.015.
-    zoint_tolerance: f32,
+    joint_deflate_effort: u32,
+    /// Base OKLab distance tolerance for joint candidate selection. Default: 0.015.
+    joint_tolerance: f32,
 }
 
 impl QuantizeConfig {
@@ -262,8 +262,8 @@ impl QuantizeConfig {
             compute_metric: false,
             target_ssim2: None,
             min_ssim2: None,
-            zoint_deflate_effort: 10,
-            zoint_tolerance: 0.01,
+            joint_deflate_effort: 10,
+            joint_tolerance: 0.01,
         }
     }
 
@@ -377,18 +377,18 @@ impl QuantizeConfig {
         self
     }
 
-    /// Override zoint deflate effort (clamped to 1–22). Not part of the public API.
+    /// Override joint deflate effort (clamped to 1–22). Not part of the public API.
     /// (Retained for API compatibility; the vendored predictor ignores this.)
     #[doc(hidden)]
-    pub fn _zoint_deflate_effort(mut self, effort: u32) -> Self {
-        self.zoint_deflate_effort = effort.clamp(1, 22);
+    pub fn _joint_deflate_effort(mut self, effort: u32) -> Self {
+        self.joint_deflate_effort = effort.clamp(1, 22);
         self
     }
 
-    /// Override zoint base OKLab distance tolerance. Not part of the public API.
+    /// Override joint base OKLab distance tolerance. Not part of the public API.
     #[doc(hidden)]
-    pub fn _zoint_tolerance(mut self, tolerance: f32) -> Self {
-        self.zoint_tolerance = tolerance;
+    pub fn _joint_tolerance(mut self, tolerance: f32) -> Self {
+        self.joint_tolerance = tolerance;
         self
     }
 }
@@ -865,21 +865,21 @@ pub fn quantize(
         }
     }
 
-    // 7. Zoint: joint deflate+quantization optimization
-    #[cfg(feature = "zoint")]
+    // 7. Joint deflate+quantization optimization
+    #[cfg(feature = "joint")]
     let indices = if matches!(
         config.output_format,
-        OutputFormat::PngZoint | OutputFormat::PngMinSize
+        OutputFormat::PngJoint | OutputFormat::PngMinSize
     ) {
-        zoint::optimize_rgb(
+        joint::optimize_rgb(
             pixels,
             width,
             height,
             &weights,
             &pal,
             &indices,
-            config.zoint_deflate_effort,
-            config.zoint_tolerance,
+            config.joint_deflate_effort,
+            config.joint_tolerance,
         )
     } else {
         indices
@@ -1200,21 +1200,21 @@ pub fn quantize_rgba(
         }
     }
 
-    // Zoint: joint deflate+quantization optimization
-    #[cfg(feature = "zoint")]
+    // Joint deflate+quantization optimization
+    #[cfg(feature = "joint")]
     let indices = if matches!(
         config.output_format,
-        OutputFormat::PngZoint | OutputFormat::PngMinSize
+        OutputFormat::PngJoint | OutputFormat::PngMinSize
     ) {
-        zoint::optimize_rgba(
+        joint::optimize_rgba(
             pixels,
             width,
             height,
             &weights,
             &pal,
             &indices,
-            config.zoint_deflate_effort,
-            config.zoint_tolerance,
+            config.joint_deflate_effort,
+            config.joint_tolerance,
         )
     } else {
         indices

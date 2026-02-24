@@ -8,4 +8,4 @@
 - User: Research alternatives to k-means for palette refinement — mini-batch k-means, Elkan's triangle inequality, histogram-based refinement, other production approaches
 
 ## 2026-02-23
-- User: Add OutputFormat::PngMinSize — BlueNoise dithering at 0.1, aggressive run extension (Compression priority, lambda_scale 2.5), zoint optimization. For minimum PNG file size.
+- User: Add OutputFormat::PngMinSize — BlueNoise dithering at 0.1, aggressive run extension (Compression priority, lambda_scale 2.5), joint optimization. For minimum PNG file size.

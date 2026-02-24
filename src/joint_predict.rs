@@ -1,8 +1,8 @@
-//! Vendored lightweight LZ77 predictor for zoint filter ranking.
+//! Vendored lightweight LZ77 predictor for joint filter ranking.
 //!
 //! Predicts deflate-compressed sizes without producing valid deflate output.
 //! Vendors the minimum matchfinder code from zenflate (HC matchfinder + frequency
-//! counting + Huffman code length estimation) to decouple zoint from the zenflate crate.
+//! counting + Huffman code length estimation) to decouple joint from the zenflate crate.
 //!
 //! The predictor's purpose is **relative ranking** of PNG filter choices, not
 //! exact size prediction. Huffman code lengths (capped at 15 bits per deflate spec)
