@@ -7,12 +7,12 @@
 //!
 //! Single-pass approach with a vendored LZ77 predictor:
 //!  1. Pre-score all 5 PNG filters per row → keep top K=3.
-//!  2. For each top-K filter, run greedy index optimization.
+//!  2. For each top-K filter, run DP index optimization.
 //!  3. Feed (filter, optimized indices) through the predictor → size estimate.
 //!  4. Row-pair lookahead defers decisions using predictor snapshots.
 //!
-//! The predictor uses Shannon entropy estimation over LZ77 match frequencies,
-//! which correlates well with actual deflate output for relative ranking.
+//! The predictor uses Huffman code length estimation over LZ77 match frequencies,
+//! which closely models actual deflate output for relative ranking.
 
 extern crate alloc;
 use alloc::vec;
@@ -224,16 +224,23 @@ fn build_candidates(
     Candidates { indices, counts }
 }
 
-// ── Greedy row optimization ──
+// ── DP row optimization ──
 
-/// For a given filter type, greedily select the best candidate index per pixel.
+/// Symmetric distance from zero (wrapping): correlates with compressibility.
+/// Zero and near-zero filtered bytes get the shortest Huffman codes.
+#[inline]
+fn sym_dist(b: u8) -> u16 {
+    b.min(b.wrapping_neg()) as u16
+}
+
+/// For a given filter type, select the best candidate index per pixel using
+/// dynamic programming over left-neighbor dependencies.
 ///
-/// Conservative strategy: only change an index from the initial value if a
-/// candidate produces a zero filtered byte (perfect prediction) or matches
-/// the previous filtered byte (run extension). This preserves the
-/// compression-friendly patterns from Viterbi while exploiting "free" wins.
+/// Filters with left-dependency (Sub=1, Average=3, Paeth=4) use full DP:
+/// state = candidate chosen at previous pixel, cost = sym_dist of filtered byte.
+/// Filters without left-dependency (None=0, Up=2) pick per-pixel minimum.
 #[allow(clippy::too_many_arguments)]
-fn greedy_row_optimize(
+fn dp_row_optimize(
     width: usize,
     filter: u8,
     candidates: &Candidates,
@@ -243,163 +250,293 @@ fn greedy_row_optimize(
     row_bytes: usize,
 ) -> Vec<u8> {
     let mut result_indices = vec![0u8; width];
-    let mut packed_row = vec![0u8; row_bytes];
-    let mut prev_filtered: u8 = 0;
 
-    for x in 0..width {
-        let pixel_idx = row_start + x;
-        let n_cands = candidates.counts[pixel_idx] as usize;
+    // For filters without left-dependency, each pixel is independent
+    #[allow(clippy::needless_range_loop)]
+    if filter == 0 || filter == 2 {
+        let mut packed_row = vec![0u8; row_bytes];
+        for x in 0..width {
+            let pixel_idx = row_start + x;
+            let n_cands = candidates.counts[pixel_idx] as usize;
+            let mut best_c = 0usize;
+            let mut best_cost = u16::MAX;
 
-        // Default: keep the initial index (first candidate)
-        let initial = candidates.indices[pixel_idx][0];
-        let mut best_candidate = initial;
-
-        // Single candidate — nothing to optimize
-        if n_cands <= 1 {
-            result_indices[x] = initial;
-            // Update packed_row
-            if bit_depth == 8 {
-                packed_row[x] = initial;
-            } else {
-                let ppb = 8 / bit_depth as usize;
-                let byte_pos = x / ppb;
-                let bit_offset = (ppb - 1 - x % ppb) * bit_depth as usize;
-                let mask = (1u8 << bit_depth) - 1;
-                packed_row[byte_pos] &= !(mask << bit_offset);
-                packed_row[byte_pos] |= (initial & mask) << bit_offset;
-            }
-            // Update prev_filtered for run tracking
-            let byte_pos = if bit_depth == 8 {
-                x
-            } else {
-                x / (8 / bit_depth as usize)
-            };
-            let left = if byte_pos > 0 {
-                packed_row[byte_pos - 1]
-            } else {
-                0
-            };
-            let above = if !above_packed.is_empty() {
-                above_packed[byte_pos]
-            } else {
-                0
-            };
-            let above_left = if byte_pos > 0 && !above_packed.is_empty() {
-                above_packed[byte_pos - 1]
-            } else {
-                0
-            };
-            prev_filtered =
-                compute_filtered_byte(filter, packed_row[byte_pos], left, above, above_left);
-            continue;
-        }
-
-        // For sub-byte depths, only score at byte boundaries
-        if bit_depth < 8 {
-            let ppb = 8 / bit_depth as usize;
-            let is_last_in_byte = (x % ppb == ppb - 1) || x == width - 1;
-            if !is_last_in_byte {
-                // Not a boundary — just use initial
-                result_indices[x] = initial;
-                let byte_pos = x / ppb;
-                let bit_offset = (ppb - 1 - x % ppb) * bit_depth as usize;
-                let mask = (1u8 << bit_depth) - 1;
-                packed_row[byte_pos] &= !(mask << bit_offset);
-                packed_row[byte_pos] |= (initial & mask) << bit_offset;
-                continue;
-            }
-        }
-
-        let byte_pos = if bit_depth == 8 {
-            x
-        } else {
-            x / (8 / bit_depth as usize)
-        };
-        let left = if byte_pos > 0 {
-            packed_row[byte_pos - 1]
-        } else {
-            0
-        };
-        let above = if !above_packed.is_empty() {
-            above_packed[byte_pos]
-        } else {
-            0
-        };
-        let above_left = if byte_pos > 0 && !above_packed.is_empty() {
-            above_packed[byte_pos - 1]
-        } else {
-            0
-        };
-
-        // Compute what the initial index would produce
-        let initial_packed = if bit_depth == 8 {
-            initial
-        } else {
-            let ppb = 8 / bit_depth as usize;
-            let bit_offset = (ppb - 1 - x % ppb) * bit_depth as usize;
-            let mask = (1u8 << bit_depth) - 1;
-            let mut bv = packed_row[byte_pos];
-            bv &= !(mask << bit_offset);
-            bv |= (initial & mask) << bit_offset;
-            bv
-        };
-        let initial_filtered =
-            compute_filtered_byte(filter, initial_packed, left, above, above_left);
-
-        // Only look for alternatives if initial doesn't already give us 0
-        if initial_filtered != 0 {
-            // Try to find a candidate that gives zero or matches the run
-            let mut found_run = false;
-
-            for c in 1..n_cands {
+            for c in 0..n_cands {
                 let cand_idx = candidates.indices[pixel_idx][c];
-                let packed_byte = if bit_depth == 8 {
-                    cand_idx
-                } else {
-                    let ppb = 8 / bit_depth as usize;
-                    let bit_offset = (ppb - 1 - x % ppb) * bit_depth as usize;
-                    let mask = (1u8 << bit_depth) - 1;
-                    let mut bv = packed_row[byte_pos];
-                    bv &= !(mask << bit_offset);
-                    bv |= (cand_idx & mask) << bit_offset;
-                    bv
-                };
-
-                let filtered = compute_filtered_byte(filter, packed_byte, left, above, above_left);
-
-                if filtered == 0 {
-                    // Perfect prediction — always take this
-                    best_candidate = cand_idx;
-                    break; // can't do better than zero
-                }
-
-                if !found_run && byte_pos > 0 && filtered == prev_filtered {
-                    // Run extension — good, but keep looking for zero
-                    best_candidate = cand_idx;
-                    found_run = true;
+                let packed_byte = pack_candidate(bit_depth, &packed_row, x, cand_idx);
+                let byte_pos = if bit_depth == 8 { x } else { x / (8 / bit_depth as usize) };
+                let above = if !above_packed.is_empty() { above_packed[byte_pos] } else { 0 };
+                let filtered = compute_filtered_byte(filter, packed_byte, 0, above, 0);
+                let cost = sym_dist(filtered);
+                if cost < best_cost {
+                    best_cost = cost;
+                    best_c = c;
                 }
             }
+
+            let chosen = candidates.indices[pixel_idx][best_c];
+            result_indices[x] = chosen;
+            write_packed(bit_depth, &mut packed_row, x, chosen);
         }
+        return result_indices;
+    }
 
-        result_indices[x] = best_candidate;
+    // ── DP for filters with left-dependency (Sub=1, Average=3, Paeth=4) ──
 
-        // Update packed row
-        if bit_depth == 8 {
-            packed_row[x] = best_candidate;
-        } else {
-            let ppb = 8 / bit_depth as usize;
-            let bit_offset = (ppb - 1 - x % ppb) * bit_depth as usize;
-            let mask = (1u8 << bit_depth) - 1;
-            packed_row[byte_pos] &= !(mask << bit_offset);
-            packed_row[byte_pos] |= (best_candidate & mask) << bit_offset;
-        }
-
-        // Track prev_filtered
-        prev_filtered =
-            compute_filtered_byte(filter, packed_row[byte_pos], left, above, above_left);
+    if bit_depth == 8 {
+        dp_row_optimize_8bit(width, filter, candidates, row_start, above_packed, &mut result_indices);
+    } else {
+        dp_row_optimize_subbyte(width, filter, candidates, row_start, above_packed, bit_depth, row_bytes, &mut result_indices);
     }
 
     result_indices
+}
+
+/// Pack a candidate index into a byte value for the given pixel position.
+/// Returns the full packed byte that would result from placing this candidate.
+#[inline]
+fn pack_candidate(bit_depth: u8, packed_row: &[u8], x: usize, cand_idx: u8) -> u8 {
+    if bit_depth == 8 {
+        return cand_idx;
+    }
+    let ppb = 8 / bit_depth as usize;
+    let byte_pos = x / ppb;
+    let bit_offset = (ppb - 1 - x % ppb) * bit_depth as usize;
+    let mask = (1u8 << bit_depth) - 1;
+    let mut bv = packed_row[byte_pos];
+    bv &= !(mask << bit_offset);
+    bv |= (cand_idx & mask) << bit_offset;
+    bv
+}
+
+/// Write a candidate index into the packed row at pixel position x.
+#[inline]
+fn write_packed(bit_depth: u8, packed_row: &mut [u8], x: usize, cand_idx: u8) {
+    if bit_depth == 8 {
+        packed_row[x] = cand_idx;
+        return;
+    }
+    let ppb = 8 / bit_depth as usize;
+    let byte_pos = x / ppb;
+    let bit_offset = (ppb - 1 - x % ppb) * bit_depth as usize;
+    let mask = (1u8 << bit_depth) - 1;
+    packed_row[byte_pos] &= !(mask << bit_offset);
+    packed_row[byte_pos] |= (cand_idx & mask) << bit_offset;
+}
+
+/// DP for 8-bit depth (most common path). Each pixel = one byte, no packing.
+#[allow(clippy::needless_range_loop)]
+fn dp_row_optimize_8bit(
+    width: usize,
+    filter: u8,
+    candidates: &Candidates,
+    row_start: usize,
+    above_packed: &[u8],
+    result: &mut [u8],
+) {
+    // dp[c] = minimum cumulative cost choosing candidate c at the current pixel
+    // back[x][c] = which candidate was chosen at pixel x-1 to achieve dp[c]
+    let mut dp_cur = [u32::MAX; MAX_CANDIDATES];
+    let mut dp_prev = [0u32; MAX_CANDIDATES];
+    // Backpointers: for each pixel x and candidate c, store the prev candidate index
+    let mut backptrs: Vec<[u8; MAX_CANDIDATES]> = vec![[0; MAX_CANDIDATES]; width];
+
+    // Pixel 0: no left neighbor, so left=0, above_left=0
+    let above_0 = if !above_packed.is_empty() { above_packed[0] } else { 0 };
+    let n0 = candidates.counts[row_start] as usize;
+    for c in 0..n0 {
+        let raw = candidates.indices[row_start][c];
+        let filtered = compute_filtered_byte(filter, raw, 0, above_0, 0);
+        dp_prev[c] = sym_dist(filtered) as u32;
+    }
+
+    // Forward pass: pixels 1..width-1
+    for x in 1..width {
+        let pixel_idx = row_start + x;
+        let n_cands = candidates.counts[pixel_idx] as usize;
+        let n_prev = candidates.counts[pixel_idx - 1] as usize;
+        let above = if !above_packed.is_empty() { above_packed[x] } else { 0 };
+        let above_left = if x > 0 && !above_packed.is_empty() { above_packed[x - 1] } else { 0 };
+
+        for c in 0..n_cands {
+            let raw = candidates.indices[pixel_idx][c];
+            let mut best_cost = u32::MAX;
+            let mut best_prev = 0u8;
+
+            for pc in 0..n_prev {
+                if dp_prev[pc] == u32::MAX {
+                    continue;
+                }
+                let left = candidates.indices[pixel_idx - 1][pc];
+                let filtered = compute_filtered_byte(filter, raw, left, above, above_left);
+                let cost = dp_prev[pc] + sym_dist(filtered) as u32;
+                if cost < best_cost {
+                    best_cost = cost;
+                    best_prev = pc as u8;
+                }
+            }
+
+            dp_cur[c] = best_cost;
+            backptrs[x][c] = best_prev;
+        }
+        dp_cur[n_cands..MAX_CANDIDATES].fill(u32::MAX);
+
+        dp_prev = dp_cur;
+        dp_cur = [u32::MAX; MAX_CANDIDATES];
+    }
+
+    // Backward pass: find minimum-cost final candidate, trace back
+    let last_idx = row_start + width - 1;
+    let n_last = candidates.counts[last_idx] as usize;
+    let mut best_c = 0usize;
+    let mut best_cost = u32::MAX;
+    for c in 0..n_last {
+        if dp_prev[c] < best_cost {
+            best_cost = dp_prev[c];
+            best_c = c;
+        }
+    }
+
+    result[width - 1] = candidates.indices[last_idx][best_c];
+    let mut cur_c = best_c;
+    for x in (1..width).rev() {
+        let prev_c = backptrs[x][cur_c] as usize;
+        result[x - 1] = candidates.indices[row_start + x - 1][prev_c];
+        cur_c = prev_c;
+    }
+}
+
+/// DP for sub-byte bit depths (<8). Only boundary pixels participate in DP;
+/// non-boundary pixels use their initial candidate.
+#[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
+fn dp_row_optimize_subbyte(
+    width: usize,
+    filter: u8,
+    candidates: &Candidates,
+    row_start: usize,
+    above_packed: &[u8],
+    bit_depth: u8,
+    row_bytes: usize,
+    result: &mut [u8],
+) {
+    let ppb = 8 / bit_depth as usize;
+
+    // Collect boundary pixel positions (last pixel in each packed byte)
+    let mut boundaries: Vec<usize> = Vec::new();
+    for x in 0..width {
+        let is_boundary = (x % ppb == ppb - 1) || x == width - 1;
+        if is_boundary {
+            boundaries.push(x);
+        }
+    }
+
+    if boundaries.is_empty() {
+        // Shouldn't happen, but safety: just use initial indices
+        for x in 0..width {
+            result[x] = candidates.indices[row_start + x][0];
+        }
+        return;
+    }
+
+    // For sub-byte DP, state is the packed byte value produced by the boundary
+    // pixel's candidate choice. We build a packed row as we go.
+    let mut packed_row = vec![0u8; row_bytes];
+
+    // First, fill in all non-boundary pixels with initial candidates
+    for x in 0..width {
+        let is_boundary = (x % ppb == ppb - 1) || x == width - 1;
+        if !is_boundary {
+            let initial = candidates.indices[row_start + x][0];
+            result[x] = initial;
+            write_packed(bit_depth, &mut packed_row, x, initial);
+        }
+    }
+
+    // DP over boundary pixels
+    let mut dp_prev = [u32::MAX; MAX_CANDIDATES];
+    let mut dp_cur = [u32::MAX; MAX_CANDIDATES];
+    let mut backptrs: Vec<[u8; MAX_CANDIDATES]> = vec![[0; MAX_CANDIDATES]; boundaries.len()];
+
+    // First boundary pixel
+    let bx0 = boundaries[0];
+    let byte_pos0 = bx0 / ppb;
+    let above_0 = if !above_packed.is_empty() { above_packed[byte_pos0] } else { 0 };
+    let above_left_0 = if byte_pos0 > 0 && !above_packed.is_empty() { above_packed[byte_pos0 - 1] } else { 0 };
+    let left_0 = if byte_pos0 > 0 { packed_row[byte_pos0 - 1] } else { 0 };
+    let n0 = candidates.counts[row_start + bx0] as usize;
+
+    for c in 0..n0 {
+        let cand = candidates.indices[row_start + bx0][c];
+        let packed_byte = pack_candidate(bit_depth, &packed_row, bx0, cand);
+        let filtered = compute_filtered_byte(filter, packed_byte, left_0, above_0, above_left_0);
+        dp_prev[c] = sym_dist(filtered) as u32;
+    }
+
+    // Forward pass over remaining boundaries
+    for bi in 1..boundaries.len() {
+        let bx = boundaries[bi];
+        let byte_pos = bx / ppb;
+        let n_cands = candidates.counts[row_start + bx] as usize;
+        let n_prev_cands = candidates.counts[row_start + boundaries[bi - 1]] as usize;
+        let above = if !above_packed.is_empty() { above_packed[byte_pos] } else { 0 };
+        let above_left = if byte_pos > 0 && !above_packed.is_empty() { above_packed[byte_pos - 1] } else { 0 };
+
+        for c in 0..n_cands {
+            let cand = candidates.indices[row_start + bx][c];
+            let packed_byte = pack_candidate(bit_depth, &packed_row, bx, cand);
+            let mut best_cost = u32::MAX;
+            let mut best_prev = 0u8;
+
+            for pc in 0..n_prev_cands {
+                if dp_prev[pc] == u32::MAX {
+                    continue;
+                }
+                // The left byte is determined by the previous boundary's candidate
+                let prev_cand = candidates.indices[row_start + boundaries[bi - 1]][pc];
+                let left = pack_candidate(bit_depth, &packed_row, boundaries[bi - 1], prev_cand);
+                let filtered = compute_filtered_byte(filter, packed_byte, left, above, above_left);
+                let cost = dp_prev[pc] + sym_dist(filtered) as u32;
+                if cost < best_cost {
+                    best_cost = cost;
+                    best_prev = pc as u8;
+                }
+            }
+
+            dp_cur[c] = best_cost;
+            backptrs[bi][c] = best_prev;
+        }
+        for c in n_cands..MAX_CANDIDATES {
+            dp_cur[c] = u32::MAX;
+        }
+
+        dp_prev = dp_cur;
+        dp_cur = [u32::MAX; MAX_CANDIDATES];
+    }
+
+    // Backward pass: find best final boundary candidate, trace back
+    let last_bi = boundaries.len() - 1;
+    let last_bx = boundaries[last_bi];
+    let n_last = candidates.counts[row_start + last_bx] as usize;
+    let mut best_c = 0usize;
+    let mut best_cost = u32::MAX;
+    for c in 0..n_last {
+        if dp_prev[c] < best_cost {
+            best_cost = dp_prev[c];
+            best_c = c;
+        }
+    }
+
+    // Write boundary choices backward
+    let mut cur_c = best_c;
+    for bi in (0..=last_bi).rev() {
+        let bx = boundaries[bi];
+        let chosen = candidates.indices[row_start + bx][cur_c];
+        result[bx] = chosen;
+        write_packed(bit_depth, &mut packed_row, bx, chosen);
+        if bi > 0 {
+            cur_c = backptrs[bi][cur_c] as usize;
+        }
+    }
 }
 
 // ── Top-level optimizer ──
@@ -475,7 +612,7 @@ pub(crate) fn optimize_rgba(
 /// Merges filter selection and index optimization into one pass using the
 /// vendored LZ77 predictor. For each row:
 /// 1. Pre-score 5 filters → keep top K=3
-/// 2. For each top-K filter: run greedy_row_optimize → get optimized indices
+/// 2. For each top-K filter: run DP index optimization → get optimized indices
 /// 3. Feed (filter, optimized indices) through predictor → size estimate
 /// 4. Row-pair lookahead defers decisions using predictor snapshots
 #[allow(clippy::too_many_arguments)]
@@ -598,7 +735,7 @@ fn optimize_inner(
             }
 
             // Evaluate optimized indices with this filter
-            let opt_row = greedy_row_optimize(
+            let opt_row = dp_row_optimize(
                 width,
                 f,
                 &candidates,
@@ -650,7 +787,7 @@ fn optimize_inner(
                 }
 
                 // Optimized indices (re-optimize for this context)
-                let opt = greedy_row_optimize(
+                let opt = dp_row_optimize(
                     width,
                     f,
                     &candidates,
@@ -687,7 +824,7 @@ fn optimize_inner(
                     best_on_opt = Some((s, initial_row.to_vec(), packed_init.clone(), f));
                 }
 
-                let opt = greedy_row_optimize(
+                let opt = dp_row_optimize(
                     width,
                     f,
                     &candidates,
