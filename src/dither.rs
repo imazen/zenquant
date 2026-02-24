@@ -596,21 +596,33 @@ pub fn dither_image(
                 let best_lab = palette.entries_oklab()[best as usize];
 
                 if run_bias > 0.0 {
-                    if let Some(prev) = prev_index {
-                        let prev_dist =
-                            current.distance_sq(palette.entries_oklab()[prev as usize]);
-                        let best_dist = current.distance_sq(best_lab);
-                        let w = weights[idx];
-                        let threshold = run_bias * best_dist * 2.0 * (1.1 - w);
+                    let best_dist = current.distance_sq(best_lab);
+                    let w = weights[idx];
+                    let threshold = run_bias * best_dist * 2.0 * (1.1 - w);
 
-                        if prev_dist < best_dist + threshold {
-                            prev
-                        } else {
-                            best
+                    // Collect candidates: horizontal (prev) and vertical (above)
+                    let mut alt_idx = best;
+                    let mut alt_dist = best_dist;
+
+                    if let Some(prev) = prev_index {
+                        let d = current.distance_sq(palette.entries_oklab()[prev as usize]);
+                        if d < best_dist + threshold && d < alt_dist {
+                            alt_idx = prev;
+                            alt_dist = d;
                         }
-                    } else {
-                        best
                     }
+
+                    // Vertical bias (Linear only): prefer above-row index for
+                    // PNG Up filter — zero residual when index matches above.
+                    if linear && y > 0 {
+                        let above = indices[(y - 1) * width + x];
+                        let d = current.distance_sq(palette.entries_oklab()[above as usize]);
+                        if d < best_dist + threshold && d < alt_dist {
+                            alt_idx = above;
+                        }
+                    }
+
+                    alt_idx
                 } else {
                     best
                 }
@@ -783,24 +795,36 @@ pub fn dither_image_rgba(
                 let best_lab = palette.entries_oklab()[best as usize];
 
                 if run_bias > 0.0 {
-                    if let Some(prev) = prev_index {
-                        if prev != transparent_idx {
-                            let prev_dist =
-                                current.distance_sq(palette.entries_oklab()[prev as usize]);
-                            let best_dist = current.distance_sq(best_lab);
-                            let w = weights[idx];
-                            let threshold = run_bias * best_dist * 2.0 * (1.1 - w);
-                            if prev_dist < best_dist + threshold {
-                                prev
-                            } else {
-                                best
-                            }
-                        } else {
-                            best
+                    let best_dist = current.distance_sq(best_lab);
+                    let w = weights[idx];
+                    let threshold = run_bias * best_dist * 2.0 * (1.1 - w);
+
+                    let mut alt_idx = best;
+                    let mut alt_dist = best_dist;
+
+                    if let Some(prev) = prev_index
+                        && prev != transparent_idx
+                    {
+                        let d =
+                            current.distance_sq(palette.entries_oklab()[prev as usize]);
+                        if d < best_dist + threshold && d < alt_dist {
+                            alt_idx = prev;
+                            alt_dist = d;
                         }
-                    } else {
-                        best
                     }
+
+                    if linear && y > 0 {
+                        let above = indices[(y - 1) * width + x];
+                        if above != transparent_idx {
+                            let d =
+                                current.distance_sq(palette.entries_oklab()[above as usize]);
+                            if d < best_dist + threshold && d < alt_dist {
+                                alt_idx = above;
+                            }
+                        }
+                    }
+
+                    alt_idx
                 } else {
                     best
                 }
@@ -975,24 +999,35 @@ pub fn dither_image_rgba_alpha(
                 let best_lab = palette.entries_oklab()[best as usize];
 
                 if run_bias > 0.0 {
-                    if let Some(prev) = prev_index {
-                        if prev != transparent_idx {
-                            let prev_lab = palette.entries_oklab()[prev as usize];
-                            let prev_dist = current.distance_sq(prev_lab);
-                            let best_dist = current.distance_sq(best_lab);
-                            let w = weights[idx];
-                            let threshold = run_bias * best_dist * 2.0 * (1.1 - w);
-                            if prev_dist < best_dist + threshold {
-                                prev
-                            } else {
-                                best
-                            }
-                        } else {
-                            best
+                    let best_dist = current.distance_sq(best_lab);
+                    let w = weights[idx];
+                    let threshold = run_bias * best_dist * 2.0 * (1.1 - w);
+
+                    let mut alt_idx = best;
+                    let mut alt_dist = best_dist;
+
+                    if let Some(prev) = prev_index
+                        && prev != transparent_idx
+                    {
+                        let d = current.distance_sq(palette.entries_oklab()[prev as usize]);
+                        if d < best_dist + threshold && d < alt_dist {
+                            alt_idx = prev;
+                            alt_dist = d;
                         }
-                    } else {
-                        best
                     }
+
+                    if linear && y > 0 {
+                        let above = indices[(y - 1) * width + x];
+                        if above != transparent_idx {
+                            let d =
+                                current.distance_sq(palette.entries_oklab()[above as usize]);
+                            if d < best_dist + threshold && d < alt_dist {
+                                alt_idx = above;
+                            }
+                        }
+                    }
+
+                    alt_idx
                 } else {
                     best
                 }
