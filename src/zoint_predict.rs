@@ -2,11 +2,11 @@
 //!
 //! Predicts deflate-compressed sizes without producing valid deflate output.
 //! Vendors the minimum matchfinder code from zenflate (HC matchfinder + frequency
-//! counting + Shannon entropy estimation) to decouple zoint from the zenflate crate.
+//! counting + Huffman code length estimation) to decouple zoint from the zenflate crate.
 //!
 //! The predictor's purpose is **relative ranking** of PNG filter choices, not
-//! exact size prediction. Shannon entropy estimation correlates well with actual
-//! Huffman coding for this use case.
+//! exact size prediction. Huffman code lengths (capped at 15 bits per deflate spec)
+//! closely model actual deflate output for this use case.
 
 extern crate alloc;
 use alloc::sync::Arc;
@@ -396,33 +396,156 @@ impl DeflateFreqs {
     }
 }
 
-// ── Shannon entropy estimation ─────────────────────────────────────────────
+// ── Huffman code length estimation ──────────────────────────────────────────
 
-/// Estimate compressed size in bits using Shannon entropy.
+/// Compute Huffman code lengths for a frequency table.
 ///
-/// For relative filter ranking, this correlates well with actual Huffman coding.
-/// Uses fixed-point integer math for speed.
-fn estimate_compressed_bits(freqs: &DeflateFreqs) -> u64 {
-    let total_litlen: u32 = freqs.litlen.iter().sum();
-    let total_offset: u32 = freqs.offset.iter().sum();
-    let total = total_litlen + total_offset;
-    if total == 0 {
-        return 0;
-    }
+/// Uses a two-queue merge approach (sorted leaves + internal nodes) for O(n log n)
+/// construction. Code lengths are capped at `max_bits` (15 for deflate).
+/// Returns a Vec where `result[i]` is the code length for symbol `i` (0 if unused).
+fn compute_huffman_lengths(freqs: &[u32], max_bits: u8) -> alloc::vec::Vec<u8> {
+    let n = freqs.len();
+    let mut lengths = alloc::vec![0u8; n];
 
-    let mut bits = 0u64;
-
-    // Shannon entropy: sum of f * log2(total/f) for each symbol with f > 0
-    // Approximate log2(total/f) using leading zeros: log2(x) ≈ 31 - clz(x)
-    // For better precision, use fixed-point: log2(total/f) * 256
-    for &f in freqs.litlen.iter().chain(freqs.offset.iter()) {
+    // Collect active symbols sorted by frequency ascending
+    let mut symbols: alloc::vec::Vec<(u32, u16)> = alloc::vec::Vec::new();
+    for (i, &f) in freqs.iter().enumerate() {
         if f > 0 {
-            bits += f as u64 * approx_log2_ratio_fp8(total, f);
+            symbols.push((f, i as u16));
         }
     }
 
-    // Convert from fixed-point (×256) to bits, add extra bits for matches
-    let base_bits = bits >> 8;
+    if symbols.is_empty() {
+        return lengths;
+    }
+    if symbols.len() == 1 {
+        lengths[symbols[0].1 as usize] = 1;
+        return lengths;
+    }
+
+    symbols.sort_unstable_by_key(|&(f, _)| f);
+
+    // Two-queue Huffman construction: track depths instead of building a tree.
+    // Each entry is (combined_freq, max_depth_in_subtree).
+    // When two entries merge, the new depth = max(depth_a, depth_b) + 1.
+    let num_symbols = symbols.len();
+    let mut leaf_queue: alloc::collections::VecDeque<(u32, usize)> =
+        alloc::collections::VecDeque::with_capacity(num_symbols);
+    let mut internal_queue: alloc::collections::VecDeque<(u32, usize)> =
+        alloc::collections::VecDeque::new();
+
+    // We need to track which symbols end up at which depth.
+    // Use a parallel array: for each leaf, its symbol index; for internal nodes,
+    // the indices of the two children merged.
+    // Simpler approach: use the "package-merge" insight — just compute depths
+    // by tracking how many leaves are at each depth.
+
+    // Actually, the simplest correct approach for our "total cost only" use case:
+    // Build a Huffman tree tracking depths, then read off code lengths.
+
+    // Node storage: leaves are indices 0..num_symbols, internal nodes follow.
+    // Each node stores: (freq, depth, left_child, right_child, symbol_or_none)
+    struct Node {
+        depth: u8,
+        left: usize,
+        right: usize,
+        symbol: u16, // u16::MAX means internal node
+    }
+
+    let mut nodes: alloc::vec::Vec<Node> = alloc::vec::Vec::with_capacity(2 * num_symbols);
+
+    // Create leaf nodes (sorted by frequency)
+    for &(freq, sym) in &symbols {
+        leaf_queue.push_back((freq, nodes.len()));
+        nodes.push(Node {
+            depth: 0,
+            left: usize::MAX,
+            right: usize::MAX,
+            symbol: sym,
+        });
+    }
+
+    // Pick the minimum from the front of either queue
+    let pick_min =
+        |leaves: &mut alloc::collections::VecDeque<(u32, usize)>,
+         internals: &mut alloc::collections::VecDeque<(u32, usize)>|
+         -> (u32, usize) {
+            match (leaves.front(), internals.front()) {
+                (Some(&l), Some(&i)) => {
+                    if l.0 <= i.0 {
+                        leaves.pop_front().unwrap()
+                    } else {
+                        internals.pop_front().unwrap()
+                    }
+                }
+                (Some(_), None) => leaves.pop_front().unwrap(),
+                (None, Some(_)) => internals.pop_front().unwrap(),
+                (None, None) => unreachable!(),
+            }
+        };
+
+    // Merge until one node remains
+    while leaf_queue.len() + internal_queue.len() > 1 {
+        let (f1, idx1) = pick_min(&mut leaf_queue, &mut internal_queue);
+        let (f2, idx2) = pick_min(&mut leaf_queue, &mut internal_queue);
+        let combined_freq = f1 + f2;
+        let new_idx = nodes.len();
+        nodes.push(Node {
+            depth: 0,
+            left: idx1,
+            right: idx2,
+            symbol: u16::MAX,
+        });
+        internal_queue.push_back((combined_freq, new_idx));
+    }
+
+    // Compute depths via DFS from root
+    let root = if let Some(&(_, idx)) = leaf_queue.front() {
+        idx
+    } else {
+        internal_queue.front().unwrap().1
+    };
+
+    // Iterative DFS to assign depths
+    let mut stack: alloc::vec::Vec<(usize, u8)> = alloc::vec::Vec::new();
+    stack.push((root, 0));
+    while let Some((idx, depth)) = stack.pop() {
+        nodes[idx].depth = depth;
+        if nodes[idx].symbol != u16::MAX {
+            // Leaf — record code length (capped at max_bits)
+            lengths[nodes[idx].symbol as usize] = depth.min(max_bits);
+        } else {
+            stack.push((nodes[idx].left, depth + 1));
+            stack.push((nodes[idx].right, depth + 1));
+        }
+    }
+
+    lengths
+}
+
+/// Estimate compressed size in bits using Huffman code lengths.
+///
+/// Computes actual Huffman code lengths (capped at 15 bits for deflate) from
+/// symbol frequencies, then sums freq * code_length for the total bit cost.
+fn estimate_compressed_bits(freqs: &DeflateFreqs) -> u64 {
+    let litlen_lengths = compute_huffman_lengths(&freqs.litlen, 15);
+    let offset_lengths = compute_huffman_lengths(&freqs.offset, 15);
+
+    let mut bits = 0u64;
+
+    // Sum freq * code_length for litlen symbols
+    for (i, &f) in freqs.litlen.iter().enumerate() {
+        if f > 0 {
+            bits += f as u64 * litlen_lengths[i] as u64;
+        }
+    }
+
+    // Sum freq * code_length for offset symbols
+    for (i, &f) in freqs.offset.iter().enumerate() {
+        if f > 0 {
+            bits += f as u64 * offset_lengths[i] as u64;
+        }
+    }
 
     // Add extra bits for length and offset symbols
     let mut extra_bits = 0u64;
@@ -441,30 +564,7 @@ fn estimate_compressed_bits(freqs: &DeflateFreqs) -> u64 {
     }
 
     // Block overhead estimate (header + EOB)
-    base_bits + extra_bits + 80
-}
-
-/// Approximate log2(total/freq) in fixed-point (×256).
-///
-/// Uses integer leading-zeros for the integer part and a linear interpolation
-/// for the fractional part. Accurate to ~±0.5 bits, which is fine for ranking.
-#[inline]
-fn approx_log2_ratio_fp8(total: u32, freq: u32) -> u64 {
-    debug_assert!(freq > 0 && total >= freq);
-    if freq == total {
-        return 0;
-    }
-    // ratio = total / freq (integer division)
-    let ratio = total / freq;
-    if ratio <= 1 {
-        return 0;
-    }
-    // log2(ratio) ≈ 31 - leading_zeros(ratio), scaled by 256
-    let int_part = 31 - ratio.leading_zeros();
-    // Fractional correction: how far ratio is between 2^int_part and 2^(int_part+1)
-    let low = 1u32 << int_part;
-    let frac = ((ratio - low) as u64 * 256) / low as u64;
-    (int_part as u64 * 256) + frac
+    bits + extra_bits + 80
 }
 
 // ── Predictor ──────────────────────────────────────────────────────────────
