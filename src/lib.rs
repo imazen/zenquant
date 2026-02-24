@@ -319,6 +319,13 @@ impl QuantizeConfig {
         self
     }
 
+    /// Use adaptive Floyd-Steinberg dithering (the default for most formats).
+    #[doc(hidden)]
+    pub fn _adaptive_dither(mut self) -> Self {
+        self.dither_mode = dither::DitherMode::Adaptive;
+        self
+    }
+
     /// Set run priority to Quality (no run bias). Not part of the public API.
     #[doc(hidden)]
     pub fn _run_priority_quality(mut self) -> Self {
@@ -358,6 +365,15 @@ impl QuantizeConfig {
     #[doc(hidden)]
     pub fn _sierra_lite_dither(mut self) -> Self {
         self.dither_mode = dither::DitherMode::SierraLite;
+        self
+    }
+
+    /// Use linear dithering (unidirectional Floyd-Steinberg, no serpentine,
+    /// no edge-aware dither map). Creates row-coherent patterns ideal for
+    /// PNG compression. Best at low strength (0.1–0.3).
+    #[doc(hidden)]
+    pub fn _linear_dither(mut self) -> Self {
+        self.dither_mode = dither::DitherMode::Linear;
         self
     }
 

@@ -21,6 +21,11 @@ pub enum DitherMode {
     /// Position-deterministic blue noise ordered dithering — zero temporal
     /// flicker, slightly lower single-frame quality than error diffusion.
     BlueNoise,
+    /// Unidirectional Floyd-Steinberg — always scans left-to-right, no
+    /// edge-aware dither map, no error damping, no undithered fallback.
+    /// Creates highly row-coherent error patterns that compress well with
+    /// PNG's Up filter and deflate. Best at low strength (0.1–0.3).
+    Linear,
 }
 
 /// Apply serpentine error diffusion kernel for 3-channel (L,a,b) error.
@@ -506,6 +511,7 @@ pub fn dither_image(
     }
 
     let run_bias = run_priority.bias();
+    let linear = mode == DitherMode::Linear;
 
     // Working buffer in OKLab (we add error diffusion to this)
     let mut lab_buf: Vec<[f32; 3]> = pixels
@@ -519,24 +525,30 @@ pub fn dither_image(
     let mut indices = vec![0u8; pixels.len()];
 
     // Feature gates by dither strength:
-    // - Serpentine + dither map: always on (strictly better algorithms)
+    // - Serpentine + dither map: always on for Adaptive/SierraLite, off for Linear
     // - Undithered fallback: > 0.4 (prevents hue-shift speckles at high strength)
     // - Error damping: > 0.3 (prevents runaway accumulation)
-    let use_fallback = dither_strength > 0.4;
-    let use_damping = dither_strength > 0.3;
+    // Linear mode disables all of these for maximum row coherence.
+    let use_fallback = !linear && dither_strength > 0.4;
+    let use_damping = !linear && dither_strength > 0.3;
 
     // Edge-aware dither map: reduces error generation near edges.
-    let dither_map = compute_dither_map(&lab_buf, width, height);
+    // Linear mode skips this (uniform 1.0) for predictable row-coherent patterns.
+    let dither_map = if linear {
+        vec![1.0f32; pixels.len()]
+    } else {
+        compute_dither_map(&lab_buf, width, height)
+    };
 
     // Error magnitude threshold — errors beyond this get damped.
     let max_err_sq = 0.002 * dither_strength;
 
-    let adaptive = matches!(mode, DitherMode::Adaptive | DitherMode::SierraLite);
+    let adaptive = matches!(mode, DitherMode::Adaptive | DitherMode::SierraLite | DitherMode::Linear);
     let use_sierra = mode == DitherMode::SierraLite;
 
     for y in 0..height {
-        // Serpentine: even rows L→R, odd rows R→L
-        let forward = y % 2 == 0;
+        // Serpentine: even rows L→R, odd rows R→L. Linear: always L→R.
+        let forward = linear || y % 2 == 0;
         let mut prev_index: Option<u8> = None;
 
         let x_iter: Box<dyn Iterator<Item = usize>> = if forward {
@@ -694,10 +706,11 @@ pub fn dither_image_rgba(
     }
 
     let run_bias = run_priority.bias();
+    let linear = mode == DitherMode::Linear;
     let max_err_sq = 0.002 * dither_strength;
-    let adaptive = matches!(mode, DitherMode::Adaptive | DitherMode::SierraLite);
-    let use_fallback = dither_strength > 0.4;
-    let use_damping = dither_strength > 0.3;
+    let adaptive = matches!(mode, DitherMode::Adaptive | DitherMode::SierraLite | DitherMode::Linear);
+    let use_fallback = !linear && dither_strength > 0.4;
+    let use_damping = !linear && dither_strength > 0.3;
     let use_sierra = mode == DitherMode::SierraLite;
 
     let mut lab_buf: Vec<[f32; 3]> = pixels
@@ -709,10 +722,14 @@ pub fn dither_image_rgba(
         .collect();
 
     let mut indices = vec![0u8; pixels.len()];
-    let dither_map = compute_dither_map(&lab_buf, width, height);
+    let dither_map = if linear {
+        vec![1.0f32; pixels.len()]
+    } else {
+        compute_dither_map(&lab_buf, width, height)
+    };
 
     for y in 0..height {
-        let forward = y % 2 == 0;
+        let forward = linear || y % 2 == 0;
         let mut prev_index: Option<u8> = None;
 
         let x_iter: Box<dyn Iterator<Item = usize>> = if forward {
@@ -879,10 +896,11 @@ pub fn dither_image_rgba_alpha(
     }
 
     let run_bias = run_priority.bias();
+    let linear = mode == DitherMode::Linear;
     let max_err_sq = 0.002 * dither_strength;
-    let adaptive = matches!(mode, DitherMode::Adaptive | DitherMode::SierraLite);
-    let use_fallback = dither_strength > 0.4;
-    let use_damping = dither_strength > 0.3;
+    let adaptive = matches!(mode, DitherMode::Adaptive | DitherMode::SierraLite | DitherMode::Linear);
+    let use_fallback = !linear && dither_strength > 0.4;
+    let use_damping = !linear && dither_strength > 0.3;
     let use_sierra = mode == DitherMode::SierraLite;
 
     // Working buffer: [L, a, b, alpha]
@@ -896,10 +914,14 @@ pub fn dither_image_rgba_alpha(
         .collect();
 
     let mut indices = vec![0u8; pixels.len()];
-    let dither_map = compute_dither_map_4(&lab_buf, width, height);
+    let dither_map = if linear {
+        vec![1.0f32; pixels.len()]
+    } else {
+        compute_dither_map_4(&lab_buf, width, height)
+    };
 
     for y in 0..height {
-        let forward = y % 2 == 0;
+        let forward = linear || y % 2 == 0;
         let mut prev_index: Option<u8> = None;
 
         let x_iter: Box<dyn Iterator<Item = usize>> = if forward {
