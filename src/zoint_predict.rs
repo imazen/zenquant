@@ -466,23 +466,22 @@ fn compute_huffman_lengths(freqs: &[u32], max_bits: u8) -> alloc::vec::Vec<u8> {
     }
 
     // Pick the minimum from the front of either queue
-    let pick_min =
-        |leaves: &mut alloc::collections::VecDeque<(u32, usize)>,
-         internals: &mut alloc::collections::VecDeque<(u32, usize)>|
-         -> (u32, usize) {
-            match (leaves.front(), internals.front()) {
-                (Some(&l), Some(&i)) => {
-                    if l.0 <= i.0 {
-                        leaves.pop_front().unwrap()
-                    } else {
-                        internals.pop_front().unwrap()
-                    }
+    let pick_min = |leaves: &mut alloc::collections::VecDeque<(u32, usize)>,
+                    internals: &mut alloc::collections::VecDeque<(u32, usize)>|
+     -> (u32, usize) {
+        match (leaves.front(), internals.front()) {
+            (Some(&l), Some(&i)) => {
+                if l.0 <= i.0 {
+                    leaves.pop_front().unwrap()
+                } else {
+                    internals.pop_front().unwrap()
                 }
-                (Some(_), None) => leaves.pop_front().unwrap(),
-                (None, Some(_)) => internals.pop_front().unwrap(),
-                (None, None) => unreachable!(),
             }
-        };
+            (Some(_), None) => leaves.pop_front().unwrap(),
+            (None, Some(_)) => internals.pop_front().unwrap(),
+            (None, None) => unreachable!(),
+        }
+    };
 
     // Merge until one node remains
     while leaf_queue.len() + internal_queue.len() > 1 {

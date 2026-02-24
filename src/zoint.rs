@@ -264,8 +264,16 @@ fn dp_row_optimize(
             for c in 0..n_cands {
                 let cand_idx = candidates.indices[pixel_idx][c];
                 let packed_byte = pack_candidate(bit_depth, &packed_row, x, cand_idx);
-                let byte_pos = if bit_depth == 8 { x } else { x / (8 / bit_depth as usize) };
-                let above = if !above_packed.is_empty() { above_packed[byte_pos] } else { 0 };
+                let byte_pos = if bit_depth == 8 {
+                    x
+                } else {
+                    x / (8 / bit_depth as usize)
+                };
+                let above = if !above_packed.is_empty() {
+                    above_packed[byte_pos]
+                } else {
+                    0
+                };
                 let filtered = compute_filtered_byte(filter, packed_byte, 0, above, 0);
                 let cost = sym_dist(filtered);
                 if cost < best_cost {
@@ -284,9 +292,25 @@ fn dp_row_optimize(
     // ── DP for filters with left-dependency (Sub=1, Average=3, Paeth=4) ──
 
     if bit_depth == 8 {
-        dp_row_optimize_8bit(width, filter, candidates, row_start, above_packed, &mut result_indices);
+        dp_row_optimize_8bit(
+            width,
+            filter,
+            candidates,
+            row_start,
+            above_packed,
+            &mut result_indices,
+        );
     } else {
-        dp_row_optimize_subbyte(width, filter, candidates, row_start, above_packed, bit_depth, row_bytes, &mut result_indices);
+        dp_row_optimize_subbyte(
+            width,
+            filter,
+            candidates,
+            row_start,
+            above_packed,
+            bit_depth,
+            row_bytes,
+            &mut result_indices,
+        );
     }
 
     result_indices
@@ -342,7 +366,11 @@ fn dp_row_optimize_8bit(
     let mut backptrs: Vec<[u8; MAX_CANDIDATES]> = vec![[0; MAX_CANDIDATES]; width];
 
     // Pixel 0: no left neighbor, so left=0, above_left=0
-    let above_0 = if !above_packed.is_empty() { above_packed[0] } else { 0 };
+    let above_0 = if !above_packed.is_empty() {
+        above_packed[0]
+    } else {
+        0
+    };
     let n0 = candidates.counts[row_start] as usize;
     for c in 0..n0 {
         let raw = candidates.indices[row_start][c];
@@ -355,8 +383,16 @@ fn dp_row_optimize_8bit(
         let pixel_idx = row_start + x;
         let n_cands = candidates.counts[pixel_idx] as usize;
         let n_prev = candidates.counts[pixel_idx - 1] as usize;
-        let above = if !above_packed.is_empty() { above_packed[x] } else { 0 };
-        let above_left = if x > 0 && !above_packed.is_empty() { above_packed[x - 1] } else { 0 };
+        let above = if !above_packed.is_empty() {
+            above_packed[x]
+        } else {
+            0
+        };
+        let above_left = if x > 0 && !above_packed.is_empty() {
+            above_packed[x - 1]
+        } else {
+            0
+        };
 
         for c in 0..n_cands {
             let raw = candidates.indices[pixel_idx][c];
@@ -460,9 +496,21 @@ fn dp_row_optimize_subbyte(
     // First boundary pixel
     let bx0 = boundaries[0];
     let byte_pos0 = bx0 / ppb;
-    let above_0 = if !above_packed.is_empty() { above_packed[byte_pos0] } else { 0 };
-    let above_left_0 = if byte_pos0 > 0 && !above_packed.is_empty() { above_packed[byte_pos0 - 1] } else { 0 };
-    let left_0 = if byte_pos0 > 0 { packed_row[byte_pos0 - 1] } else { 0 };
+    let above_0 = if !above_packed.is_empty() {
+        above_packed[byte_pos0]
+    } else {
+        0
+    };
+    let above_left_0 = if byte_pos0 > 0 && !above_packed.is_empty() {
+        above_packed[byte_pos0 - 1]
+    } else {
+        0
+    };
+    let left_0 = if byte_pos0 > 0 {
+        packed_row[byte_pos0 - 1]
+    } else {
+        0
+    };
     let n0 = candidates.counts[row_start + bx0] as usize;
 
     for c in 0..n0 {
@@ -478,8 +526,16 @@ fn dp_row_optimize_subbyte(
         let byte_pos = bx / ppb;
         let n_cands = candidates.counts[row_start + bx] as usize;
         let n_prev_cands = candidates.counts[row_start + boundaries[bi - 1]] as usize;
-        let above = if !above_packed.is_empty() { above_packed[byte_pos] } else { 0 };
-        let above_left = if byte_pos > 0 && !above_packed.is_empty() { above_packed[byte_pos - 1] } else { 0 };
+        let above = if !above_packed.is_empty() {
+            above_packed[byte_pos]
+        } else {
+            0
+        };
+        let above_left = if byte_pos > 0 && !above_packed.is_empty() {
+            above_packed[byte_pos - 1]
+        } else {
+            0
+        };
 
         for c in 0..n_cands {
             let cand = candidates.indices[row_start + bx][c];
