@@ -651,8 +651,13 @@ fn optimize_inner(
 
                 // Optimized indices (re-optimize for this context)
                 let opt = greedy_row_optimize(
-                    width, f, &candidates, row_start,
-                    above_init, bit_depth, row_bytes,
+                    width,
+                    f,
+                    &candidates,
+                    row_start,
+                    above_init,
+                    bit_depth,
+                    row_bytes,
                 );
                 let mut po = vec![0u8; row_bytes];
                 pack_row(&opt, bit_depth, &mut po);
@@ -683,8 +688,13 @@ fn optimize_inner(
                 }
 
                 let opt = greedy_row_optimize(
-                    width, f, &candidates, row_start,
-                    above_opt, bit_depth, row_bytes,
+                    width,
+                    f,
+                    &candidates,
+                    row_start,
+                    above_opt,
+                    bit_depth,
+                    row_bytes,
                 );
                 let mut po = vec![0u8; row_bytes];
                 pack_row(&opt, bit_depth, &mut po);
@@ -731,7 +741,8 @@ fn optimize_inner(
                             .copy_from_slice(cur_indices);
                     }
                     predictor.restore_owned(snap_init_base);
-                    let n = apply_filter_bpp1_into(cur_f, cur_packed, above_init, &mut filtered_buf);
+                    let n =
+                        apply_filter_bpp1_into(cur_f, cur_packed, above_init, &mut filtered_buf);
                     predictor.feed_row(&filtered_buf[..n]);
                     committed_packed.copy_from_slice(cur_packed);
                     committed_size = size;
@@ -787,8 +798,7 @@ fn optimize_inner(
     if let Some(pend) = pending {
         let prev_start = pend.pending_y * width;
         if pend.size_opt < pend.size_init {
-            optimized_indices[prev_start..prev_start + width]
-                .copy_from_slice(&pend.opt_indices);
+            optimized_indices[prev_start..prev_start + width].copy_from_slice(&pend.opt_indices);
         }
     }
 

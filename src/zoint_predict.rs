@@ -309,8 +309,8 @@ const DEFLATE_FIRST_LEN_SYM: u32 = 257;
 const DEFLATE_END_OF_BLOCK: u32 = 256;
 
 const DEFLATE_LENGTH_BASE: [u16; 29] = [
-    3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115,
-    131, 163, 195, 227, 258,
+    3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131,
+    163, 195, 227, 258,
 ];
 
 const DEFLATE_LENGTH_EXTRA_BITS: [u8; 29] = [
@@ -323,8 +323,8 @@ const DEFLATE_OFFSET_BASE: [u32; 32] = [
 ];
 
 const DEFLATE_OFFSET_EXTRA_BITS: [u8; 32] = [
-    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12,
-    13, 13, 0, 0,
+    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13,
+    13, 0, 0,
 ];
 
 /// Length slot for each match length (3..=258).
@@ -426,7 +426,10 @@ fn estimate_compressed_bits(freqs: &DeflateFreqs) -> u64 {
 
     // Add extra bits for length and offset symbols
     let mut extra_bits = 0u64;
-    for (slot, &freq) in freqs.litlen[DEFLATE_FIRST_LEN_SYM as usize..].iter().enumerate() {
+    for (slot, &freq) in freqs.litlen[DEFLATE_FIRST_LEN_SYM as usize..]
+        .iter()
+        .enumerate()
+    {
         if freq > 0 && slot < 29 {
             extra_bits += freq as u64 * DEFLATE_LENGTH_EXTRA_BITS[slot] as u64;
         }

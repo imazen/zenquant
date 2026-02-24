@@ -122,6 +122,12 @@ pub enum OutputFormat {
     ///
     /// Requires the `zoint` feature.
     PngZoint,
+    /// PNG optimized for minimum file size. Uses position-deterministic
+    /// blue noise dithering at very low strength, aggressive run extension,
+    /// and joint deflate+quantization optimization.
+    ///
+    /// Requires the `zoint` feature.
+    PngMinSize,
     /// WebP VP8L: Delta palette encoding + spatial prediction.
     /// Uses delta-minimize sort. Full RGBA palette.
     WebpLossless,
@@ -174,6 +180,13 @@ impl QuantizeTuning {
                 false,
                 AlphaMode::Full,
                 1.0,
+            ),
+            OutputFormat::PngMinSize => (
+                0.1, // minimal dither — just enough to break banding
+                palette::PaletteSortStrategy::Luminance,
+                false,
+                AlphaMode::Full,
+                2.5, // aggressive run extension for deflate
             ),
             OutputFormat::WebpLossless => (
                 0.4,
@@ -236,8 +249,14 @@ impl QuantizeConfig {
             max_colors: 256,
             quality: Quality::Best,
             output_format: format,
-            run_priority: remap::RunPriority::Balanced,
-            dither_mode: dither::DitherMode::Adaptive,
+            run_priority: match format {
+                OutputFormat::PngMinSize => remap::RunPriority::Compression,
+                _ => remap::RunPriority::Balanced,
+            },
+            dither_mode: match format {
+                OutputFormat::PngMinSize => dither::DitherMode::BlueNoise,
+                _ => dither::DitherMode::Adaptive,
+            },
             dither_strength: None,
             viterbi_lambda: None,
             compute_metric: false,
@@ -832,7 +851,10 @@ pub fn quantize(
 
     // 7. Zoint: joint deflate+quantization optimization
     #[cfg(feature = "zoint")]
-    let indices = if config.output_format == OutputFormat::PngZoint {
+    let indices = if matches!(
+        config.output_format,
+        OutputFormat::PngZoint | OutputFormat::PngMinSize
+    ) {
         zoint::optimize_rgb(
             pixels,
             width,
@@ -1164,7 +1186,10 @@ pub fn quantize_rgba(
 
     // Zoint: joint deflate+quantization optimization
     #[cfg(feature = "zoint")]
-    let indices = if config.output_format == OutputFormat::PngZoint {
+    let indices = if matches!(
+        config.output_format,
+        OutputFormat::PngZoint | OutputFormat::PngMinSize
+    ) {
         zoint::optimize_rgba(
             pixels,
             width,
