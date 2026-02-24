@@ -742,8 +742,12 @@ fn optimize_inner(
     let mut pending: Option<Pending> = None;
 
     for y in 0..height {
-        // Compact predictor buffer to bound memory (keeps last 32KB window)
-        predictor.compact();
+        // Compact predictor buffer to bound memory (keeps last 32KB window).
+        // Skip when pending snapshots exist — they reference data that compact
+        // would trim, causing restore() to produce inconsistent state.
+        if pending.is_none() {
+            predictor.compact();
+        }
 
         let row_start = y * width;
 
