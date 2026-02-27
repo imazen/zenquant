@@ -397,28 +397,28 @@ fn run_quantizer(
     match name {
         "zq-fast" => {
             let cfg = QuantizeConfig::new(OutputFormat::Png)
-                .quality(Quality::Fast)
-                .max_colors(256);
+                .with_quality(Quality::Fast)
+                .with_max_colors(256);
             let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
             Some((r.palette().to_vec(), r.indices().to_vec(), ""))
         }
         "zq-balanced" => {
             let cfg = QuantizeConfig::new(OutputFormat::Png)
-                .quality(Quality::Balanced)
-                .max_colors(256);
+                .with_quality(Quality::Balanced)
+                .with_max_colors(256);
             let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
             Some((r.palette().to_vec(), r.indices().to_vec(), ""))
         }
         "zq-best" => {
-            let cfg = QuantizeConfig::new(OutputFormat::Png).max_colors(256);
+            let cfg = QuantizeConfig::new(OutputFormat::Png).with_max_colors(256);
             let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
             Some((r.palette().to_vec(), r.indices().to_vec(), ""))
         }
         "zq-best-q-d70" => {
             let cfg = QuantizeConfig::new(OutputFormat::Png)
-                .max_colors(256)
-                ._dither_strength(0.7)
-                ._run_priority_quality();
+                .with_max_colors(256)
+                ._with_dither_strength(0.7)
+                ._with_run_priority_quality();
             let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
             Some((
                 r.palette().to_vec(),

@@ -17,7 +17,7 @@ fn load_png_rgb(path: &std::path::Path) -> Option<(Vec<rgb::RGB<u8>>, u32, u32)>
         return None;
     }
 
-    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let mut buf = vec![0u8; reader.output_buffer_size().unwrap()];
     let frame = reader.next_frame(&mut buf).ok()?;
     buf.truncate(frame.buffer_size());
 
@@ -50,7 +50,7 @@ fn load_png_rgba(path: &std::path::Path) -> Option<(Vec<rgb::RGBA<u8>>, u32, u32
     let mut decoder = png::Decoder::new(Cursor::new(&data));
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::ALPHA);
     let mut reader = decoder.read_info().ok()?;
-    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let mut buf = vec![0u8; reader.output_buffer_size().unwrap()];
     let frame = reader.next_frame(&mut buf).ok()?;
     buf.truncate(frame.buffer_size());
 
@@ -277,7 +277,7 @@ mod png_integration {
         let mut decoder = png::Decoder::new(Cursor::new(data));
         decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::ALPHA);
         let mut reader = decoder.read_info().unwrap();
-        let mut buf = vec![0u8; reader.output_buffer_size()];
+        let mut buf = vec![0u8; reader.output_buffer_size().unwrap()];
         let info = reader.next_frame(&mut buf).unwrap();
         buf.truncate(info.buffer_size());
 

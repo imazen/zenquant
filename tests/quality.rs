@@ -45,14 +45,14 @@ fn compression_mode_has_longer_runs() {
     let pixels = gradient_image(64, 64);
 
     let quality_config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(32)
-        ._no_dither()
-        ._run_priority_quality();
+        .with_max_colors(32)
+        ._with_no_dither()
+        ._with_run_priority_quality();
 
     let compression_config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(32)
-        ._no_dither()
-        ._run_priority_compression();
+        .with_max_colors(32)
+        ._with_no_dither()
+        ._with_run_priority_compression();
 
     let quality_result = zenquant::quantize(&pixels, 64, 64, &quality_config).unwrap();
     let compression_result = zenquant::quantize(&pixels, 64, 64, &compression_config).unwrap();
@@ -71,9 +71,9 @@ fn delta_sort_reduces_index_deltas() {
     let pixels = gradient_image(32, 32);
 
     let config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(16)
-        ._no_dither()
-        ._run_priority_quality();
+        .with_max_colors(16)
+        ._with_no_dither()
+        ._with_run_priority_quality();
 
     let result = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
     let delta = index_delta_score(result.indices());
@@ -94,14 +94,14 @@ fn more_colors_lower_mse() {
     let pixels = gradient_image(32, 32);
 
     let config_8 = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(8)
-        ._no_dither()
-        ._run_priority_quality();
+        .with_max_colors(8)
+        ._with_no_dither()
+        ._with_run_priority_quality();
 
     let config_32 = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(32)
-        ._no_dither()
-        ._run_priority_quality();
+        .with_max_colors(32)
+        ._with_no_dither()
+        ._with_run_priority_quality();
 
     let result_8 = zenquant::quantize(&pixels, 32, 32, &config_8).unwrap();
     let result_32 = zenquant::quantize(&pixels, 32, 32, &config_32).unwrap();
@@ -144,7 +144,7 @@ fn noisy_image_gets_low_weights() {
 fn gradient_produces_reasonable_quality() {
     let pixels = gradient_image(64, 64);
 
-    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(256);
+    let config = QuantizeConfig::new(OutputFormat::Png).with_max_colors(256);
 
     let result = zenquant::quantize(&pixels, 64, 64, &config).unwrap();
     let mse = compute_mse(&pixels, result.palette(), result.indices());
@@ -158,12 +158,12 @@ fn mpe_lower_with_more_colors() {
     let pixels = gradient_image(32, 32);
 
     let config_8 = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(8)
-        .compute_quality_metric(true);
+        .with_max_colors(8)
+        .with_compute_quality_metric(true);
 
     let config_64 = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(64)
-        .compute_quality_metric(true);
+        .with_max_colors(64)
+        .with_compute_quality_metric(true);
 
     let result_8 = zenquant::quantize(&pixels, 32, 32, &config_8).unwrap();
     let result_64 = zenquant::quantize(&pixels, 32, 32, &config_64).unwrap();
@@ -182,8 +182,8 @@ fn mpe_inline_matches_standalone() {
     let pixels = gradient_image(32, 32);
 
     let config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(16)
-        .compute_quality_metric(true);
+        .with_max_colors(16)
+        .with_compute_quality_metric(true);
 
     let result = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
     let inline_score = result.mpe_score().expect("metric should be computed");
@@ -203,7 +203,7 @@ fn mpe_with_masking_weights() {
 
     let weights = zenquant::_internals::compute_masking_weights(&pixels, 32, 32);
 
-    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(16);
+    let config = QuantizeConfig::new(OutputFormat::Png).with_max_colors(16);
 
     let result = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
 
@@ -228,7 +228,7 @@ fn mpe_with_masking_weights() {
 #[test]
 fn mpe_disabled_by_default() {
     let pixels = gradient_image(16, 16);
-    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(8);
+    let config = QuantizeConfig::new(OutputFormat::Png).with_max_colors(8);
     let result = zenquant::quantize(&pixels, 16, 16, &config).unwrap();
     assert!(
         result.mpe_score().is_none(),
@@ -242,8 +242,8 @@ fn mpe_disabled_by_default() {
 fn min_ssim2_too_high_returns_quality_not_met() {
     let pixels = gradient_image(32, 32);
     let config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(2)
-        .min_ssim2(99.9);
+        .with_max_colors(2)
+        .with_min_ssim2(99.9);
 
     let result = zenquant::quantize(&pixels, 32, 32, &config);
     match result {
@@ -266,8 +266,8 @@ fn min_ssim2_too_high_returns_quality_not_met() {
 fn target_ssim2_with_256_colors_succeeds() {
     let pixels = gradient_image(32, 32);
     let config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(256)
-        .target_ssim2(80.0);
+        .with_max_colors(256)
+        .with_target_ssim2(80.0);
 
     let result = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
 
@@ -290,8 +290,8 @@ fn target_ssim2_with_256_colors_succeeds() {
 fn min_ssim2_negative_always_passes() {
     let pixels = gradient_image(16, 16);
     let config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(2)
-        .min_ssim2(-100.0);
+        .with_max_colors(2)
+        .with_min_ssim2(-100.0);
 
     // SSIM2 estimates can go negative for terrible quantization, so use -100.0
     // to ensure the floor is never hit.
@@ -305,8 +305,8 @@ fn metric_computed_when_target_set() {
 
     // Without compute_quality_metric(true), but with target_ssim2
     let config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(64)
-        .target_ssim2(50.0);
+        .with_max_colors(64)
+        .with_target_ssim2(50.0);
 
     let result = zenquant::quantize(&pixels, 16, 16, &config).unwrap();
     assert!(
@@ -321,8 +321,8 @@ fn metric_computed_when_min_set() {
 
     // Without compute_quality_metric(true), but with min_ssim2
     let config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(64)
-        .min_ssim2(0.0);
+        .with_max_colors(64)
+        .with_min_ssim2(0.0);
 
     let result = zenquant::quantize(&pixels, 16, 16, &config).unwrap();
     assert!(
@@ -334,7 +334,7 @@ fn metric_computed_when_min_set() {
 #[test]
 fn convenience_accessors_none_when_no_metric() {
     let pixels = gradient_image(16, 16);
-    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(16);
+    let config = QuantizeConfig::new(OutputFormat::Png).with_max_colors(16);
     let result = zenquant::quantize(&pixels, 16, 16, &config).unwrap();
 
     assert!(result.ssimulacra2_estimate().is_none());
@@ -345,8 +345,8 @@ fn convenience_accessors_none_when_no_metric() {
 fn convenience_accessors_present_with_metric() {
     let pixels = gradient_image(32, 32);
     let config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(16)
-        .compute_quality_metric(true);
+        .with_max_colors(16)
+        .with_compute_quality_metric(true);
     let result = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
 
     let ssim2 = result.ssimulacra2_estimate().expect("should be computed");
@@ -364,8 +364,8 @@ fn target_ssim2_selects_lower_tier_for_low_target() {
     // the result should have a metric computed.
     let pixels = gradient_image(32, 32);
     let config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(256)
-        .target_ssim2(40.0);
+        .with_max_colors(256)
+        .with_target_ssim2(40.0);
 
     let result = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
     assert!(result.mpe_score().is_some());
@@ -383,8 +383,8 @@ fn min_ssim2_rgba_returns_quality_not_met() {
         .collect();
 
     let config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(2)
-        .min_ssim2(99.9);
+        .with_max_colors(2)
+        .with_min_ssim2(99.9);
 
     let result = zenquant::quantize_rgba(&pixels, 32, 32, &config);
     assert!(
@@ -400,13 +400,13 @@ fn remap_computes_mpe_when_requested() {
     let pixels = gradient_image(32, 32);
 
     // Build a palette first
-    let palette_config = QuantizeConfig::new(OutputFormat::Png).max_colors(16);
+    let palette_config = QuantizeConfig::new(OutputFormat::Png).with_max_colors(16);
     let shared = zenquant::quantize(&pixels, 32, 32, &palette_config).unwrap();
 
     // Remap with metric computation enabled
     let remap_config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(16)
-        .compute_quality_metric(true);
+        .with_max_colors(16)
+        .with_compute_quality_metric(true);
     let result = shared.remap(&pixels, 32, 32, &remap_config).unwrap();
 
     assert!(
@@ -420,7 +420,7 @@ fn remap_computes_mpe_when_requested() {
 #[test]
 fn remap_no_metric_by_default() {
     let pixels = gradient_image(32, 32);
-    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(16);
+    let config = QuantizeConfig::new(OutputFormat::Png).with_max_colors(16);
     let shared = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
     let result = shared.remap(&pixels, 32, 32, &config).unwrap();
 
@@ -435,13 +435,13 @@ fn remap_enforces_min_ssim2() {
     let pixels = gradient_image(32, 32);
 
     // Build palette with only 2 colors — quality will be terrible
-    let palette_config = QuantizeConfig::new(OutputFormat::Png).max_colors(2);
+    let palette_config = QuantizeConfig::new(OutputFormat::Png).with_max_colors(2);
     let shared = zenquant::quantize(&pixels, 32, 32, &palette_config).unwrap();
 
     // Remap with a high quality floor
     let remap_config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(2)
-        .min_ssim2(99.9);
+        .with_max_colors(2)
+        .with_min_ssim2(99.9);
     let result = shared.remap(&pixels, 32, 32, &remap_config);
     assert!(
         matches!(result, Err(QuantizeError::QualityNotMet { .. })),
@@ -453,13 +453,13 @@ fn remap_enforces_min_ssim2() {
 fn remap_target_ssim2_computes_metric() {
     let pixels = gradient_image(32, 32);
 
-    let palette_config = QuantizeConfig::new(OutputFormat::Png).max_colors(256);
+    let palette_config = QuantizeConfig::new(OutputFormat::Png).with_max_colors(256);
     let shared = zenquant::quantize(&pixels, 32, 32, &palette_config).unwrap();
 
     // Remap with target_ssim2 — should implicitly compute metric
     let remap_config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(256)
-        .target_ssim2(80.0);
+        .with_max_colors(256)
+        .with_target_ssim2(80.0);
     let result = shared.remap(&pixels, 32, 32, &remap_config).unwrap();
 
     assert!(
@@ -479,12 +479,12 @@ fn remap_rgba_computes_mpe_when_requested() {
         })
         .collect();
 
-    let palette_config = QuantizeConfig::new(OutputFormat::Png).max_colors(16);
+    let palette_config = QuantizeConfig::new(OutputFormat::Png).with_max_colors(16);
     let shared = zenquant::quantize_rgba(&pixels, 32, 32, &palette_config).unwrap();
 
     let remap_config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(16)
-        .compute_quality_metric(true);
+        .with_max_colors(16)
+        .with_compute_quality_metric(true);
     let result = shared.remap_rgba(&pixels, 32, 32, &remap_config).unwrap();
 
     assert!(
@@ -505,12 +505,12 @@ fn remap_rgba_enforces_min_ssim2() {
         })
         .collect();
 
-    let palette_config = QuantizeConfig::new(OutputFormat::Png).max_colors(2);
+    let palette_config = QuantizeConfig::new(OutputFormat::Png).with_max_colors(2);
     let shared = zenquant::quantize_rgba(&pixels, 32, 32, &palette_config).unwrap();
 
     let remap_config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(2)
-        .min_ssim2(99.9);
+        .with_max_colors(2)
+        .with_min_ssim2(99.9);
     let result = shared.remap_rgba(&pixels, 32, 32, &remap_config);
     assert!(
         matches!(result, Err(QuantizeError::QualityNotMet { .. })),
@@ -526,8 +526,8 @@ fn remap_rgba_enforces_min_ssim2() {
 fn blue_noise_produces_valid_indices() {
     let pixels = gradient_image(32, 32);
     let config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(16)
-        ._blue_noise_dither();
+        .with_max_colors(16)
+        ._with_blue_noise_dither();
     let result = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
     for &idx in result.indices() {
         assert!(
@@ -542,8 +542,8 @@ fn blue_noise_produces_valid_indices() {
 fn blue_noise_is_deterministic() {
     let pixels = gradient_image(32, 32);
     let config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(16)
-        ._blue_noise_dither();
+        .with_max_colors(16)
+        ._with_blue_noise_dither();
     let r1 = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
     let r2 = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
     assert_eq!(
@@ -557,11 +557,11 @@ fn blue_noise_is_deterministic() {
 fn blue_noise_differs_from_no_dither() {
     let pixels = gradient_image(32, 32);
     let bn_config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(8)
-        ._blue_noise_dither();
+        .with_max_colors(8)
+        ._with_blue_noise_dither();
     let nd_config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(8)
-        ._no_dither();
+        .with_max_colors(8)
+        ._with_no_dither();
     let bn = zenquant::quantize(&pixels, 32, 32, &bn_config).unwrap();
     let nd = zenquant::quantize(&pixels, 32, 32, &nd_config).unwrap();
     // Palettes should be the same (same quantization), but indices should differ
@@ -582,9 +582,9 @@ fn blue_noise_differs_from_no_dither() {
 fn blue_noise_computes_mpe() {
     let pixels = gradient_image(32, 32);
     let config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(16)
-        ._blue_noise_dither()
-        .compute_quality_metric(true);
+        .with_max_colors(16)
+        ._with_blue_noise_dither()
+        .with_compute_quality_metric(true);
     let result = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
     assert!(
         result.mpe_score().is_some(),
@@ -606,7 +606,7 @@ fn temporal_clamping_locks_static_pixels_rgb() {
     let height = 16;
     let pixels = gradient_image(width, height);
 
-    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(16);
+    let config = QuantizeConfig::new(OutputFormat::Png).with_max_colors(16);
     let shared = zenquant::quantize(&pixels, width, height, &config).unwrap();
 
     // First remap (no prev)
@@ -640,7 +640,7 @@ fn temporal_clamping_locks_static_pixels_rgba() {
         })
         .collect();
 
-    let config = QuantizeConfig::new(OutputFormat::Gif).max_colors(16);
+    let config = QuantizeConfig::new(OutputFormat::Gif).with_max_colors(16);
     let shared = zenquant::quantize_rgba(&pixels, width, height, &config).unwrap();
 
     let r1 = shared.remap_rgba(&pixels, width, height, &config).unwrap();
@@ -661,7 +661,7 @@ fn temporal_clamping_allows_changed_pixels_to_differ() {
     let height = 16;
     let pixels1 = gradient_image(width, height);
 
-    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(16);
+    let config = QuantizeConfig::new(OutputFormat::Png).with_max_colors(16);
     let shared = zenquant::quantize(&pixels1, width, height, &config).unwrap();
     let r1 = shared.remap(&pixels1, width, height, &config).unwrap();
 
@@ -699,8 +699,8 @@ fn temporal_clamping_works_with_sierra_lite() {
     let pixels = gradient_image(width, height);
 
     let config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(16)
-        ._sierra_lite_dither();
+        .with_max_colors(16)
+        ._with_sierra_lite_dither();
     let shared = zenquant::quantize(&pixels, width, height, &config).unwrap();
     let r1 = shared.remap(&pixels, width, height, &config).unwrap();
     let r2 = shared
@@ -717,14 +717,14 @@ fn temporal_clamping_works_with_sierra_lite() {
 #[test]
 fn remap_with_prev_enforces_min_ssim2() {
     let pixels = gradient_image(32, 32);
-    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(16);
+    let config = QuantizeConfig::new(OutputFormat::Png).with_max_colors(16);
     let shared = zenquant::quantize(&pixels, 32, 32, &config).unwrap();
     let r1 = shared.remap(&pixels, 32, 32, &config).unwrap();
 
     // Set unreachably high min_ssim2
     let strict_config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(2)
-        .min_ssim2(99.9);
+        .with_max_colors(2)
+        .with_min_ssim2(99.9);
     let result = shared.remap_with_prev(&pixels, 32, 32, &strict_config, r1.indices());
     assert!(
         matches!(result, Err(QuantizeError::QualityNotMet { .. })),
@@ -781,8 +781,8 @@ fn blue_noise_zero_flicker_static_region() {
     }
 
     let config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(32)
-        ._blue_noise_dither();
+        .with_max_colors(32)
+        ._with_blue_noise_dither();
 
     let frames = [
         zenquant::ImgRef::new(&frame1, width, height),
@@ -849,10 +849,10 @@ fn sierra_lite_less_cascade_than_floyd_steinberg() {
         }
     }
 
-    let config_fs = QuantizeConfig::new(OutputFormat::Png).max_colors(16);
+    let config_fs = QuantizeConfig::new(OutputFormat::Png).with_max_colors(16);
     let config_sl = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(16)
-        ._sierra_lite_dither();
+        .with_max_colors(16)
+        ._with_sierra_lite_dither();
 
     // Build shared palettes from both frames for each config
     let frames = [
@@ -916,14 +916,14 @@ fn blue_noise_and_sierra_lite_rgba_paths() {
         (
             "blue_noise",
             QuantizeConfig::new(OutputFormat::Gif)
-                .max_colors(16)
-                ._blue_noise_dither(),
+                .with_max_colors(16)
+                ._with_blue_noise_dither(),
         ),
         (
             "sierra_lite",
             QuantizeConfig::new(OutputFormat::Gif)
-                .max_colors(16)
-                ._sierra_lite_dither(),
+                .with_max_colors(16)
+                ._with_sierra_lite_dither(),
         ),
     ] {
         let result = zenquant::quantize_rgba(&pixels, width, height, &config).unwrap();
@@ -977,7 +977,7 @@ fn temporal_clamping_full_alpha_path() {
         })
         .collect();
 
-    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(32);
+    let config = QuantizeConfig::new(OutputFormat::Png).with_max_colors(32);
     let shared = zenquant::quantize_rgba(&pixels, width, height, &config).unwrap();
 
     // Remap frame 1
@@ -1022,8 +1022,8 @@ fn sequential_multi_frame_remap_chain() {
     let frame3 = make_frame(10); // more shift
 
     let config = QuantizeConfig::new(OutputFormat::Gif)
-        .max_colors(32)
-        ._sierra_lite_dither();
+        .with_max_colors(32)
+        ._with_sierra_lite_dither();
 
     // Build shared palette from all frames
     let frames = [
@@ -1101,7 +1101,7 @@ fn error_diffuses_through_locked_pixels() {
         }
     }
 
-    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(32);
+    let config = QuantizeConfig::new(OutputFormat::Png).with_max_colors(32);
 
     let frames = [
         zenquant::ImgRef::new(&frame1, width, height),
@@ -1174,8 +1174,8 @@ fn blue_noise_unaffected_by_temporal_clamping() {
     let pixels = gradient_image(width, height);
 
     let config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(16)
-        ._blue_noise_dither();
+        .with_max_colors(16)
+        ._with_blue_noise_dither();
 
     let shared = zenquant::quantize(&pixels, width, height, &config).unwrap();
 

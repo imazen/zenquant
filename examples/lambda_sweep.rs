@@ -82,8 +82,8 @@ fn main() {
             let height = *height;
 
             let config = QuantizeConfig::new(OutputFormat::Png)
-                .max_colors(256)
-                ._viterbi_lambda(lambda);
+                .with_max_colors(256)
+                ._with_viterbi_lambda(lambda);
 
             let result = zenquant::quantize(pixels, width, height, &config).unwrap();
 

@@ -84,8 +84,8 @@ fn main() {
             let height = *height;
 
             let config = QuantizeConfig::new(OutputFormat::Png)
-                .max_colors(256)
-                ._dither_strength(dither);
+                .with_max_colors(256)
+                ._with_dither_strength(dither);
 
             let result = zenquant::quantize(pixels, width, height, &config).unwrap();
 

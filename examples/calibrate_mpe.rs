@@ -96,7 +96,7 @@ fn main() {
         let orig_img = ImgVec::new(pixels.clone(), width, height);
 
         for &colors in color_counts {
-            let config = QuantizeConfig::new(OutputFormat::Png).max_colors(colors);
+            let config = QuantizeConfig::new(OutputFormat::Png).with_max_colors(colors);
 
             let result = match zenquant::quantize(&pixels, width, height, &config) {
                 Ok(r) => r,

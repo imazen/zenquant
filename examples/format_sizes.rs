@@ -45,10 +45,10 @@ fn main() {
 
         // zenquant balanced — quantize once per FORMAT for proper sort strategy
         let s60 = {
-            let png_cfg = QuantizeConfig::new(OutputFormat::Png).quality(Quality::Balanced);
-            let gif_cfg = QuantizeConfig::new(OutputFormat::Gif).quality(Quality::Balanced);
+            let png_cfg = QuantizeConfig::new(OutputFormat::Png).with_quality(Quality::Balanced);
+            let gif_cfg = QuantizeConfig::new(OutputFormat::Gif).with_quality(Quality::Balanced);
             let webp_cfg =
-                QuantizeConfig::new(OutputFormat::WebpLossless).quality(Quality::Balanced);
+                QuantizeConfig::new(OutputFormat::WebpLossless).with_quality(Quality::Balanced);
             let png_r = zenquant::quantize(&pixels, w, h, &png_cfg).unwrap();
             let gif_r = zenquant::quantize(&pixels, w, h, &gif_cfg).unwrap();
             let webp_r = zenquant::quantize(&pixels, w, h, &webp_cfg).unwrap();

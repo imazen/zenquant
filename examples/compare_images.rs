@@ -54,7 +54,7 @@ fn main() {
         eprintln!("Processing {stem} ({w}x{h})...");
 
         // zenquant balanced
-        let config_bal = QuantizeConfig::new(OutputFormat::Png).quality(Quality::Balanced);
+        let config_bal = QuantizeConfig::new(OutputFormat::Png).with_quality(Quality::Balanced);
         let zq60 = zenquant::quantize(&pixels, w, h, &config_bal).unwrap();
 
         // zenquant best quality

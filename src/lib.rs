@@ -85,7 +85,7 @@ pub mod _dev {
 use alloc::vec::Vec;
 
 /// Quality preset — controls k-means iterations, AQ masking, and Viterbi optimization.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Quality {
     /// Fast mode — no masking, histogram-only k-means. Roughly 25ms per 512x512 image.
@@ -101,7 +101,7 @@ pub enum Quality {
 ///
 /// Different image formats have fundamentally different compression algorithms,
 /// so the optimal palette ordering and dithering strategy varies per format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum OutputFormat {
     /// GIF: LZW compression, binary transparency only.
@@ -217,8 +217,8 @@ impl QuantizeTuning {
 /// use zenquant::{QuantizeConfig, OutputFormat, Quality};
 ///
 /// let config = QuantizeConfig::new(OutputFormat::Png)
-///     .quality(Quality::Best)
-///     .max_colors(128);
+///     .with_quality(Quality::Best)
+///     .with_max_colors(128);
 /// ```
 #[derive(Debug, Clone)]
 pub struct QuantizeConfig {
@@ -244,6 +244,7 @@ impl QuantizeConfig {
     /// Create a new config for the given output format.
     ///
     /// Defaults: 256 colors, [`Quality::Best`], adaptive dithering.
+    #[must_use]
     pub fn new(format: OutputFormat) -> Self {
         Self {
             max_colors: 256,
@@ -270,13 +271,15 @@ impl QuantizeConfig {
     /// Maximum palette colors (2–256). Default: 256.
     ///
     /// GIF, PNG, and WebP lossless all support up to 256 palette entries.
-    pub fn max_colors(mut self, n: u32) -> Self {
+    #[must_use]
+    pub fn with_max_colors(mut self, n: u32) -> Self {
         self.max_colors = n;
         self
     }
 
     /// Quality preset. Default: [`Quality::Best`].
-    pub fn quality(mut self, q: Quality) -> Self {
+    #[must_use]
+    pub fn with_quality(mut self, q: Quality) -> Self {
         self.quality = q;
         self
     }
@@ -286,7 +289,8 @@ impl QuantizeConfig {
     /// When enabled, the result includes per-block and global quality scores
     /// accessible via [`QuantizeResult::mpe_result()`] and [`QuantizeResult::mpe_score()`].
     /// Adds ~8 FLOPs/pixel overhead during dithering. Default: `false`.
-    pub fn compute_quality_metric(mut self, enable: bool) -> Self {
+    #[must_use]
+    pub fn with_compute_quality_metric(mut self, enable: bool) -> Self {
         self.compute_metric = enable;
         self
     }
@@ -296,7 +300,8 @@ impl QuantizeConfig {
     /// When set, auto-tunes compression knobs (quality preset, dither strength,
     /// run priority) to maximize compression while staying above this level.
     /// Color count is NOT adjusted. Implicitly enables metric computation.
-    pub fn target_ssim2(mut self, score: f32) -> Self {
+    #[must_use]
+    pub fn with_target_ssim2(mut self, score: f32) -> Self {
         self.target_ssim2 = Some(score);
         self
     }
@@ -305,7 +310,8 @@ impl QuantizeConfig {
     ///
     /// Returns [`QuantizeError::QualityNotMet`] if the result falls below this.
     /// Implicitly enables metric computation.
-    pub fn min_ssim2(mut self, score: f32) -> Self {
+    #[must_use]
+    pub fn with_min_ssim2(mut self, score: f32) -> Self {
         self.min_ssim2 = Some(score);
         self
     }
@@ -314,56 +320,64 @@ impl QuantizeConfig {
 
     /// Override dither mode. Not part of the public API.
     #[doc(hidden)]
-    pub fn _no_dither(mut self) -> Self {
+    #[must_use]
+    pub fn _with_no_dither(mut self) -> Self {
         self.dither_mode = dither::DitherMode::None;
         self
     }
 
     /// Use adaptive Floyd-Steinberg dithering (the default for most formats).
     #[doc(hidden)]
-    pub fn _adaptive_dither(mut self) -> Self {
+    #[must_use]
+    pub fn _with_adaptive_dither(mut self) -> Self {
         self.dither_mode = dither::DitherMode::Adaptive;
         self
     }
 
     /// Set run priority to Quality (no run bias). Not part of the public API.
     #[doc(hidden)]
-    pub fn _run_priority_quality(mut self) -> Self {
+    #[must_use]
+    pub fn _with_run_priority_quality(mut self) -> Self {
         self.run_priority = remap::RunPriority::Quality;
         self
     }
 
     /// Set run priority to Compression (aggressive runs). Not part of the public API.
     #[doc(hidden)]
-    pub fn _run_priority_compression(mut self) -> Self {
+    #[must_use]
+    pub fn _with_run_priority_compression(mut self) -> Self {
         self.run_priority = remap::RunPriority::Compression;
         self
     }
 
     /// Override dither strength (0.0–1.0). Not part of the public API.
     #[doc(hidden)]
-    pub fn _dither_strength(mut self, strength: f32) -> Self {
+    #[must_use]
+    pub fn _with_dither_strength(mut self, strength: f32) -> Self {
         self.dither_strength = Some(strength);
         self
     }
 
     /// Override Viterbi lambda. Not part of the public API.
     #[doc(hidden)]
-    pub fn _viterbi_lambda(mut self, lambda: f32) -> Self {
+    #[must_use]
+    pub fn _with_viterbi_lambda(mut self, lambda: f32) -> Self {
         self.viterbi_lambda = Some(lambda);
         self
     }
 
     /// Use blue noise dithering (position-deterministic, zero flicker).
     #[doc(hidden)]
-    pub fn _blue_noise_dither(mut self) -> Self {
+    #[must_use]
+    pub fn _with_blue_noise_dither(mut self) -> Self {
         self.dither_mode = dither::DitherMode::BlueNoise;
         self
     }
 
     /// Use Sierra Lite dithering (lighter error diffusion, less temporal cascade).
     #[doc(hidden)]
-    pub fn _sierra_lite_dither(mut self) -> Self {
+    #[must_use]
+    pub fn _with_sierra_lite_dither(mut self) -> Self {
         self.dither_mode = dither::DitherMode::SierraLite;
         self
     }
@@ -372,7 +386,8 @@ impl QuantizeConfig {
     /// no edge-aware dither map). Creates row-coherent patterns ideal for
     /// PNG compression. Best at low strength (0.1–0.3).
     #[doc(hidden)]
-    pub fn _linear_dither(mut self) -> Self {
+    #[must_use]
+    pub fn _with_linear_dither(mut self) -> Self {
         self.dither_mode = dither::DitherMode::Linear;
         self
     }
@@ -380,14 +395,16 @@ impl QuantizeConfig {
     /// Override joint deflate effort (clamped to 1–22). Not part of the public API.
     /// (Retained for API compatibility; the vendored predictor ignores this.)
     #[doc(hidden)]
-    pub fn _joint_deflate_effort(mut self, effort: u32) -> Self {
+    #[must_use]
+    pub fn _with_joint_deflate_effort(mut self, effort: u32) -> Self {
         self.joint_deflate_effort = effort.clamp(1, 22);
         self
     }
 
     /// Override joint base OKLab distance tolerance. Not part of the public API.
     #[doc(hidden)]
-    pub fn _joint_tolerance(mut self, tolerance: f32) -> Self {
+    #[must_use]
+    pub fn _with_joint_tolerance(mut self, tolerance: f32) -> Self {
         self.joint_tolerance = tolerance;
         self
     }
@@ -407,32 +424,38 @@ pub struct QuantizeResult {
 
 impl QuantizeResult {
     /// sRGB palette entries, sorted for the target output format.
+    #[must_use]
     pub fn palette(&self) -> &[[u8; 3]] {
         self.palette.entries()
     }
 
     /// Palette index for each pixel, in row-major order: `pixel = y * width + x`.
+    #[must_use]
     pub fn indices(&self) -> &[u8] {
         &self.indices
     }
 
     /// Get the transparent palette index, if any.
+    #[must_use]
     pub fn transparent_index(&self) -> Option<u8> {
         self.palette.transparent_index()
     }
 
     /// Number of colors in the palette.
+    #[must_use]
     pub fn palette_len(&self) -> usize {
         self.palette.len()
     }
 
     /// Get RGBA palette entries. Each entry has alpha: 255 for opaque,
+    #[must_use]
     /// 0 for the transparent index, or the quantized alpha value.
     pub fn palette_rgba(&self) -> &[[u8; 4]] {
         self.palette.entries_rgba()
     }
 
     /// Get the alpha table suitable for a PNG tRNS chunk.
+    #[must_use]
     ///
     /// Returns alpha values for each palette index, truncated at the last
     /// non-255 value. Returns `None` if all entries are fully opaque (no tRNS needed).
@@ -446,13 +469,15 @@ impl QuantizeResult {
     }
 
     /// Per-block and global MPE quality metric, if computed.
+    #[must_use]
     ///
-    /// Returns `Some` when [`QuantizeConfig::compute_quality_metric(true)`] was used.
+    /// Returns `Some` when [`QuantizeConfig::with_compute_quality_metric`] was used.
     pub fn mpe_result(&self) -> Option<&metric::MpeResult> {
         self.mpe_result.as_ref()
     }
 
     /// Global MPE quality score (lower is better), if computed.
+    #[must_use]
     ///
     /// Convenience accessor — equivalent to `self.mpe_result().map(|r| r.score)`.
     pub fn mpe_score(&self) -> Option<f32> {
@@ -460,11 +485,13 @@ impl QuantizeResult {
     }
 
     /// Estimated SSIMULACRA2 score (100 = identical), if metric was computed.
+    #[must_use]
     pub fn ssimulacra2_estimate(&self) -> Option<f32> {
         self.mpe_result.as_ref().map(|r| r.ssimulacra2_estimate)
     }
 
     /// Estimated butteraugli distance, if metric was computed.
+    #[must_use]
     pub fn butteraugli_estimate(&self) -> Option<f32> {
         self.mpe_result.as_ref().map(|r| r.butteraugli_estimate)
     }

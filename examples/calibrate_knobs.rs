@@ -63,19 +63,19 @@ const TIERS: [TierConfig; 5] = [
 
 fn build_config(tier: &TierConfig) -> QuantizeConfig {
     let mut config = QuantizeConfig::new(OutputFormat::Png)
-        .max_colors(256)
-        .quality(tier.quality)
-        .compute_quality_metric(true);
+        .with_max_colors(256)
+        .with_quality(tier.quality)
+        .with_compute_quality_metric(true);
 
     config = match tier.run_priority {
-        "quality" => config._run_priority_quality(),
-        "compression" => config._run_priority_compression(),
+        "quality" => config._with_run_priority_quality(),
+        "compression" => config._with_run_priority_compression(),
         _ => config, // balanced is default
     };
 
     if (tier.dither_mult - 1.0).abs() > 0.01 {
         // Apply dither multiplier against PNG default (0.5)
-        config = config._dither_strength(0.5 * tier.dither_mult);
+        config = config._with_dither_strength(0.5 * tier.dither_mult);
     }
 
     config

@@ -112,7 +112,7 @@ fn main() {
             &pixels,
             width,
             height,
-            &QuantizeConfig::new(OutputFormat::Png).max_colors(256),
+            &QuantizeConfig::new(OutputFormat::Png).with_max_colors(256),
         )
         .unwrap();
         let zq_ms = t0.elapsed().as_secs_f64() * 1000.0;

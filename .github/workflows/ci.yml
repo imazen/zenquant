@@ -259,3 +259,33 @@ jobs:
         with:
           files: zenquant/lcov.info
           fail_ci_if_error: false
+
+  # ==========================================================================
+  # MSRV check
+  # ==========================================================================
+  msrv:
+    name: MSRV (1.85)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: zenquant
+
+      - name: Clone sibling repos (path deps)
+        run: |
+          git clone --depth 1 https://github.com/imazen/zengif.git zengif
+          git clone --depth 1 https://github.com/imazen/zenwebp.git zenwebp
+
+      - name: Install Rust 1.85
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.85"
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: zenquant -> target
+
+      - name: Check MSRV
+        working-directory: zenquant
+        run: cargo check

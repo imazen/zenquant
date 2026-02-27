@@ -50,11 +50,11 @@ fn main() {
     let configs = [
         (
             "fast",
-            QuantizeConfig::new(OutputFormat::Png).quality(Quality::Fast),
+            QuantizeConfig::new(OutputFormat::Png).with_quality(Quality::Fast),
         ),
         (
             "balanced",
-            QuantizeConfig::new(OutputFormat::Png).quality(Quality::Balanced),
+            QuantizeConfig::new(OutputFormat::Png).with_quality(Quality::Balanced),
         ),
         ("best", QuantizeConfig::new(OutputFormat::Png)),
     ];

@@ -48,7 +48,7 @@ fn main() {
         paths.len()
     );
 
-    let config = QuantizeConfig::new(OutputFormat::Png).max_colors(256);
+    let config = QuantizeConfig::new(OutputFormat::Png).with_max_colors(256);
 
     println!(
         "{:<36} {:>8} {:>8}  {:>8} {:>8}  {:>8} {:>8}",

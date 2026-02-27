@@ -64,11 +64,11 @@ fn main() {
     let presets: Vec<(&str, QuantizeConfig)> = vec![
         (
             "zq fast",
-            QuantizeConfig::new(OutputFormat::Png).quality(Quality::Fast),
+            QuantizeConfig::new(OutputFormat::Png).with_quality(Quality::Fast),
         ),
         (
             "zq balanced",
-            QuantizeConfig::new(OutputFormat::Png).quality(Quality::Balanced),
+            QuantizeConfig::new(OutputFormat::Png).with_quality(Quality::Balanced),
         ),
         ("zq best", QuantizeConfig::new(OutputFormat::Png)),
     ];
