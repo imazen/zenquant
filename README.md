@@ -1,5 +1,9 @@
 # zenquant
 
+[![CI](https://github.com/imazen/zenquant/actions/workflows/ci.yml/badge.svg)](https://github.com/imazen/zenquant/actions/workflows/ci.yml)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+[![MSRV: 1.92](https://img.shields.io/badge/MSRV-1.92-blue.svg)](https://blog.rust-lang.org/)
+
 Color quantization with perceptual masking. Reduces truecolor images to 256-color indexed palettes in OKLab space, using butteraugli-inspired adaptive quantization (AQ) weights to concentrate palette entries where human vision is most sensitive.
 
 ## What it does
@@ -87,11 +91,11 @@ for frame_pixels in &frame_data {
 }
 ```
 
-For animation encoders (APNG, GIF), you can enforce per-frame quality with `min_ssim2` on the remap config. Frames that fail the quality floor return `QualityNotMet`, letting the encoder decide whether to fall back to truecolor for that frame:
+For animation encoders (APNG, GIF), you can enforce per-frame quality with `with_min_ssim2` on the remap config. Frames that fail the quality floor return `QualityNotMet`, letting the encoder decide whether to fall back to truecolor for that frame:
 
 ```rust
 let remap_config = QuantizeConfig::new(OutputFormat::Png)
-    .min_ssim2(75.0);
+    .with_min_ssim2(75.0);
 
 for frame_pixels in &frame_data {
     match shared.remap_rgba(frame_pixels, width, height, &remap_config) {
@@ -116,8 +120,8 @@ use zenquant::{QuantizeConfig, OutputFormat};
 
 // Auto-tune compression: stay above SSIM2 80, compress as hard as possible
 let config = QuantizeConfig::new(OutputFormat::Png)
-    .max_colors(256)
-    .target_ssim2(80.0);
+    .with_max_colors(256)
+    .with_target_ssim2(80.0);
 
 let result = zenquant::quantize(&pixels, width, height, &config).unwrap();
 
@@ -126,14 +130,14 @@ let ssim2 = result.ssimulacra2_estimate().unwrap();  // 0–100, higher = better
 let ba = result.butteraugli_estimate().unwrap();       // 0+, lower = better
 ```
 
-Set a hard quality floor with `min_ssim2`. Returns `QuantizeError::QualityNotMet` if the result falls below — useful for animation encoders that need to decide per-frame whether to fall back to truecolor:
+Set a hard quality floor with `with_min_ssim2`. Returns `QuantizeError::QualityNotMet` if the result falls below — useful for animation encoders that need to decide per-frame whether to fall back to truecolor:
 
 ```rust
 use zenquant::{QuantizeConfig, QuantizeError, OutputFormat};
 
 let config = QuantizeConfig::new(OutputFormat::Png)
-    .max_colors(256)
-    .min_ssim2(75.0);
+    .with_max_colors(256)
+    .with_min_ssim2(75.0);
 
 match zenquant::quantize(&pixels, width, height, &config) {
     Ok(result) => { /* quality met, use indexed */ }
@@ -144,7 +148,7 @@ match zenquant::quantize(&pixels, width, height, &config) {
 }
 ```
 
-Quality metrics and `min_ssim2` enforcement also work on the `remap()` path, so you get per-frame quality measurement when using shared palettes for animation.
+Quality metrics and `with_min_ssim2` enforcement also work on the `remap()` path, so you get per-frame quality measurement when using shared palettes for animation.
 
 ### Quality presets
 
@@ -152,13 +156,13 @@ Quality metrics and `min_ssim2` enforcement also work on the `remap()` path, so 
 use zenquant::Quality;
 
 // Fast — ~30ms for 512x512. No AQ masking or k-means refinement.
-let config = QuantizeConfig::new(OutputFormat::Png).quality(Quality::Fast);
+let config = QuantizeConfig::new(OutputFormat::Png).with_quality(Quality::Fast);
 
 // Balanced — ~60ms. AQ masking + 2 k-means iterations.
-let config = QuantizeConfig::new(OutputFormat::Png).quality(Quality::Balanced);
+let config = QuantizeConfig::new(OutputFormat::Png).with_quality(Quality::Balanced);
 
 // Best — ~120ms. AQ masking + 8 k-means iterations + Viterbi DP. (default)
-let config = QuantizeConfig::new(OutputFormat::Png).quality(Quality::Best);
+let config = QuantizeConfig::new(OutputFormat::Png).with_quality(Quality::Best);
 ```
 
 When `target_ssim2` is set, it overrides the quality preset, run priority, and dither strength with auto-tuned values based on calibrated compression tier data.
@@ -217,9 +221,13 @@ zenquant is used as the default quantizer in:
 
 `no_std` + `alloc` compatible when `std` is disabled.
 
-## Credits
+## MSRV
 
-- **Claude** (Anthropic) — AI-assisted development. Not all code manually reviewed.
+The minimum supported Rust version is **1.92**.
+
+## AI-Generated Code Notice
+
+Developed with Claude (Anthropic). Not all code manually reviewed. Review critical paths before production use.
 
 ## License
 
