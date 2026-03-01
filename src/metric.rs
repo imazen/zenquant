@@ -283,9 +283,9 @@ fn composite_over_bg(r: u8, g: u8, b: u8, a: u8, bg: u8) -> OKLab {
     let inv_alpha = 1.0 - alpha;
     let bg_f = bg as f32;
 
-    let cr = (r as f32 * alpha + bg_f * inv_alpha) as u8;
-    let cg = (g as f32 * alpha + bg_f * inv_alpha) as u8;
-    let cb = (b as f32 * alpha + bg_f * inv_alpha) as u8;
+    let cr = (r as f32 * alpha + bg_f * inv_alpha).round().clamp(0.0, 255.0) as u8;
+    let cg = (g as f32 * alpha + bg_f * inv_alpha).round().clamp(0.0, 255.0) as u8;
+    let cb = (b as f32 * alpha + bg_f * inv_alpha).round().clamp(0.0, 255.0) as u8;
 
     srgb_to_oklab(cr, cg, cb)
 }
