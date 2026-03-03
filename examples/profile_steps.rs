@@ -83,7 +83,7 @@ fn main() {
     let pal_ms = t.elapsed().as_secs_f64() * 1000.0;
     println!("4. Palette+cache:   {:>8.1}ms", pal_ms);
 
-    // Step 5: Dithering
+    // Step 5: Dithering (Adaptive)
     let t = Instant::now();
     let params = DitherParams {
         width,
@@ -97,7 +97,23 @@ fn main() {
     };
     let mut indices = dither_image(&pixels, &params, None);
     let dither_ms = t.elapsed().as_secs_f64() * 1000.0;
-    println!("5. Dithering:       {:>8.1}ms", dither_ms);
+    println!("5. Dither Adaptive: {:>8.1}ms", dither_ms);
+
+    // Step 5a: Dithering (Ordered — fast OKLab FS)
+    let t = Instant::now();
+    let params_ordered = DitherParams {
+        width,
+        height,
+        weights: &weights,
+        palette: &pal,
+        mode: DM::Ordered,
+        run_priority: remap::RunPriority::Balanced,
+        dither_strength: 0.5,
+        prev_indices: None,
+    };
+    let _indices_ordered = dither_image(&pixels, &params_ordered, None);
+    let ordered_ms = t.elapsed().as_secs_f64() * 1000.0;
+    println!("5a. Dither Ordered: {:>8.1}ms", ordered_ms);
 
     // Step 5b: Viterbi
     let t = Instant::now();
@@ -107,7 +123,9 @@ fn main() {
 
     println!();
     let total = masking_ms + hist_ms + mc_ms + kmeans_ms + pal_ms + dither_ms + viterbi_ms;
-    println!("Total:              {:>8.1}ms", total);
+    println!("Total (Adaptive):   {:>8.1}ms", total);
+    let total_ordered = masking_ms + hist_ms + mc_ms + kmeans_ms + pal_ms + ordered_ms + viterbi_ms;
+    println!("Total (Ordered):    {:>8.1}ms", total_ordered);
 
     // Also test without k-means
     println!();

@@ -63,12 +63,20 @@ pub(crate) mod simd;
 pub(crate) mod simd {
     //! Scalar fallback when `simd` feature is disabled.
     extern crate alloc;
-    use crate::oklab::{OKLab, srgb_to_oklab};
+    use crate::oklab::{OKLab, srgb_to_oklab, srgb_to_oklab_fast};
     use alloc::vec::Vec;
 
     pub(crate) fn batch_srgb_to_oklab(pixels: &[rgb::RGB<u8>], out: &mut [[f32; 3]]) {
         for (px, o) in pixels.iter().zip(out.iter_mut()) {
             let lab = srgb_to_oklab(px.r, px.g, px.b);
+            *o = [lab.l, lab.a, lab.b];
+        }
+    }
+
+    /// Fast batch conversion using fast_cbrt (~3x faster, ~22 bits precision).
+    pub(crate) fn batch_srgb_to_oklab_fast(pixels: &[rgb::RGB<u8>], out: &mut [[f32; 3]]) {
+        for (px, o) in pixels.iter().zip(out.iter_mut()) {
+            let lab = srgb_to_oklab_fast(px.r, px.g, px.b);
             *o = [lab.l, lab.a, lab.b];
         }
     }
@@ -477,6 +485,16 @@ impl QuantizeConfig {
         self
     }
 
+    /// Use ordered (fast) dithering — streamlined OKLab Floyd-Steinberg with
+    /// fast_cbrt, no edge map, no damping, no undithered fallback.
+    /// Automatically used for [`Quality::Fast`] when dither mode is Adaptive.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn _with_ordered_dither(mut self) -> Self {
+        self.dither_mode = dither::DitherMode::Ordered;
+        self
+    }
+
     /// Override joint deflate effort (clamped to 1–22). Not part of the public API.
     /// (Retained for API compatibility; the vendored predictor ignores this.)
     #[doc(hidden)]
@@ -815,10 +833,19 @@ pub fn quantize(
         };
 
     // Build tuning from effective settings
+    // Fast quality: promote Adaptive → Ordered for ~3-5x faster dithering
+    let effective_dither_mode = if effective_quality == Quality::Fast
+        && config.dither_mode == dither::DitherMode::Adaptive
+    {
+        dither::DitherMode::Ordered
+    } else {
+        config.dither_mode
+    };
     let effective_config = QuantizeConfig {
         quality: effective_quality,
         run_priority: effective_run_priority,
         dither_strength: effective_dither_strength,
+        dither_mode: effective_dither_mode,
         compute_metric: needs_metric,
         ..config.clone()
     };
@@ -1043,10 +1070,18 @@ pub fn quantize_rgba(
             (config.quality, config.run_priority, config.dither_strength)
         };
 
+    let effective_dither_mode = if effective_quality == Quality::Fast
+        && config.dither_mode == dither::DitherMode::Adaptive
+    {
+        dither::DitherMode::Ordered
+    } else {
+        config.dither_mode
+    };
     let effective_config = QuantizeConfig {
         quality: effective_quality,
         run_priority: effective_run_priority,
         dither_strength: effective_dither_strength,
+        dither_mode: effective_dither_mode,
         compute_metric: needs_metric,
         ..config.clone()
     };
@@ -1638,10 +1673,18 @@ fn remap_rgb_impl(
             (config.quality, config.run_priority, config.dither_strength)
         };
 
+    let effective_dither_mode = if effective_quality == Quality::Fast
+        && config.dither_mode == dither::DitherMode::Adaptive
+    {
+        dither::DitherMode::Ordered
+    } else {
+        config.dither_mode
+    };
     let effective_config = QuantizeConfig {
         quality: effective_quality,
         run_priority: effective_run_priority,
         dither_strength: effective_dither_strength,
+        dither_mode: effective_dither_mode,
         compute_metric: needs_metric,
         ..config.clone()
     };
@@ -1666,7 +1709,7 @@ fn remap_rgb_impl(
         height,
         weights: &weights,
         palette: &pal,
-        mode: config.dither_mode,
+        mode: effective_config.dither_mode,
         run_priority: effective_run_priority,
         dither_strength: tuning.dither_strength,
         prev_indices,
@@ -1789,10 +1832,18 @@ fn remap_rgba_impl(
             (config.quality, config.run_priority, config.dither_strength)
         };
 
+    let effective_dither_mode = if effective_quality == Quality::Fast
+        && config.dither_mode == dither::DitherMode::Adaptive
+    {
+        dither::DitherMode::Ordered
+    } else {
+        config.dither_mode
+    };
     let effective_config = QuantizeConfig {
         quality: effective_quality,
         run_priority: effective_run_priority,
         dither_strength: effective_dither_strength,
+        dither_mode: effective_dither_mode,
         compute_metric: needs_metric,
         ..config.clone()
     };
@@ -1821,7 +1872,7 @@ fn remap_rgba_impl(
         height,
         weights: &weights,
         palette: &pal,
-        mode: config.dither_mode,
+        mode: effective_config.dither_mode,
         run_priority: effective_run_priority,
         dither_strength: tuning.dither_strength,
         prev_indices,

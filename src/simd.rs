@@ -28,6 +28,13 @@ pub(crate) fn batch_srgb_to_oklab(pixels: &[rgb::RGB<u8>], out: &mut [[f32; 3]])
     incant!(batch_srgb_to_oklab_dispatch(pixels, out), [v3, neon]);
 }
 
+/// Fast batch conversion — on SIMD builds this is the same as `batch_srgb_to_oklab`
+/// since the SIMD path already uses `cbrt_midp()`. On scalar builds this uses
+/// `fast_cbrt` instead of `f32::cbrt`.
+pub(crate) fn batch_srgb_to_oklab_fast(pixels: &[rgb::RGB<u8>], out: &mut [[f32; 3]]) {
+    batch_srgb_to_oklab(pixels, out);
+}
+
 /// Convert a slice of sRGB pixels to a Vec<OKLab>.
 pub(crate) fn batch_srgb_to_oklab_vec(pixels: &[rgb::RGB<u8>]) -> Vec<OKLab> {
     let mut buf = vec![[0.0f32; 3]; pixels.len()];

@@ -2,7 +2,7 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::oklab::srgb_to_oklab;
+use crate::oklab::srgb_to_oklab_l_fast;
 
 /// Compute per-pixel AQ masking weights from an RGB image.
 ///
@@ -35,17 +35,18 @@ pub fn compute_masking_weights_rgba(
 }
 
 /// Extract OKLab L (lightness) channel from RGB pixels.
+/// Uses fast_cbrt (~3x faster than f32::cbrt, ~22 bits precision).
 fn extract_luminance(pixels: &[rgb::RGB<u8>]) -> Vec<f32> {
     pixels
         .iter()
-        .map(|p| srgb_to_oklab(p.r, p.g, p.b).l)
+        .map(|p| srgb_to_oklab_l_fast(p.r, p.g, p.b))
         .collect()
 }
 
 fn extract_luminance_rgba(pixels: &[rgb::RGBA<u8>]) -> Vec<f32> {
     pixels
         .iter()
-        .map(|p| srgb_to_oklab(p.r, p.g, p.b).l)
+        .map(|p| srgb_to_oklab_l_fast(p.r, p.g, p.b))
         .collect()
 }
 
@@ -106,8 +107,9 @@ fn erode_to_blocks(
 
     for by in 0..block_h {
         for bx in 0..block_w {
-            // Gather all contrast values in this 4x4 block
-            let mut values = Vec::new();
+            // Gather all contrast values in this 4x4 block (max 16 values)
+            let mut values = [0.0f32; 16];
+            let mut count = 0usize;
             let y_start = by * 4;
             let x_start = bx * 4;
             let y_end = (y_start + 4).min(height);
@@ -115,19 +117,21 @@ fn erode_to_blocks(
 
             for y in y_start..y_end {
                 for x in x_start..x_end {
-                    values.push(contrast[y * width + x]);
+                    values[count] = contrast[y * width + x];
+                    count += 1;
                 }
             }
 
-            if values.is_empty() {
+            if count == 0 {
                 continue;
             }
 
             // Sort ascending to find smallest values
-            values.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal));
+            values[..count]
+                .sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal));
 
             // Weighted average of up to 4 smallest values
-            let n = values.len().min(4);
+            let n = count.min(4);
             let mut weighted_sum = 0.0f32;
             let mut weight_sum = 0.0f32;
             for i in 0..n {
