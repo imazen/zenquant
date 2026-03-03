@@ -142,7 +142,14 @@ fn main() {
     // Step 5b: Viterbi (with pre-computed labs)
     let t = Instant::now();
     remap::viterbi_refine_with_labs(
-        &pixels, &labs, width, height, &weights, &pal, &mut indices, 0.01,
+        &pixels,
+        &labs,
+        width,
+        height,
+        &weights,
+        &pal,
+        &mut indices,
+        0.01,
     );
     let viterbi_ms = t.elapsed().as_secs_f64() * 1000.0;
     println!("5b. Viterbi:        {:>8.1}ms", viterbi_ms);
@@ -175,7 +182,14 @@ fn main() {
     };
     let mut indices2 = dither_image(&pixels, &params_noref, None);
     remap::viterbi_refine_with_labs(
-        &pixels, &labs, width, height, &weights, &pal_noref, &mut indices2, 0.01,
+        &pixels,
+        &labs,
+        width,
+        height,
+        &weights,
+        &pal_noref,
+        &mut indices2,
+        0.01,
     );
     let noref_ms = t.elapsed().as_secs_f64() * 1000.0;
     println!("Dither+Viterbi (no k-means): {:>8.1}ms", noref_ms);
