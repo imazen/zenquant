@@ -626,6 +626,30 @@ pub(crate) fn optimize_rgb(
     )
 }
 
+/// Joint deflate+quantization optimization for RGB with pre-computed OKLab.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn optimize_rgb_with_labs(
+    pixel_oklab: &[OKLab],
+    width: usize,
+    height: usize,
+    weights: &[f32],
+    palette: &Palette,
+    initial_indices: &[u8],
+    _deflate_effort: u32,
+    base_tolerance: f32,
+) -> Vec<u8> {
+    optimize_inner(
+        pixel_oklab,
+        width,
+        height,
+        weights,
+        palette,
+        initial_indices,
+        None,
+        base_tolerance,
+    )
+}
+
 /// Joint deflate+quantization optimization for RGBA images.
 ///
 /// Transparent pixels (at transparent_index) are kept unchanged.
@@ -651,6 +675,32 @@ pub(crate) fn optimize_rgba(
 
     optimize_inner(
         &pixel_oklab,
+        width,
+        height,
+        weights,
+        palette,
+        initial_indices,
+        transparent_index,
+        base_tolerance,
+    )
+}
+
+/// Joint deflate+quantization optimization for RGBA with pre-computed OKLab.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn optimize_rgba_with_labs(
+    pixel_oklab: &[OKLab],
+    width: usize,
+    height: usize,
+    weights: &[f32],
+    palette: &Palette,
+    initial_indices: &[u8],
+    _deflate_effort: u32,
+    base_tolerance: f32,
+) -> Vec<u8> {
+    let transparent_index = palette.transparent_index();
+
+    optimize_inner(
+        pixel_oklab,
         width,
         height,
         weights,
