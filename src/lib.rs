@@ -308,6 +308,9 @@ pub struct QuantizeConfig {
     joint_deflate_effort: u32,
     /// Base OKLab distance tolerance for joint candidate selection. Default: 0.015.
     joint_tolerance: f32,
+    /// Maximum pixels sampled per k-means iteration. Larger images are
+    /// stride-subsampled internally. Default: 131072.
+    kmeans_sample_cap: usize,
 }
 
 impl QuantizeConfig {
@@ -335,6 +338,7 @@ impl QuantizeConfig {
             min_ssim2: None,
             joint_deflate_effort: 10,
             joint_tolerance: 0.01,
+            kmeans_sample_cap: 131_072,
         }
     }
 
@@ -383,6 +387,17 @@ impl QuantizeConfig {
     #[must_use]
     pub fn with_min_ssim2(mut self, score: f32) -> Self {
         self.min_ssim2 = Some(score);
+        self
+    }
+
+    /// Maximum pixels sampled per k-means iteration. Default: 131072.
+    ///
+    /// Images with more pixels than this are stride-subsampled internally
+    /// during pixel-level k-means refinement. The stride rotates each
+    /// iteration to cover different pixels. Set to 0 to disable subsampling.
+    #[must_use]
+    pub fn with_kmeans_sample_cap(mut self, cap: usize) -> Self {
+        self.kmeans_sample_cap = cap;
         self
     }
 
@@ -853,18 +868,13 @@ pub fn quantize(
 
     // 3b. Pixel-level k-means refinement (skip for Fast — histogram refinement suffices).
     if kmeans_iters > 0 {
-        if pixels.len() <= 500_000 {
-            centroids =
-                median_cut::refine_against_pixels(centroids, pixels, &weights, kmeans_iters);
-        } else {
-            let (sub_pixels, sub_weights) = subsample_pixels(pixels, &weights, width);
-            centroids = median_cut::refine_against_pixels(
-                centroids,
-                &sub_pixels,
-                &sub_weights,
-                kmeans_iters,
-            );
-        }
+        centroids = median_cut::refine_against_pixels(
+            centroids,
+            pixels,
+            &weights,
+            kmeans_iters,
+            config.kmeans_sample_cap,
+        );
     }
 
     // 4. Build palette with format-specific sort
@@ -1095,22 +1105,13 @@ pub fn quantize_rgba(
         let mut centroids = median_cut::median_cut_alpha(hist, opaque_colors, true);
 
         if kmeans_iters > 0 {
-            if pixels.len() <= 500_000 {
-                centroids = median_cut::refine_against_pixels_alpha(
-                    centroids,
-                    pixels,
-                    &weights,
-                    kmeans_iters,
-                );
-            } else {
-                let (sub_pixels, sub_weights) = subsample_pixels_rgba(pixels, &weights, width);
-                centroids = median_cut::refine_against_pixels_alpha(
-                    centroids,
-                    &sub_pixels,
-                    &sub_weights,
-                    kmeans_iters,
-                );
-            }
+            centroids = median_cut::refine_against_pixels_alpha(
+                centroids,
+                pixels,
+                &weights,
+                kmeans_iters,
+                config.kmeans_sample_cap,
+            );
         }
 
         let pal = palette::Palette::from_centroids_alpha(
@@ -1179,22 +1180,13 @@ pub fn quantize_rgba(
         let mut centroids = median_cut::median_cut(hist, opaque_colors, true);
 
         if kmeans_iters > 0 {
-            if pixels.len() <= 500_000 {
-                centroids = median_cut::refine_against_pixels_rgba(
-                    centroids,
-                    pixels,
-                    &weights,
-                    kmeans_iters,
-                );
-            } else {
-                let (sub_pixels, sub_weights) = subsample_pixels_rgba(pixels, &weights, width);
-                centroids = median_cut::refine_against_pixels_rgba(
-                    centroids,
-                    &sub_pixels,
-                    &sub_weights,
-                    kmeans_iters,
-                );
-            }
+            centroids = median_cut::refine_against_pixels_rgba(
+                centroids,
+                pixels,
+                &weights,
+                kmeans_iters,
+                config.kmeans_sample_cap,
+            );
         }
 
         let mut pal = palette::Palette::from_centroids_sorted(
@@ -1413,28 +1405,15 @@ pub fn build_palette(
     // Median cut on merged histogram
     let mut centroids = median_cut::median_cut(merged_hist, max_colors, true);
 
-    // K-means refinement against subsampled pixels from all frames
+    // K-means refinement against all pixels (internally subsampled)
     if kmeans_iters > 0 {
-        let total = all_pixels.len();
-        if total <= 500_000 {
-            centroids = median_cut::refine_against_pixels(
-                centroids,
-                &all_pixels,
-                &all_weights,
-                kmeans_iters,
-            );
-        } else {
-            // Subsample uniformly across all frames
-            let step = (total / 250_000).max(1);
-            let sub_pixels: Vec<rgb::RGB<u8>> = all_pixels.iter().step_by(step).copied().collect();
-            let sub_weights: Vec<f32> = all_weights.iter().step_by(step).copied().collect();
-            centroids = median_cut::refine_against_pixels(
-                centroids,
-                &sub_pixels,
-                &sub_weights,
-                kmeans_iters,
-            );
-        }
+        centroids = median_cut::refine_against_pixels(
+            centroids,
+            &all_pixels,
+            &all_weights,
+            kmeans_iters,
+            config.kmeans_sample_cap,
+        );
     }
 
     let mut pal = palette::Palette::from_centroids_sorted(centroids, false, tuning.sort_strategy);
@@ -1569,26 +1548,13 @@ pub fn build_palette_rgba(
         let mut centroids = median_cut::median_cut_alpha(merged_hist, max_colors, true);
 
         if kmeans_iters > 0 {
-            let total = all_pixels.len();
-            if total <= 500_000 {
-                centroids = median_cut::refine_against_pixels_alpha(
-                    centroids,
-                    &all_pixels,
-                    &all_weights,
-                    kmeans_iters,
-                );
-            } else {
-                let step = (total / 250_000).max(1);
-                let sub_pixels: Vec<rgb::RGBA<u8>> =
-                    all_pixels.iter().step_by(step).copied().collect();
-                let sub_weights: Vec<f32> = all_weights.iter().step_by(step).copied().collect();
-                centroids = median_cut::refine_against_pixels_alpha(
-                    centroids,
-                    &sub_pixels,
-                    &sub_weights,
-                    kmeans_iters,
-                );
-            }
+            centroids = median_cut::refine_against_pixels_alpha(
+                centroids,
+                &all_pixels,
+                &all_weights,
+                kmeans_iters,
+                config.kmeans_sample_cap,
+            );
         }
 
         let mut p = palette::Palette::from_centroids_alpha(centroids, false, tuning.sort_strategy);
@@ -1608,26 +1574,13 @@ pub fn build_palette_rgba(
         let mut centroids = median_cut::median_cut(merged_hist, opaque_colors, true);
 
         if kmeans_iters > 0 {
-            let total = all_pixels.len();
-            if total <= 500_000 {
-                centroids = median_cut::refine_against_pixels_rgba(
-                    centroids,
-                    &all_pixels,
-                    &all_weights,
-                    kmeans_iters,
-                );
-            } else {
-                let step = (total / 250_000).max(1);
-                let sub_pixels: Vec<rgb::RGBA<u8>> =
-                    all_pixels.iter().step_by(step).copied().collect();
-                let sub_weights: Vec<f32> = all_weights.iter().step_by(step).copied().collect();
-                centroids = median_cut::refine_against_pixels_rgba(
-                    centroids,
-                    &sub_pixels,
-                    &sub_weights,
-                    kmeans_iters,
-                );
-            }
+            centroids = median_cut::refine_against_pixels_rgba(
+                centroids,
+                &all_pixels,
+                &all_weights,
+                kmeans_iters,
+                config.kmeans_sample_cap,
+            );
         }
 
         let mut p = palette::Palette::from_centroids_sorted(
@@ -1949,62 +1902,6 @@ fn remap_rgba_impl(
         indices,
         mpe_result,
     })
-}
-
-/// Subsample RGB pixels for k-means refinement on large images.
-/// Takes every Nth pixel (with corresponding weight) to produce ~250K samples.
-fn subsample_pixels(
-    pixels: &[rgb::RGB<u8>],
-    weights: &[f32],
-    width: usize,
-) -> (Vec<rgb::RGB<u8>>, Vec<f32>) {
-    const TARGET: usize = 250_000;
-    let step = (pixels.len() / TARGET).max(1);
-    let height = pixels.len() / width;
-
-    let mut sub_pixels = Vec::with_capacity(TARGET + width);
-    let mut sub_weights = Vec::with_capacity(TARGET + width);
-
-    // Sample evenly across rows to maintain spatial distribution
-    for y in 0..height {
-        let row_start = y * width;
-        let mut x = (y * 3) % step; // offset per row to avoid column aliasing
-        while x < width {
-            let idx = row_start + x;
-            sub_pixels.push(pixels[idx]);
-            sub_weights.push(weights[idx]);
-            x += step;
-        }
-    }
-
-    (sub_pixels, sub_weights)
-}
-
-/// Subsample RGBA pixels for k-means refinement on large images.
-fn subsample_pixels_rgba(
-    pixels: &[rgb::RGBA<u8>],
-    weights: &[f32],
-    width: usize,
-) -> (Vec<rgb::RGBA<u8>>, Vec<f32>) {
-    const TARGET: usize = 250_000;
-    let step = (pixels.len() / TARGET).max(1);
-    let height = pixels.len() / width;
-
-    let mut sub_pixels = Vec::with_capacity(TARGET + width);
-    let mut sub_weights = Vec::with_capacity(TARGET + width);
-
-    for y in 0..height {
-        let row_start = y * width;
-        let mut x = (y * 3) % step;
-        while x < width {
-            let idx = row_start + x;
-            sub_pixels.push(pixels[idx]);
-            sub_weights.push(weights[idx]);
-            x += step;
-        }
-    }
-
-    (sub_pixels, sub_weights)
 }
 
 /// Detect if all RGB frames combined have ≤max_colors unique colors.

@@ -225,6 +225,10 @@ fn kmeans_refine(mut centroids: Vec<OKLab>, entries: &[(OKLab, f32)]) -> Vec<OKL
 /// refining against histogram entries alone, since it accounts for the actual
 /// pixel distribution rather than pre-quantized histogram approximations.
 ///
+/// When `pixels.len() > max_samples`, stride-subsamples internally with a
+/// rotating offset per iteration to cover different pixels. Stops early if
+/// <0.5% of sampled pixels changed assignment.
+///
 /// Uses three acceleration techniques:
 /// 1. **Pre-computed grid**: 4096 sRGB→OKLab values computed once (not per iteration)
 /// 2. **Incremental rebuild**: NN cache and neighbors updated seeded/selectively
@@ -236,11 +240,14 @@ pub fn refine_against_pixels(
     pixels: &[rgb::RGB<u8>],
     weights: &[f32],
     iterations: usize,
+    max_samples: usize,
 ) -> Vec<OKLab> {
     let k = centroids.len();
     if k == 0 {
         return centroids;
     }
+
+    let n = pixels.len();
 
     // Pre-convert all pixels to OKLab once (avoids repeated cube-root per iteration)
     let labs = crate::simd::batch_srgb_to_oklab_vec(pixels);
@@ -254,11 +261,22 @@ pub fn refine_against_pixels(
     let mut old_centroids = centroids.clone();
 
     // Per-pixel assignments for triangle-inequality skip on iterations 1+
-    let mut assignments = vec![0u8; pixels.len()];
+    let mut assignments = vec![0u8; n];
 
     // Per-centroid skip threshold: dist_sq(centroid, nearest_other) / 4.
     // If a pixel is closer than this to its assigned centroid, it can't change.
     let mut skip_threshold = compute_skip_thresholds(&centroids, &neighbors);
+
+    // Subsampling: if we have more pixels than max_samples, stride through them.
+    // The stride offset rotates each iteration to cover different pixels.
+    let needs_subsample = n > max_samples && max_samples > 0;
+    let stride = if needs_subsample {
+        n / max_samples
+    } else {
+        1
+    };
+    // Prime for rotating offset each iteration
+    const OFFSET_PRIME: usize = 7;
 
     for iter in 0..iterations {
         if iter > 0 {
@@ -273,9 +291,22 @@ pub fn refine_against_pixels(
         let mut sums_a = vec![0.0f64; k];
         let mut sums_b = vec![0.0f64; k];
         let mut total_w = vec![0.0f64; k];
+        let mut changed_count: usize = 0;
+        let mut sampled_count: usize = 0;
 
-        for (i, (pixel, &weight)) in pixels.iter().zip(weights.iter()).enumerate() {
+        // Compute iteration offset for subsampling rotation
+        let offset = if needs_subsample {
+            (iter * OFFSET_PRIME) % stride
+        } else {
+            0
+        };
+
+        let mut i = offset;
+        while i < n {
+            let pixel = &pixels[i];
+            let weight = weights[i];
             let lab = labs[i];
+            sampled_count += 1;
 
             // Triangle-inequality early exit: if the pixel is closer to its
             // current centroid than half the distance to the nearest other
@@ -294,12 +325,17 @@ pub fn refine_against_pixels(
                 find_nearest_seeded(&centroids, lab, seed, &neighbors)
             };
 
+            if iter > 0 && assignments[i] != nearest as u8 {
+                changed_count += 1;
+            }
             assignments[i] = nearest as u8;
             let w = weight as f64;
             sums_l[nearest] += lab.l as f64 * w;
             sums_a[nearest] += lab.a as f64 * w;
             sums_b[nearest] += lab.b as f64 * w;
             total_w[nearest] += w;
+
+            i += stride;
         }
 
         // Save centroids before update (for incremental neighbor rebuild next iter)
@@ -321,6 +357,11 @@ pub fn refine_against_pixels(
         if max_movement < 1e-6 {
             break;
         }
+
+        // Early convergence: if <0.5% of sampled pixels changed assignment, stop.
+        if iter > 0 && sampled_count > 0 && changed_count * 200 < sampled_count {
+            break;
+        }
     }
 
     centroids
@@ -328,16 +369,20 @@ pub fn refine_against_pixels(
 
 /// Refine centroids against original RGBA pixel data.
 /// Transparent pixels (alpha == 0) are skipped.
+/// When `pixels.len() > max_samples`, stride-subsamples internally.
 pub fn refine_against_pixels_rgba(
     mut centroids: Vec<OKLab>,
     pixels: &[rgb::RGBA<u8>],
     weights: &[f32],
     iterations: usize,
+    max_samples: usize,
 ) -> Vec<OKLab> {
     let k = centroids.len();
     if k == 0 {
         return centroids;
     }
+
+    let n = pixels.len();
 
     // Pre-convert all pixels to OKLab once (avoids repeated cube-root per iteration)
     // Batch-convert RGB channels, then zero out transparent pixels
@@ -359,8 +404,16 @@ pub fn refine_against_pixels_rgba(
     let mut nn_cache = build_centroid_nn_cache(&centroids, &grid_labs);
     let mut neighbors = build_centroid_neighbors(&centroids);
     let mut old_centroids = centroids.clone();
-    let mut assignments = vec![0u8; pixels.len()];
+    let mut assignments = vec![0u8; n];
     let mut skip_threshold = compute_skip_thresholds(&centroids, &neighbors);
+
+    let needs_subsample = n > max_samples && max_samples > 0;
+    let stride = if needs_subsample {
+        n / max_samples
+    } else {
+        1
+    };
+    const OFFSET_PRIME: usize = 7;
 
     for iter in 0..iterations {
         if iter > 0 {
@@ -373,12 +426,25 @@ pub fn refine_against_pixels_rgba(
         let mut sums_a = vec![0.0f64; k];
         let mut sums_b = vec![0.0f64; k];
         let mut total_w = vec![0.0f64; k];
+        let mut changed_count: usize = 0;
+        let mut sampled_count: usize = 0;
 
-        for (i, (pixel, &weight)) in pixels.iter().zip(weights.iter()).enumerate() {
+        let offset = if needs_subsample {
+            (iter * OFFSET_PRIME) % stride
+        } else {
+            0
+        };
+
+        let mut i = offset;
+        while i < n {
+            let pixel = &pixels[i];
             if pixel.a == 0 {
+                i += stride;
                 continue;
             }
+            let weight = weights[i];
             let lab = labs[i];
+            sampled_count += 1;
 
             let nearest = if iter > 0 {
                 let prev = assignments[i] as usize;
@@ -394,12 +460,17 @@ pub fn refine_against_pixels_rgba(
                 find_nearest_seeded(&centroids, lab, seed, &neighbors)
             };
 
+            if iter > 0 && assignments[i] != nearest as u8 {
+                changed_count += 1;
+            }
             assignments[i] = nearest as u8;
             let w = weight as f64;
             sums_l[nearest] += lab.l as f64 * w;
             sums_a[nearest] += lab.a as f64 * w;
             sums_b[nearest] += lab.b as f64 * w;
             total_w[nearest] += w;
+
+            i += stride;
         }
 
         // Save centroids before update (for incremental neighbor rebuild next iter)
@@ -419,6 +490,10 @@ pub fn refine_against_pixels_rgba(
         }
 
         if max_movement < 1e-6 {
+            break;
+        }
+
+        if iter > 0 && sampled_count > 0 && changed_count * 200 < sampled_count {
             break;
         }
     }
@@ -809,16 +884,20 @@ fn kmeans_refine_alpha(mut centroids: Vec<OKLabA>, entries: &[(OKLabA, f32)]) ->
 }
 
 /// Refine alpha-aware centroids against original RGBA pixel data.
+/// When `pixels.len() > max_samples`, stride-subsamples internally.
 pub fn refine_against_pixels_alpha(
     mut centroids: Vec<OKLabA>,
     pixels: &[rgb::RGBA<u8>],
     weights: &[f32],
     iterations: usize,
+    max_samples: usize,
 ) -> Vec<OKLabA> {
     let k = centroids.len();
     if k == 0 {
         return centroids;
     }
+
+    let n = pixels.len();
 
     // Pre-convert all pixels to OKLabA once (avoids repeated cube-root per iteration)
     let rgb_pixels: Vec<rgb::RGB<u8>> = pixels
@@ -838,24 +917,56 @@ pub fn refine_against_pixels_alpha(
         })
         .collect();
 
-    for _ in 0..iterations {
+    let needs_subsample = n > max_samples && max_samples > 0;
+    let stride = if needs_subsample {
+        n / max_samples
+    } else {
+        1
+    };
+    const OFFSET_PRIME: usize = 7;
+
+    // Per-pixel assignments for early convergence tracking
+    let mut assignments = vec![0u8; n];
+
+    for iter in 0..iterations {
         let mut sums_l = vec![0.0f64; k];
         let mut sums_a = vec![0.0f64; k];
         let mut sums_b = vec![0.0f64; k];
         let mut sums_al = vec![0.0f64; k];
         let mut total_w = vec![0.0f64; k];
+        let mut changed_count: usize = 0;
+        let mut sampled_count: usize = 0;
 
-        for (&laba, &weight) in labas.iter().zip(weights.iter()) {
+        let offset = if needs_subsample {
+            (iter * OFFSET_PRIME) % stride
+        } else {
+            0
+        };
+
+        let mut i = offset;
+        while i < n {
+            let laba = labas[i];
             if laba.alpha == 0.0 {
+                i += stride;
                 continue;
             }
+            let weight = weights[i];
+            sampled_count += 1;
+
             let nearest = find_nearest_alpha(&centroids, laba);
+            if iter > 0 && assignments[i] != nearest as u8 {
+                changed_count += 1;
+            }
+            assignments[i] = nearest as u8;
+
             let w = weight as f64;
             sums_l[nearest] += laba.lab.l as f64 * w;
             sums_a[nearest] += laba.lab.a as f64 * w;
             sums_b[nearest] += laba.lab.b as f64 * w;
             sums_al[nearest] += laba.alpha as f64 * w;
             total_w[nearest] += w;
+
+            i += stride;
         }
 
         let mut max_movement = 0.0f32;
@@ -873,6 +984,10 @@ pub fn refine_against_pixels_alpha(
         }
 
         if max_movement < 1e-6 {
+            break;
+        }
+
+        if iter > 0 && sampled_count > 0 && changed_count * 200 < sampled_count {
             break;
         }
     }
