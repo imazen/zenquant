@@ -2,7 +2,7 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::oklab::srgb_to_oklab;
+use crate::oklab::{OKLab, srgb_to_oklab};
 use crate::palette::Palette;
 
 /// How aggressively to prefer extending runs over quality.
@@ -360,6 +360,296 @@ fn viterbi_scanline(
     for x in (1..n).rev() {
         j = backptrs[x][j] as usize;
         indices[x - 1] = candidates[x - 1][j];
+    }
+}
+
+/// Per-scanline Viterbi DP using pre-computed OKLab values.
+///
+/// Same as [`viterbi_scanline`] but reads from `labs[x]` instead of
+/// converting `pixels[x]` to OKLab. The `pixels` are still needed for
+/// the sRGB NN cache lookup.
+fn viterbi_scanline_with_labs(
+    pixels: &[rgb::RGB<u8>],
+    labs: &[OKLab],
+    weights: &[f32],
+    palette: &Palette,
+    indices: &mut [u8],
+    lambda: f32,
+    k: usize,
+    bufs: &mut ViterbiBufs,
+) {
+    let n = pixels.len();
+    if n == 0 {
+        return;
+    }
+
+    bufs.ensure_capacity(n);
+    let max_cands = k + 1;
+    let candidates = &mut bufs.candidates[..n];
+    let cand_counts = &mut bufs.cand_counts[..n];
+    let quality_costs = &mut bufs.quality_costs[..n];
+
+    let mut knn_buf = [0u8; 4];
+    let has_cache = palette.has_nn_cache();
+
+    for x in 0..n {
+        let lab = labs[x];
+        let found = if has_cache {
+            let seed = palette.nearest_cached(pixels[x].r, pixels[x].g, pixels[x].b);
+            palette.k_nearest_seeded(lab, seed, &mut knn_buf[..k])
+        } else {
+            palette.k_nearest_into(lab, &mut knn_buf[..k])
+        };
+
+        let mut count = 0usize;
+        let current_idx = indices[x];
+        let mut dith_pos = None;
+
+        for &k in &knn_buf[..found] {
+            candidates[x][count] = k;
+            if k == current_idx {
+                dith_pos = Some(count);
+            }
+            count += 1;
+        }
+
+        if dith_pos.is_none() {
+            if count >= max_cands {
+                count -= 1;
+            }
+            candidates[x][count] = current_idx;
+            dith_pos = Some(count);
+            count += 1;
+        }
+
+        let dith_pos = dith_pos.unwrap();
+        cand_counts[x] = count as u8;
+
+        for j in 0..count {
+            quality_costs[x][j] = if j == dith_pos {
+                0.0
+            } else {
+                weights[x] * palette.distance_sq(lab, candidates[x][j])
+            };
+        }
+    }
+
+    let k0 = cand_counts[0] as usize;
+    let mut dp = [f32::MAX; 5];
+    dp[..k0].copy_from_slice(&quality_costs[0][..k0]);
+    let backptrs = &mut bufs.backptrs[..n];
+
+    for x in 1..n {
+        let k_cur = cand_counts[x] as usize;
+        let k_prev = cand_counts[x - 1] as usize;
+        let mut new_dp = [f32::MAX; 5];
+        let mut bp = [0u8; 5];
+
+        let w = weights[x];
+        let trans_cost = lambda * (1.0 - w);
+
+        for j in 0..k_cur {
+            let q_cost = quality_costs[x][j];
+            let cand_j = candidates[x][j];
+
+            for i in 0..k_prev {
+                let transition = if candidates[x - 1][i] == cand_j {
+                    0.0
+                } else {
+                    trans_cost
+                };
+                let total = dp[i] + q_cost + transition;
+                if total < new_dp[j] {
+                    new_dp[j] = total;
+                    bp[j] = i as u8;
+                }
+            }
+        }
+
+        dp = new_dp;
+        backptrs[x] = bp;
+    }
+
+    let k_last = cand_counts[n - 1] as usize;
+    let mut best_j = 0;
+    let mut best_cost = f32::MAX;
+    for (j, &cost) in dp[..k_last].iter().enumerate() {
+        if cost < best_cost {
+            best_cost = cost;
+            best_j = j;
+        }
+    }
+
+    indices[n - 1] = candidates[n - 1][best_j];
+    let mut j = best_j;
+    for x in (1..n).rev() {
+        j = backptrs[x][j] as usize;
+        indices[x - 1] = candidates[x - 1][j];
+    }
+}
+
+/// Per-scanline Viterbi DP using pre-computed OKLab values.
+///
+/// Same as [`viterbi_refine`] but skips sRGB→OKLab conversion.
+pub fn viterbi_refine_with_labs(
+    pixels: &[rgb::RGB<u8>],
+    labs: &[OKLab],
+    width: usize,
+    height: usize,
+    weights: &[f32],
+    palette: &Palette,
+    indices: &mut [u8],
+    lambda: f32,
+) {
+    if width <= 1 || lambda <= 0.0 {
+        return;
+    }
+
+    const K: usize = 4;
+    let mut bufs = ViterbiBufs::new(width);
+
+    for y in 0..height {
+        let row_start = y * width;
+        let row = &pixels[row_start..row_start + width];
+        let row_labs = &labs[row_start..row_start + width];
+        let row_weights = &weights[row_start..row_start + width];
+        let row_indices = &mut indices[row_start..row_start + width];
+
+        viterbi_scanline_with_labs(row, row_labs, row_weights, palette, row_indices, lambda, K, &mut bufs);
+    }
+}
+
+/// Per-scanline Viterbi DP for RGBA images using pre-computed OKLab values.
+pub fn viterbi_refine_rgba_with_labs(
+    pixels: &[rgb::RGBA<u8>],
+    labs: &[OKLab],
+    width: usize,
+    height: usize,
+    weights: &[f32],
+    palette: &Palette,
+    indices: &mut [u8],
+    lambda: f32,
+) {
+    if width <= 1 || lambda <= 0.0 {
+        return;
+    }
+
+    const K: usize = 4;
+    let transparent_idx = palette.transparent_index().unwrap_or(0);
+    let mut bufs = ViterbiBufs::new(width);
+
+    for y in 0..height {
+        let row_start = y * width;
+
+        let mut seg_start = None;
+        for x in 0..=width {
+            let is_transparent = x < width && pixels[row_start + x].a == 0;
+            let past_end = x == width;
+
+            if past_end || is_transparent {
+                if let Some(start) = seg_start {
+                    let seg_len = x - start;
+                    if seg_len > 1 {
+                        let seg_pixels: Vec<rgb::RGB<u8>> = (start..x)
+                            .map(|sx| {
+                                let p = &pixels[row_start + sx];
+                                rgb::RGB { r: p.r, g: p.g, b: p.b }
+                            })
+                            .collect();
+                        let seg_labs = &labs[row_start + start..row_start + x];
+                        let seg_weights = &weights[row_start + start..row_start + x];
+                        let seg_indices = &mut indices[row_start + start..row_start + x];
+
+                        bufs.ensure_capacity(seg_len);
+                        viterbi_scanline_with_labs(
+                            &seg_pixels, seg_labs, seg_weights, palette,
+                            seg_indices, lambda, K, &mut bufs,
+                        );
+                    }
+                    seg_start = None;
+                }
+
+                if is_transparent {
+                    indices[row_start + x] = transparent_idx;
+                }
+            } else if seg_start.is_none() {
+                seg_start = Some(x);
+            }
+        }
+    }
+}
+
+/// Lightweight run-extension post-pass using pre-computed OKLab values.
+pub fn run_extend_refine_with_labs(
+    labs: &[OKLab],
+    width: usize,
+    height: usize,
+    weights: &[f32],
+    palette: &Palette,
+    indices: &mut [u8],
+    lambda: f32,
+) {
+    if width <= 1 || lambda <= 0.0 {
+        return;
+    }
+
+    for y in 0..height {
+        let row_start = y * width;
+        for x in 1..width {
+            let i = row_start + x;
+            if indices[i] != indices[i - 1] {
+                let w = weights[i];
+                if w > 0.7 {
+                    continue;
+                }
+                let lab = labs[i];
+                let curr_dist = palette.distance_sq(lab, indices[i]);
+                let prev_dist = palette.distance_sq(lab, indices[i - 1]);
+                let threshold = lambda * (1.0 - w);
+                if prev_dist <= curr_dist + threshold {
+                    indices[i] = indices[i - 1];
+                }
+            }
+        }
+    }
+}
+
+/// Lightweight run-extension post-pass for RGBA using pre-computed OKLab.
+pub fn run_extend_refine_rgba_with_labs(
+    pixels: &[rgb::RGBA<u8>],
+    labs: &[OKLab],
+    width: usize,
+    height: usize,
+    weights: &[f32],
+    palette: &Palette,
+    indices: &mut [u8],
+    lambda: f32,
+) {
+    if width <= 1 || lambda <= 0.0 {
+        return;
+    }
+
+    for y in 0..height {
+        let row_start = y * width;
+        for x in 1..width {
+            let i = row_start + x;
+            if pixels[i].a == 0 || pixels[i - 1].a == 0 {
+                continue;
+            }
+            if indices[i] != indices[i - 1] {
+                let w = weights[i];
+                if w > 0.7 {
+                    continue;
+                }
+                let lab = labs[i];
+                let curr_dist = palette.distance_sq(lab, indices[i]);
+                let prev_dist = palette.distance_sq(lab, indices[i - 1]);
+                let threshold = lambda * (1.0 - w);
+                if prev_dist <= curr_dist + threshold {
+                    indices[i] = indices[i - 1];
+                }
+            }
+        }
     }
 }
 
