@@ -48,13 +48,71 @@ fn quantize_key(lab: OKLab, bits: u32) -> u32 {
 /// Uses adaptive bit depth: 6-bit for small images (more color precision), 5-bit
 /// for large images (avoids dominant-color fragmentation on screenshots).
 /// Weighted centroids are computed in f64 for accumulation stability.
+///
+/// For images with many duplicate colors (unique < total/4), deduplicates pixels
+/// first to reduce the number of sRGB→OKLab conversions.
 pub fn build_histogram(pixels: &[rgb::RGB<u8>], weights: &[f32]) -> Vec<(OKLab, f32)> {
     assert_eq!(pixels.len(), weights.len());
+
+    // Try pixel deduplication for large images with many duplicates
+    if pixels.len() >= 65_536
+        && let Some(result) = build_histogram_dedup_rgb(pixels, weights)
+    {
+        return result;
+    }
 
     let labs: Vec<OKLab> = crate::simd::batch_srgb_to_oklab_vec(pixels);
 
     let bits = if pixels.len() <= 500_000 { 6 } else { 5 };
     build_hist_at_depth(&labs, weights, bits)
+}
+
+/// Attempt RGB pixel deduplication. Returns Some if unique < total/4.
+fn build_histogram_dedup_rgb(
+    pixels: &[rgb::RGB<u8>],
+    weights: &[f32],
+) -> Option<Vec<(OKLab, f32)>> {
+    // 2MB bitvec: one bit per RGB triplet (2^24 = 16M possible RGB values)
+    const BITVEC_SIZE: usize = 1 << 24; // 16,777,216 bits
+    let mut seen = vec![0u8; BITVEC_SIZE / 8]; // 2MB
+    let mut unique_count = 0usize;
+
+    for p in pixels {
+        let key = ((p.r as usize) << 16) | ((p.g as usize) << 8) | p.b as usize;
+        let byte_idx = key >> 3;
+        let bit_idx = key & 7;
+        if seen[byte_idx] & (1u8 << bit_idx) == 0 {
+            seen[byte_idx] |= 1u8 << bit_idx;
+            unique_count += 1;
+        }
+    }
+
+    // Only deduplicate if unique colors are < 1/4 of total pixels
+    if unique_count >= pixels.len() / 4 {
+        return None;
+    }
+
+    // Aggregate weights by exact RGB value
+    let mut weight_map: BTreeMap<u32, f32> = BTreeMap::new();
+    for (p, &w) in pixels.iter().zip(weights.iter()) {
+        let key = ((p.r as u32) << 16) | ((p.g as u32) << 8) | p.b as u32;
+        *weight_map.entry(key).or_default() += w;
+    }
+
+    // Convert only unique colors to OKLab via SIMD batch
+    let unique_pixels: Vec<rgb::RGB<u8>> = weight_map
+        .keys()
+        .map(|&k| rgb::RGB {
+            r: (k >> 16) as u8,
+            g: (k >> 8) as u8,
+            b: k as u8,
+        })
+        .collect();
+    let unique_weights: Vec<f32> = weight_map.into_values().collect();
+
+    let labs = crate::simd::batch_srgb_to_oklab_vec(&unique_pixels);
+    let bits = if pixels.len() <= 500_000 { 6 } else { 5 };
+    Some(build_hist_at_depth(&labs, &unique_weights, bits))
 }
 
 fn build_hist_at_depth(labs: &[OKLab], weights: &[f32], bits: u32) -> Vec<(OKLab, f32)> {
@@ -97,20 +155,26 @@ pub fn build_histogram_rgba(
     assert_eq!(pixels.len(), weights.len());
 
     let mut has_transparent = false;
-    let mut labs = Vec::with_capacity(pixels.len());
-    let mut opaque_weights = Vec::with_capacity(pixels.len());
+
+    // Collect opaque pixels and their weights
+    let mut opaque_pixels: Vec<rgb::RGB<u8>> = Vec::with_capacity(pixels.len());
+    let mut opaque_weights: Vec<f32> = Vec::with_capacity(pixels.len());
 
     for (pixel, &weight) in pixels.iter().zip(weights.iter()) {
         if pixel.a == 0 {
             has_transparent = true;
             continue;
         }
-        labs.push(srgb_to_oklab(pixel.r, pixel.g, pixel.b));
+        opaque_pixels.push(rgb::RGB {
+            r: pixel.r,
+            g: pixel.g,
+            b: pixel.b,
+        });
         opaque_weights.push(weight);
     }
 
-    let bits = if pixels.len() <= 500_000 { 6 } else { 5 };
-    let entries = build_hist_at_depth(&labs, &opaque_weights, bits);
+    // Delegate to the RGB build (which handles dedup internally)
+    let entries = build_histogram(&opaque_pixels, &opaque_weights);
     (entries, has_transparent)
 }
 
@@ -119,12 +183,29 @@ pub fn build_histogram_rgba(
 /// Alpha is quantized to 6 bits (64 levels) for bucketing. Fully transparent pixels
 /// (alpha == 0) are excluded and flagged separately.
 /// Returns histogram entries as (OKLabA, weight) pairs.
+///
+/// For images with many duplicate RGBA values (unique < total/4), deduplicates
+/// pixels first to reduce sRGB→OKLab conversions.
 pub(crate) fn build_histogram_alpha(
     pixels: &[rgb::RGBA<u8>],
     weights: &[f32],
 ) -> (Vec<(OKLabA, f32)>, bool) {
     assert_eq!(pixels.len(), weights.len());
 
+    // Try RGBA dedup for large images
+    if pixels.len() >= 65_536
+        && let Some(result) = build_histogram_alpha_dedup(pixels, weights)
+    {
+        return result;
+    }
+
+    build_histogram_alpha_direct(pixels, weights)
+}
+
+fn build_histogram_alpha_direct(
+    pixels: &[rgb::RGBA<u8>],
+    weights: &[f32],
+) -> (Vec<(OKLabA, f32)>, bool) {
     let bits: u32 = 5;
     let alpha_bits: u32 = 6; // 64 alpha levels
     let alpha_max = (1u32 << alpha_bits) - 1;
@@ -182,6 +263,89 @@ pub(crate) fn build_histogram_alpha(
         .collect();
 
     (entries, has_transparent)
+}
+
+/// RGBA dedup: aggregate weights by exact RGBA value using BTreeMap.
+fn build_histogram_alpha_dedup(
+    pixels: &[rgb::RGBA<u8>],
+    weights: &[f32],
+) -> Option<(Vec<(OKLabA, f32)>, bool)> {
+    let mut has_transparent = false;
+
+    // Count unique RGBA values and aggregate weights in one pass
+    let mut weight_map: BTreeMap<u32, f32> = BTreeMap::new();
+    for (p, &w) in pixels.iter().zip(weights.iter()) {
+        if p.a == 0 {
+            has_transparent = true;
+            continue;
+        }
+        let key = ((p.r as u32) << 24) | ((p.g as u32) << 16) | ((p.b as u32) << 8) | p.a as u32;
+        *weight_map.entry(key).or_default() += w;
+    }
+
+    // Only proceed with dedup if unique colors are < 1/4 of total opaque pixels
+    let opaque_count = pixels.len() - if has_transparent { 1 } else { 0 };
+    if weight_map.len() >= opaque_count / 4 {
+        return None;
+    }
+
+    // Build histogram from deduplicated entries
+    let bits: u32 = 5;
+    let alpha_bits: u32 = 6;
+    let alpha_max = (1u32 << alpha_bits) - 1;
+    let alpha_scale = alpha_max as f32;
+
+    let mut buckets: BTreeMap<u64, AlphaHistEntry> = BTreeMap::new();
+
+    for (&rgba_key, &weight) in &weight_map {
+        let r = (rgba_key >> 24) as u8;
+        let g = (rgba_key >> 16) as u8;
+        let b = (rgba_key >> 8) as u8;
+        let a = rgba_key as u8;
+
+        let lab = srgb_to_oklab(r, g, b);
+        let alpha_f = a as f32 / 255.0;
+        let color_key = quantize_key(lab, bits);
+        let alpha_bin = ((alpha_f * alpha_scale).round() as u32).min(alpha_max);
+        let key = (color_key as u64) << alpha_bits | alpha_bin as u64;
+
+        let w64 = weight as f64;
+        buckets
+            .entry(key)
+            .and_modify(|e| {
+                e.l_sum += lab.l as f64 * w64;
+                e.a_sum += lab.a as f64 * w64;
+                e.b_sum += lab.b as f64 * w64;
+                e.alpha_sum += alpha_f as f64 * w64;
+                e.weight += w64;
+            })
+            .or_insert_with(|| AlphaHistEntry {
+                l_sum: lab.l as f64 * w64,
+                a_sum: lab.a as f64 * w64,
+                b_sum: lab.b as f64 * w64,
+                alpha_sum: alpha_f as f64 * w64,
+                weight: w64,
+            });
+    }
+
+    let entries = buckets
+        .into_values()
+        .map(|e| {
+            if e.weight < 1e-10 {
+                (OKLabA::new(0.0, 0.0, 0.0, 0.0), 0.0)
+            } else {
+                let laba = OKLabA::new(
+                    (e.l_sum / e.weight) as f32,
+                    (e.a_sum / e.weight) as f32,
+                    (e.b_sum / e.weight) as f32,
+                    (e.alpha_sum / e.weight) as f32,
+                );
+                (laba, e.weight as f32)
+            }
+        })
+        .collect();
+
+    Some((entries, has_transparent))
 }
 
 /// Histogram entry with alpha accumulation.
