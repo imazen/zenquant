@@ -463,7 +463,7 @@ fn compute_dither_map_4(lab_buf: &[[f32; 4]], width: usize, height: usize) -> Ve
 /// run priority, dither strength, and optional previous-frame indices
 /// that are shared across all dither entry points.
 #[derive(Debug, Clone)]
-pub(crate) struct DitherParams<'a> {
+pub struct DitherParams<'a> {
     /// Image width in pixels.
     pub width: usize,
     /// Image height in pixels.

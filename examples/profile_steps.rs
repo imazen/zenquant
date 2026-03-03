@@ -3,10 +3,9 @@
 //! Usage:
 //!   cargo run --example profile_steps --release -- [image_path]
 
-use std::path::PathBuf;
 use std::time::Instant;
 
-use zenquant::_dev::dither::{DitherMode as DM, dither_image};
+use zenquant::_dev::dither::{DitherMode as DM, DitherParams, dither_image};
 use zenquant::_dev::histogram;
 use zenquant::_dev::masking;
 use zenquant::_dev::median_cut;
@@ -98,18 +97,17 @@ fn main() {
 
     // Step 5: Dithering
     let t = Instant::now();
-    let mut indices = dither_image(
-        &pixels,
+    let params = DitherParams {
         width,
         height,
-        &weights,
-        &pal,
-        DM::Adaptive,
-        remap::RunPriority::Balanced,
-        0.5,
-        None,
-        None,
-    );
+        weights: &weights,
+        palette: &pal,
+        mode: DM::Adaptive,
+        run_priority: remap::RunPriority::Balanced,
+        dither_strength: 0.5,
+        prev_indices: None,
+    };
+    let mut indices = dither_image(&pixels, &params, None);
     let dither_ms = t.elapsed().as_secs_f64() * 1000.0;
     println!("5. Dithering:       {:>8.1}ms", dither_ms);
 
@@ -130,18 +128,17 @@ fn main() {
         Palette::from_centroids_sorted(centroids_mc, false, PaletteSortStrategy::DeltaMinimize);
     pal_noref.build_nn_cache();
     let t = Instant::now();
-    let mut indices2 = dither_image(
-        &pixels,
+    let params_noref = DitherParams {
         width,
         height,
-        &weights,
-        &pal_noref,
-        DM::Adaptive,
-        remap::RunPriority::Balanced,
-        0.5,
-        None,
-        None,
-    );
+        weights: &weights,
+        palette: &pal_noref,
+        mode: DM::Adaptive,
+        run_priority: remap::RunPriority::Balanced,
+        dither_strength: 0.5,
+        prev_indices: None,
+    };
+    let mut indices2 = dither_image(&pixels, &params_noref, None);
     remap::viterbi_refine(
         &pixels,
         width,
