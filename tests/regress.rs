@@ -121,8 +121,12 @@ fn check_rgb(
     let result = zenquant::quantize(pixels, width, height, &config).unwrap();
 
     let mpe = result.mpe_score().expect("metric should be computed");
-    let ss2 = result.ssimulacra2_estimate().expect("ss2 should be computed");
-    let ba = result.butteraugli_estimate().expect("ba should be computed");
+    let ss2 = result
+        .ssimulacra2_estimate()
+        .expect("ss2 should be computed");
+    let ba = result
+        .butteraugli_estimate()
+        .expect("ba should be computed");
 
     const REL_TOL: f32 = 0.10;
     const ABS_TOL: f32 = 0.002;
@@ -134,17 +138,26 @@ fn check_rgb(
     assert!(
         (mpe - baseline.mpe).abs() <= mpe_tol,
         "[{}] MPE: expected {:.6} ± {:.6}, got {:.6}",
-        baseline.name, baseline.mpe, mpe_tol, mpe
+        baseline.name,
+        baseline.mpe,
+        mpe_tol,
+        mpe
     );
     assert!(
         (ss2 - baseline.ss2).abs() <= ss2_tol,
         "[{}] SS2: expected {:.2} ± {:.2}, got {:.2}",
-        baseline.name, baseline.ss2, ss2_tol, ss2
+        baseline.name,
+        baseline.ss2,
+        ss2_tol,
+        ss2
     );
     assert!(
         (ba - baseline.ba).abs() <= ba_tol,
         "[{}] BA: expected {:.4} ± {:.4}, got {:.4}",
-        baseline.name, baseline.ba, ba_tol, ba
+        baseline.name,
+        baseline.ba,
+        ba_tol,
+        ba
     );
 }
 
@@ -164,8 +177,12 @@ fn check_rgba(
     let result = zenquant::quantize_rgba(pixels, width, height, &config).unwrap();
 
     let mpe = result.mpe_score().expect("metric should be computed");
-    let ss2 = result.ssimulacra2_estimate().expect("ss2 should be computed");
-    let ba = result.butteraugli_estimate().expect("ba should be computed");
+    let ss2 = result
+        .ssimulacra2_estimate()
+        .expect("ss2 should be computed");
+    let ba = result
+        .butteraugli_estimate()
+        .expect("ba should be computed");
 
     const REL_TOL: f32 = 0.10;
     const ABS_TOL: f32 = 0.002;
@@ -177,17 +194,26 @@ fn check_rgba(
     assert!(
         (mpe - baseline.mpe).abs() <= mpe_tol,
         "[{}] MPE: expected {:.6} ± {:.6}, got {:.6}",
-        baseline.name, baseline.mpe, mpe_tol, mpe
+        baseline.name,
+        baseline.mpe,
+        mpe_tol,
+        mpe
     );
     assert!(
         (ss2 - baseline.ss2).abs() <= ss2_tol,
         "[{}] SS2: expected {:.2} ± {:.2}, got {:.2}",
-        baseline.name, baseline.ss2, ss2_tol, ss2
+        baseline.name,
+        baseline.ss2,
+        ss2_tol,
+        ss2
     );
     assert!(
         (ba - baseline.ba).abs() <= ba_tol,
         "[{}] BA: expected {:.4} ± {:.4}, got {:.4}",
-        baseline.name, baseline.ba, ba_tol, ba
+        baseline.name,
+        baseline.ba,
+        ba_tol,
+        ba
     );
 }
 
@@ -257,64 +283,174 @@ fn calibrate() {
 
 #[test]
 fn regress_gradient_64_fast_16c() {
-    check_rgb(&gradient_image(64, 64), 64, 64, Quality::Fast, 16,
-        &Baseline { name: "gradient_64/fast/16c", mpe: 0.156743, ss2: -1.61, ba: 20.4349 });
+    check_rgb(
+        &gradient_image(64, 64),
+        64,
+        64,
+        Quality::Fast,
+        16,
+        &Baseline {
+            name: "gradient_64/fast/16c",
+            mpe: 0.156743,
+            ss2: -1.61,
+            ba: 20.4349,
+        },
+    );
 }
 
 #[test]
 fn regress_gradient_64_fast_256c() {
-    check_rgb(&gradient_image(64, 64), 64, 64, Quality::Fast, 256,
-        &Baseline { name: "gradient_64/fast/256c", mpe: 0.022407, ss2: 80.08, ba: 3.2459 });
+    check_rgb(
+        &gradient_image(64, 64),
+        64,
+        64,
+        Quality::Fast,
+        256,
+        &Baseline {
+            name: "gradient_64/fast/256c",
+            mpe: 0.022407,
+            ss2: 80.08,
+            ba: 3.2459,
+        },
+    );
 }
 
 #[test]
 fn regress_gradient_64_balanced_16c() {
-    check_rgb(&gradient_image(64, 64), 64, 64, Quality::Balanced, 16,
-        &Baseline { name: "gradient_64/balanced/16c", mpe: 0.157420, ss2: -1.61, ba: 20.6117 });
+    check_rgb(
+        &gradient_image(64, 64),
+        64,
+        64,
+        Quality::Balanced,
+        16,
+        &Baseline {
+            name: "gradient_64/balanced/16c",
+            mpe: 0.157420,
+            ss2: -1.61,
+            ba: 20.6117,
+        },
+    );
 }
 
 #[test]
 fn regress_gradient_64_balanced_256c() {
-    check_rgb(&gradient_image(64, 64), 64, 64, Quality::Balanced, 256,
-        &Baseline { name: "gradient_64/balanced/256c", mpe: 0.021906, ss2: 80.35, ba: 3.1833 });
+    check_rgb(
+        &gradient_image(64, 64),
+        64,
+        64,
+        Quality::Balanced,
+        256,
+        &Baseline {
+            name: "gradient_64/balanced/256c",
+            mpe: 0.021906,
+            ss2: 80.35,
+            ba: 3.1833,
+        },
+    );
 }
 
 #[test]
 fn regress_gradient_64_best_16c() {
-    check_rgb(&gradient_image(64, 64), 64, 64, Quality::Best, 16,
-        &Baseline { name: "gradient_64/best/16c", mpe: 0.157330, ss2: -1.61, ba: 20.5882 });
+    check_rgb(
+        &gradient_image(64, 64),
+        64,
+        64,
+        Quality::Best,
+        16,
+        &Baseline {
+            name: "gradient_64/best/16c",
+            mpe: 0.157330,
+            ss2: -1.61,
+            ba: 20.5882,
+        },
+    );
 }
 
 #[test]
 fn regress_gradient_64_best_256c() {
-    check_rgb(&gradient_image(64, 64), 64, 64, Quality::Best, 256,
-        &Baseline { name: "gradient_64/best/256c", mpe: 0.026987, ss2: 77.56, ba: 3.8243 });
+    check_rgb(
+        &gradient_image(64, 64),
+        64,
+        64,
+        Quality::Best,
+        256,
+        &Baseline {
+            name: "gradient_64/best/256c",
+            mpe: 0.026987,
+            ss2: 77.56,
+            ba: 3.8243,
+        },
+    );
 }
 
 // --- gradient 256x256 (larger, more gradient precision needed) ---
 
 #[test]
 fn regress_gradient_256_fast_16c() {
-    check_rgb(&gradient_image(256, 256), 256, 256, Quality::Fast, 16,
-        &Baseline { name: "gradient_256/fast/16c", mpe: 0.177423, ss2: -12.30, ba: 23.7659 });
+    check_rgb(
+        &gradient_image(256, 256),
+        256,
+        256,
+        Quality::Fast,
+        16,
+        &Baseline {
+            name: "gradient_256/fast/16c",
+            mpe: 0.177423,
+            ss2: -12.30,
+            ba: 23.7659,
+        },
+    );
 }
 
 #[test]
 fn regress_gradient_256_fast_256c() {
-    check_rgb(&gradient_image(256, 256), 256, 256, Quality::Fast, 256,
-        &Baseline { name: "gradient_256/fast/256c", mpe: 0.056919, ss2: 60.89, ba: 7.5856 });
+    check_rgb(
+        &gradient_image(256, 256),
+        256,
+        256,
+        Quality::Fast,
+        256,
+        &Baseline {
+            name: "gradient_256/fast/256c",
+            mpe: 0.056919,
+            ss2: 60.89,
+            ba: 7.5856,
+        },
+    );
 }
 
 #[test]
 fn regress_gradient_256_balanced_256c() {
-    check_rgb(&gradient_image(256, 256), 256, 256, Quality::Balanced, 256,
-        &Baseline { name: "gradient_256/balanced/256c", mpe: 0.038337, ss2: 71.35, ba: 5.2304 });
+    check_rgb(
+        &gradient_image(256, 256),
+        256,
+        256,
+        Quality::Balanced,
+        256,
+        &Baseline {
+            name: "gradient_256/balanced/256c",
+            mpe: 0.038337,
+            ss2: 71.35,
+            ba: 5.2304,
+        },
+    );
 }
 
 #[test]
 fn regress_gradient_256_best_256c() {
-    check_rgb(&gradient_image(256, 256), 256, 256, Quality::Best, 256,
-        &Baseline { name: "gradient_256/best/256c", mpe: 0.037371, ss2: 71.88, ba: 5.1203 });
+    check_rgb(
+        &gradient_image(256, 256),
+        256,
+        256,
+        Quality::Best,
+        256,
+        &Baseline {
+            name: "gradient_256/best/256c",
+            mpe: 0.037371,
+            ss2: 71.88,
+            ba: 5.1203,
+        },
+    );
 }
 
 // ============================================================================
@@ -323,38 +459,104 @@ fn regress_gradient_256_best_256c() {
 
 #[test]
 fn regress_noise_64_fast_16c() {
-    check_rgb(&noisy_image(64, 64), 64, 64, Quality::Fast, 16,
-        &Baseline { name: "noise_64/fast/16c", mpe: 0.027894, ss2: 77.06, ba: 3.9405 });
+    check_rgb(
+        &noisy_image(64, 64),
+        64,
+        64,
+        Quality::Fast,
+        16,
+        &Baseline {
+            name: "noise_64/fast/16c",
+            mpe: 0.027894,
+            ss2: 77.06,
+            ba: 3.9405,
+        },
+    );
 }
 
 #[test]
 fn regress_noise_64_balanced_16c() {
-    check_rgb(&noisy_image(64, 64), 64, 64, Quality::Balanced, 16,
-        &Baseline { name: "noise_64/balanced/16c", mpe: 0.024669, ss2: 78.82, ba: 3.5286 });
+    check_rgb(
+        &noisy_image(64, 64),
+        64,
+        64,
+        Quality::Balanced,
+        16,
+        &Baseline {
+            name: "noise_64/balanced/16c",
+            mpe: 0.024669,
+            ss2: 78.82,
+            ba: 3.5286,
+        },
+    );
 }
 
 #[test]
 fn regress_noise_64_best_16c() {
-    check_rgb(&noisy_image(64, 64), 64, 64, Quality::Best, 16,
-        &Baseline { name: "noise_64/best/16c", mpe: 0.024241, ss2: 79.06, ba: 3.4751 });
+    check_rgb(
+        &noisy_image(64, 64),
+        64,
+        64,
+        Quality::Best,
+        16,
+        &Baseline {
+            name: "noise_64/best/16c",
+            mpe: 0.024241,
+            ss2: 79.06,
+            ba: 3.4751,
+        },
+    );
 }
 
 #[test]
 fn regress_noise_256_fast_16c() {
-    check_rgb(&noisy_image(256, 256), 256, 256, Quality::Fast, 16,
-        &Baseline { name: "noise_256/fast/16c", mpe: 0.034009, ss2: 73.72, ba: 4.7231 });
+    check_rgb(
+        &noisy_image(256, 256),
+        256,
+        256,
+        Quality::Fast,
+        16,
+        &Baseline {
+            name: "noise_256/fast/16c",
+            mpe: 0.034009,
+            ss2: 73.72,
+            ba: 4.7231,
+        },
+    );
 }
 
 #[test]
 fn regress_noise_256_balanced_16c() {
-    check_rgb(&noisy_image(256, 256), 256, 256, Quality::Balanced, 16,
-        &Baseline { name: "noise_256/balanced/16c", mpe: 0.032150, ss2: 74.74, ba: 4.4852 });
+    check_rgb(
+        &noisy_image(256, 256),
+        256,
+        256,
+        Quality::Balanced,
+        16,
+        &Baseline {
+            name: "noise_256/balanced/16c",
+            mpe: 0.032150,
+            ss2: 74.74,
+            ba: 4.4852,
+        },
+    );
 }
 
 #[test]
 fn regress_noise_256_best_16c() {
-    check_rgb(&noisy_image(256, 256), 256, 256, Quality::Best, 16,
-        &Baseline { name: "noise_256/best/16c", mpe: 0.030406, ss2: 75.69, ba: 4.2619 });
+    check_rgb(
+        &noisy_image(256, 256),
+        256,
+        256,
+        Quality::Best,
+        16,
+        &Baseline {
+            name: "noise_256/best/16c",
+            mpe: 0.030406,
+            ss2: 75.69,
+            ba: 4.2619,
+        },
+    );
 }
 
 // ============================================================================
@@ -363,38 +565,104 @@ fn regress_noise_256_best_16c() {
 
 #[test]
 fn regress_hue_sweep_fast_16c() {
-    check_rgb(&hue_sweep_image(128, 128), 128, 128, Quality::Fast, 16,
-        &Baseline { name: "hue_sweep/fast/16c", mpe: 0.141085, ss2: 9.01, ba: 18.8974 });
+    check_rgb(
+        &hue_sweep_image(128, 128),
+        128,
+        128,
+        Quality::Fast,
+        16,
+        &Baseline {
+            name: "hue_sweep/fast/16c",
+            mpe: 0.141085,
+            ss2: 9.01,
+            ba: 18.8974,
+        },
+    );
 }
 
 #[test]
 fn regress_hue_sweep_fast_256c() {
-    check_rgb(&hue_sweep_image(128, 128), 128, 128, Quality::Fast, 256,
-        &Baseline { name: "hue_sweep/fast/256c", mpe: 0.030204, ss2: 75.80, ba: 4.2361 });
+    check_rgb(
+        &hue_sweep_image(128, 128),
+        128,
+        128,
+        Quality::Fast,
+        256,
+        &Baseline {
+            name: "hue_sweep/fast/256c",
+            mpe: 0.030204,
+            ss2: 75.80,
+            ba: 4.2361,
+        },
+    );
 }
 
 #[test]
 fn regress_hue_sweep_balanced_16c() {
-    check_rgb(&hue_sweep_image(128, 128), 128, 128, Quality::Balanced, 16,
-        &Baseline { name: "hue_sweep/balanced/16c", mpe: 0.140249, ss2: 9.31, ba: 18.8840 });
+    check_rgb(
+        &hue_sweep_image(128, 128),
+        128,
+        128,
+        Quality::Balanced,
+        16,
+        &Baseline {
+            name: "hue_sweep/balanced/16c",
+            mpe: 0.140249,
+            ss2: 9.31,
+            ba: 18.8840,
+        },
+    );
 }
 
 #[test]
 fn regress_hue_sweep_balanced_256c() {
-    check_rgb(&hue_sweep_image(128, 128), 128, 128, Quality::Balanced, 256,
-        &Baseline { name: "hue_sweep/balanced/256c", mpe: 0.028936, ss2: 76.49, ba: 4.0738 });
+    check_rgb(
+        &hue_sweep_image(128, 128),
+        128,
+        128,
+        Quality::Balanced,
+        256,
+        &Baseline {
+            name: "hue_sweep/balanced/256c",
+            mpe: 0.028936,
+            ss2: 76.49,
+            ba: 4.0738,
+        },
+    );
 }
 
 #[test]
 fn regress_hue_sweep_best_16c() {
-    check_rgb(&hue_sweep_image(128, 128), 128, 128, Quality::Best, 16,
-        &Baseline { name: "hue_sweep/best/16c", mpe: 0.140347, ss2: 9.28, ba: 18.8856 });
+    check_rgb(
+        &hue_sweep_image(128, 128),
+        128,
+        128,
+        Quality::Best,
+        16,
+        &Baseline {
+            name: "hue_sweep/best/16c",
+            mpe: 0.140347,
+            ss2: 9.28,
+            ba: 18.8856,
+        },
+    );
 }
 
 #[test]
 fn regress_hue_sweep_best_256c() {
-    check_rgb(&hue_sweep_image(128, 128), 128, 128, Quality::Best, 256,
-        &Baseline { name: "hue_sweep/best/256c", mpe: 0.028386, ss2: 76.79, ba: 4.0034 });
+    check_rgb(
+        &hue_sweep_image(128, 128),
+        128,
+        128,
+        Quality::Best,
+        256,
+        &Baseline {
+            name: "hue_sweep/best/256c",
+            mpe: 0.028386,
+            ss2: 76.79,
+            ba: 4.0034,
+        },
+    );
 }
 
 // ============================================================================
@@ -403,20 +671,53 @@ fn regress_hue_sweep_best_256c() {
 
 #[test]
 fn regress_rgba_gradient_fast_256c() {
-    check_rgba(&rgba_gradient(128, 128), 128, 128, Quality::Fast, 256,
-        &Baseline { name: "rgba_gradient/fast/256c", mpe: 0.035264, ss2: 73.04, ba: 4.8801 });
+    check_rgba(
+        &rgba_gradient(128, 128),
+        128,
+        128,
+        Quality::Fast,
+        256,
+        &Baseline {
+            name: "rgba_gradient/fast/256c",
+            mpe: 0.035264,
+            ss2: 73.04,
+            ba: 4.8801,
+        },
+    );
 }
 
 #[test]
 fn regress_rgba_gradient_balanced_256c() {
-    check_rgba(&rgba_gradient(128, 128), 128, 128, Quality::Balanced, 256,
-        &Baseline { name: "rgba_gradient/balanced/256c", mpe: 0.037121, ss2: 72.02, ba: 5.0918 });
+    check_rgba(
+        &rgba_gradient(128, 128),
+        128,
+        128,
+        Quality::Balanced,
+        256,
+        &Baseline {
+            name: "rgba_gradient/balanced/256c",
+            mpe: 0.037121,
+            ss2: 72.02,
+            ba: 5.0918,
+        },
+    );
 }
 
 #[test]
 fn regress_rgba_gradient_best_256c() {
-    check_rgba(&rgba_gradient(128, 128), 128, 128, Quality::Best, 256,
-        &Baseline { name: "rgba_gradient/best/256c", mpe: 0.033064, ss2: 74.24, ba: 4.6022 });
+    check_rgba(
+        &rgba_gradient(128, 128),
+        128,
+        128,
+        Quality::Best,
+        256,
+        &Baseline {
+            name: "rgba_gradient/best/256c",
+            mpe: 0.033064,
+            ss2: 74.24,
+            ba: 4.6022,
+        },
+    );
 }
 
 // ============================================================================
@@ -464,6 +765,7 @@ fn higher_quality_means_lower_or_equal_mpe() {
     assert!(
         scores[2] <= scores[0] + 0.002,
         "Best ({:.6}) should be <= Fast ({:.6})",
-        scores[2], scores[0]
+        scores[2],
+        scores[0]
     );
 }
