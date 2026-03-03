@@ -236,6 +236,32 @@ impl PaletteSimd {
         }
     }
 
+    /// Build from a raw slice of OKLab entries (e.g. centroids during k-means).
+    pub(crate) fn from_oklab_slice(entries: &[OKLab], start: usize) -> Self {
+        let num_entries = entries.len();
+        let num_groups = num_entries.saturating_sub(start).div_ceil(8);
+
+        let mut l = vec![[f32::INFINITY; 8]; num_groups];
+        let mut a = vec![[f32::INFINITY; 8]; num_groups];
+        let mut b = vec![[f32::INFINITY; 8]; num_groups];
+
+        for (i, entry) in entries[start..].iter().enumerate() {
+            let group = i / 8;
+            let lane = i % 8;
+            l[group][lane] = entry.l;
+            a[group][lane] = entry.a;
+            b[group][lane] = entry.b;
+        }
+
+        Self {
+            l,
+            a,
+            b,
+            num_entries,
+            start,
+        }
+    }
+
     /// Find the nearest palette index to the given OKLab color.
     pub(crate) fn nearest(&self, color: OKLab) -> u8 {
         incant!(palette_nearest_dispatch(self, color), [v3, neon])

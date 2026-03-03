@@ -106,6 +106,13 @@ pub(crate) mod simd {
             }
         }
 
+        pub(crate) fn from_oklab_slice(entries: &[OKLab], start: usize) -> Self {
+            Self {
+                entries: entries.to_vec(),
+                start,
+            }
+        }
+
         pub(crate) fn nearest(&self, color: OKLab) -> u8 {
             let mut best_idx = self.start;
             let mut best_dist = f32::MAX;

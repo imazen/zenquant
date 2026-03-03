@@ -237,18 +237,13 @@ pub fn refine_against_pixels(
     weights: &[f32],
     iterations: usize,
 ) -> Vec<OKLab> {
-    use crate::oklab::srgb_to_oklab;
-
     let k = centroids.len();
     if k == 0 {
         return centroids;
     }
 
     // Pre-convert all pixels to OKLab once (avoids repeated cube-root per iteration)
-    let labs: Vec<OKLab> = pixels
-        .iter()
-        .map(|p| srgb_to_oklab(p.r, p.g, p.b))
-        .collect();
+    let labs = crate::simd::batch_srgb_to_oklab_vec(pixels);
 
     // Pre-compute grid OKLab values once (4096 entries, avoids 4096 srgb_to_oklab per iteration)
     let grid_labs = precompute_nn_grid();
@@ -339,24 +334,23 @@ pub fn refine_against_pixels_rgba(
     weights: &[f32],
     iterations: usize,
 ) -> Vec<OKLab> {
-    use crate::oklab::srgb_to_oklab;
-
     let k = centroids.len();
     if k == 0 {
         return centroids;
     }
 
     // Pre-convert all pixels to OKLab once (avoids repeated cube-root per iteration)
-    let labs: Vec<OKLab> = pixels
+    // Batch-convert RGB channels, then zero out transparent pixels
+    let rgb_pixels: Vec<rgb::RGB<u8>> = pixels
         .iter()
-        .map(|p| {
-            if p.a == 0 {
-                OKLab::new(0.0, 0.0, 0.0) // placeholder for transparent pixels
-            } else {
-                srgb_to_oklab(p.r, p.g, p.b)
-            }
-        })
+        .map(|p| rgb::RGB::new(p.r, p.g, p.b))
         .collect();
+    let mut labs = crate::simd::batch_srgb_to_oklab_vec(&rgb_pixels);
+    for (lab, pixel) in labs.iter_mut().zip(pixels.iter()) {
+        if pixel.a == 0 {
+            *lab = OKLab::new(0.0, 0.0, 0.0);
+        }
+    }
 
     // Pre-compute grid OKLab values once (4096 entries)
     let grid_labs = precompute_nn_grid();
@@ -454,35 +448,33 @@ fn find_nearest(centroids: &[OKLab], color: OKLab) -> usize {
 /// Pre-compute OKLab values for the 4-bit sRGB grid (16×16×16 = 4096 entries).
 /// Called once before the k-means loop to avoid recomputing cube roots every iteration.
 fn precompute_nn_grid() -> Vec<OKLab> {
-    use crate::oklab::srgb_to_oklab;
-
     const BITS: usize = 4;
     const SIZE: usize = 1 << BITS;
     const TOTAL: usize = SIZE * SIZE * SIZE;
     let shift = 8 - BITS;
 
-    let mut grid = Vec::with_capacity(TOTAL);
+    let mut grid_rgb = Vec::with_capacity(TOTAL);
     for r_idx in 0..SIZE {
         for g_idx in 0..SIZE {
             for b_idx in 0..SIZE {
                 let r = ((r_idx << shift) | (1 << (shift - 1))) as u8;
                 let g = ((g_idx << shift) | (1 << (shift - 1))) as u8;
                 let b = ((b_idx << shift) | (1 << (shift - 1))) as u8;
-                grid.push(srgb_to_oklab(r, g, b));
+                grid_rgb.push(rgb::RGB::new(r, g, b));
             }
         }
     }
-    grid
+    crate::simd::batch_srgb_to_oklab_vec(&grid_rgb)
 }
 
-/// Build a 4-bit sRGB→centroid cache (16×16×16 = 4KB) using brute-force search.
+/// Build a 4-bit sRGB→centroid cache (16×16×16 = 4KB) using SIMD brute-force.
 /// Used for the first k-means iteration (no previous cache to seed from).
 fn build_centroid_nn_cache(centroids: &[OKLab], grid_labs: &[OKLab]) -> Vec<u8> {
-    let mut cache = vec![0u8; grid_labs.len()];
-    for (i, lab) in grid_labs.iter().enumerate() {
-        cache[i] = find_nearest(centroids, *lab) as u8;
-    }
-    cache
+    let simd_layout = crate::simd::PaletteSimd::from_oklab_slice(centroids, 0);
+    grid_labs
+        .iter()
+        .map(|lab| simd_layout.nearest(*lab))
+        .collect()
 }
 
 /// Rebuild the NN cache using the previous cache as seed + neighbor refinement.
@@ -823,12 +815,28 @@ pub fn refine_against_pixels_alpha(
     weights: &[f32],
     iterations: usize,
 ) -> Vec<OKLabA> {
-    use crate::oklab::srgb_to_oklab;
-
     let k = centroids.len();
     if k == 0 {
         return centroids;
     }
+
+    // Pre-convert all pixels to OKLabA once (avoids repeated cube-root per iteration)
+    let rgb_pixels: Vec<rgb::RGB<u8>> = pixels
+        .iter()
+        .map(|p| rgb::RGB::new(p.r, p.g, p.b))
+        .collect();
+    let labs = crate::simd::batch_srgb_to_oklab_vec(&rgb_pixels);
+    let labas: Vec<OKLabA> = labs
+        .iter()
+        .zip(pixels.iter())
+        .map(|(lab, pixel)| {
+            if pixel.a == 0 {
+                OKLabA::new(0.0, 0.0, 0.0, 0.0)
+            } else {
+                OKLabA::new(lab.l, lab.a, lab.b, pixel.a as f32 / 255.0)
+            }
+        })
+        .collect();
 
     for _ in 0..iterations {
         let mut sums_l = vec![0.0f64; k];
@@ -837,19 +845,16 @@ pub fn refine_against_pixels_alpha(
         let mut sums_al = vec![0.0f64; k];
         let mut total_w = vec![0.0f64; k];
 
-        for (pixel, &weight) in pixels.iter().zip(weights.iter()) {
-            if pixel.a == 0 {
+        for (&laba, &weight) in labas.iter().zip(weights.iter()) {
+            if laba.alpha == 0.0 {
                 continue;
             }
-            let lab = srgb_to_oklab(pixel.r, pixel.g, pixel.b);
-            let alpha_f = pixel.a as f32 / 255.0;
-            let laba = OKLabA::new(lab.l, lab.a, lab.b, alpha_f);
             let nearest = find_nearest_alpha(&centroids, laba);
             let w = weight as f64;
-            sums_l[nearest] += lab.l as f64 * w;
-            sums_a[nearest] += lab.a as f64 * w;
-            sums_b[nearest] += lab.b as f64 * w;
-            sums_al[nearest] += alpha_f as f64 * w;
+            sums_l[nearest] += laba.lab.l as f64 * w;
+            sums_a[nearest] += laba.lab.a as f64 * w;
+            sums_b[nearest] += laba.lab.b as f64 * w;
+            sums_al[nearest] += laba.alpha as f64 * w;
             total_w[nearest] += w;
         }
 
