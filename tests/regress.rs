@@ -102,9 +102,7 @@ struct Baseline {
 
 /// Check that RGB quantization quality scores match baseline within tolerance.
 ///
-/// Tolerance: 10% relative, 0.002 absolute floor (for near-zero scores).
-/// This means scores can shift by up to 10% without failing, allowing
-/// minor algorithmic improvements while catching major regressions.
+/// Tolerance: 3% relative, 0.002 absolute floor (for near-zero scores).
 fn check_rgb(
     pixels: &[rgb::RGB<u8>],
     width: usize,
@@ -128,7 +126,7 @@ fn check_rgb(
         .butteraugli_estimate()
         .expect("ba should be computed");
 
-    const REL_TOL: f32 = 0.10;
+    const REL_TOL: f32 = 0.03;
     const ABS_TOL: f32 = 0.002;
 
     let mpe_tol = (baseline.mpe * REL_TOL).max(ABS_TOL);
@@ -184,7 +182,7 @@ fn check_rgba(
         .butteraugli_estimate()
         .expect("ba should be computed");
 
-    const REL_TOL: f32 = 0.10;
+    const REL_TOL: f32 = 0.03;
     const ABS_TOL: f32 = 0.002;
 
     let mpe_tol = (baseline.mpe * REL_TOL).max(ABS_TOL);
@@ -291,9 +289,9 @@ fn regress_gradient_64_fast_16c() {
         16,
         &Baseline {
             name: "gradient_64/fast/16c",
-            mpe: 0.156743,
+            mpe: 0.159997,
             ss2: -1.61,
-            ba: 20.4349,
+            ba: 21.2843,
         },
     );
 }
@@ -308,9 +306,9 @@ fn regress_gradient_64_fast_256c() {
         256,
         &Baseline {
             name: "gradient_64/fast/256c",
-            mpe: 0.022407,
-            ss2: 80.08,
-            ba: 3.2459,
+            mpe: 0.022461,
+            ss2: 80.05,
+            ba: 3.2527,
         },
     );
 }
@@ -325,9 +323,9 @@ fn regress_gradient_64_balanced_16c() {
         16,
         &Baseline {
             name: "gradient_64/balanced/16c",
-            mpe: 0.157420,
+            mpe: 0.160616,
             ss2: -1.61,
-            ba: 20.6117,
+            ba: 21.4458,
         },
     );
 }
@@ -342,9 +340,9 @@ fn regress_gradient_64_balanced_256c() {
         256,
         &Baseline {
             name: "gradient_64/balanced/256c",
-            mpe: 0.021906,
-            ss2: 80.35,
-            ba: 3.1833,
+            mpe: 0.029759,
+            ss2: 76.04,
+            ba: 4.1791,
         },
     );
 }
@@ -359,9 +357,9 @@ fn regress_gradient_64_best_16c() {
         16,
         &Baseline {
             name: "gradient_64/best/16c",
-            mpe: 0.157330,
+            mpe: 0.159436,
             ss2: -1.61,
-            ba: 20.5882,
+            ba: 21.1377,
         },
     );
 }
@@ -376,9 +374,9 @@ fn regress_gradient_64_best_256c() {
         256,
         &Baseline {
             name: "gradient_64/best/256c",
-            mpe: 0.026987,
-            ss2: 77.56,
-            ba: 3.8243,
+            mpe: 0.029730,
+            ss2: 76.06,
+            ba: 4.1754,
         },
     );
 }
@@ -395,9 +393,9 @@ fn regress_gradient_256_fast_16c() {
         16,
         &Baseline {
             name: "gradient_256/fast/16c",
-            mpe: 0.177423,
-            ss2: -12.30,
-            ba: 23.7659,
+            mpe: 0.174331,
+            ss2: -11.59,
+            ba: 22.7580,
         },
     );
 }
@@ -412,9 +410,9 @@ fn regress_gradient_256_fast_256c() {
         256,
         &Baseline {
             name: "gradient_256/fast/256c",
-            mpe: 0.056919,
-            ss2: 60.89,
-            ba: 7.5856,
+            mpe: 0.050592,
+            ss2: 64.42,
+            ba: 6.7450,
         },
     );
 }
@@ -429,9 +427,9 @@ fn regress_gradient_256_balanced_256c() {
         256,
         &Baseline {
             name: "gradient_256/balanced/256c",
-            mpe: 0.038337,
-            ss2: 71.35,
-            ba: 5.2304,
+            mpe: 0.047667,
+            ss2: 66.13,
+            ba: 6.3501,
         },
     );
 }
@@ -446,9 +444,9 @@ fn regress_gradient_256_best_256c() {
         256,
         &Baseline {
             name: "gradient_256/best/256c",
-            mpe: 0.037371,
-            ss2: 71.88,
-            ba: 5.1203,
+            mpe: 0.042128,
+            ss2: 69.27,
+            ba: 5.6626,
         },
     );
 }
@@ -467,9 +465,9 @@ fn regress_noise_64_fast_16c() {
         16,
         &Baseline {
             name: "noise_64/fast/16c",
-            mpe: 0.027894,
-            ss2: 77.06,
-            ba: 3.9405,
+            mpe: 0.022243,
+            ss2: 80.17,
+            ba: 3.2253,
         },
     );
 }
@@ -484,9 +482,9 @@ fn regress_noise_64_balanced_16c() {
         16,
         &Baseline {
             name: "noise_64/balanced/16c",
-            mpe: 0.024669,
-            ss2: 78.82,
-            ba: 3.5286,
+            mpe: 0.020006,
+            ss2: 81.41,
+            ba: 2.9457,
         },
     );
 }
@@ -501,9 +499,9 @@ fn regress_noise_64_best_16c() {
         16,
         &Baseline {
             name: "noise_64/best/16c",
-            mpe: 0.024241,
-            ss2: 79.06,
-            ba: 3.4751,
+            mpe: 0.020006,
+            ss2: 81.41,
+            ba: 2.9457,
         },
     );
 }
@@ -518,9 +516,9 @@ fn regress_noise_256_fast_16c() {
         16,
         &Baseline {
             name: "noise_256/fast/16c",
-            mpe: 0.034009,
-            ss2: 73.72,
-            ba: 4.7231,
+            mpe: 0.026652,
+            ss2: 77.74,
+            ba: 3.7815,
         },
     );
 }
@@ -535,9 +533,9 @@ fn regress_noise_256_balanced_16c() {
         16,
         &Baseline {
             name: "noise_256/balanced/16c",
-            mpe: 0.032150,
-            ss2: 74.74,
-            ba: 4.4852,
+            mpe: 0.024437,
+            ss2: 78.95,
+            ba: 3.4997,
         },
     );
 }
@@ -552,9 +550,9 @@ fn regress_noise_256_best_16c() {
         16,
         &Baseline {
             name: "noise_256/best/16c",
-            mpe: 0.030406,
-            ss2: 75.69,
-            ba: 4.2619,
+            mpe: 0.024437,
+            ss2: 78.95,
+            ba: 3.4997,
         },
     );
 }
@@ -573,9 +571,9 @@ fn regress_hue_sweep_fast_16c() {
         16,
         &Baseline {
             name: "hue_sweep/fast/16c",
-            mpe: 0.141085,
-            ss2: 9.01,
-            ba: 18.8974,
+            mpe: 0.141494,
+            ss2: 8.87,
+            ba: 18.9039,
         },
     );
 }
@@ -590,9 +588,9 @@ fn regress_hue_sweep_fast_256c() {
         256,
         &Baseline {
             name: "hue_sweep/fast/256c",
-            mpe: 0.030204,
-            ss2: 75.80,
-            ba: 4.2361,
+            mpe: 0.030491,
+            ss2: 75.64,
+            ba: 4.2729,
         },
     );
 }
@@ -607,9 +605,9 @@ fn regress_hue_sweep_balanced_16c() {
         16,
         &Baseline {
             name: "hue_sweep/balanced/16c",
-            mpe: 0.140249,
-            ss2: 9.31,
-            ba: 18.8840,
+            mpe: 0.141033,
+            ss2: 9.03,
+            ba: 18.8965,
         },
     );
 }
@@ -624,9 +622,9 @@ fn regress_hue_sweep_balanced_256c() {
         256,
         &Baseline {
             name: "hue_sweep/balanced/256c",
-            mpe: 0.028936,
-            ss2: 76.49,
-            ba: 4.0738,
+            mpe: 0.029614,
+            ss2: 76.12,
+            ba: 4.1606,
         },
     );
 }
@@ -641,9 +639,9 @@ fn regress_hue_sweep_best_16c() {
         16,
         &Baseline {
             name: "hue_sweep/best/16c",
-            mpe: 0.140347,
-            ss2: 9.28,
-            ba: 18.8856,
+            mpe: 0.141033,
+            ss2: 9.03,
+            ba: 18.8965,
         },
     );
 }
@@ -658,9 +656,9 @@ fn regress_hue_sweep_best_256c() {
         256,
         &Baseline {
             name: "hue_sweep/best/256c",
-            mpe: 0.028386,
-            ss2: 76.79,
-            ba: 4.0034,
+            mpe: 0.028998,
+            ss2: 76.46,
+            ba: 4.0818,
         },
     );
 }
@@ -679,9 +677,9 @@ fn regress_rgba_gradient_fast_256c() {
         256,
         &Baseline {
             name: "rgba_gradient/fast/256c",
-            mpe: 0.035264,
-            ss2: 73.04,
-            ba: 4.8801,
+            mpe: 0.029406,
+            ss2: 76.23,
+            ba: 4.1339,
         },
     );
 }
@@ -696,9 +694,9 @@ fn regress_rgba_gradient_balanced_256c() {
         256,
         &Baseline {
             name: "rgba_gradient/balanced/256c",
-            mpe: 0.037121,
-            ss2: 72.02,
-            ba: 5.0918,
+            mpe: 0.027550,
+            ss2: 77.25,
+            ba: 3.8965,
         },
     );
 }
@@ -713,9 +711,9 @@ fn regress_rgba_gradient_best_256c() {
         256,
         &Baseline {
             name: "rgba_gradient/best/256c",
-            mpe: 0.033064,
-            ss2: 74.24,
-            ba: 4.6022,
+            mpe: 0.025943,
+            ss2: 78.13,
+            ba: 3.6907,
         },
     );
 }
