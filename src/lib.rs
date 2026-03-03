@@ -928,6 +928,7 @@ pub fn quantize(
         run_priority: effective_run_priority,
         dither_strength: tuning.dither_strength,
         prev_indices: None,
+        precomputed_labs: None,
     };
     let mut indices = dither::dither_image(pixels, &dither_params, mpe_acc.as_mut());
 
@@ -1176,6 +1177,7 @@ pub fn quantize_rgba(
             run_priority: effective_run_priority,
             dither_strength: tuning.dither_strength,
             prev_indices: None,
+            precomputed_labs: None,
         };
         let mut indices = dither::dither_image_rgba_alpha(pixels, &dither_params, None);
 
@@ -1252,6 +1254,7 @@ pub fn quantize_rgba(
             run_priority: effective_run_priority,
             dither_strength: tuning.dither_strength,
             prev_indices: None,
+            precomputed_labs: None,
         };
         let mut indices = dither::dither_image_rgba(pixels, &dither_params, None);
 
@@ -1713,6 +1716,7 @@ fn remap_rgb_impl(
         run_priority: effective_run_priority,
         dither_strength: tuning.dither_strength,
         prev_indices,
+        precomputed_labs: None,
     };
     let mut indices = dither::dither_image(pixels, &dither_params, None);
 
@@ -1876,6 +1880,7 @@ fn remap_rgba_impl(
         run_priority: effective_run_priority,
         dither_strength: tuning.dither_strength,
         prev_indices,
+        precomputed_labs: None,
     };
     let mut indices = if has_full_alpha {
         dither::dither_image_rgba_alpha(pixels, &dither_params, None)

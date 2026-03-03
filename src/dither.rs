@@ -487,6 +487,9 @@ pub struct DitherParams<'a> {
     pub dither_strength: f32,
     /// Previous frame's index buffer for temporal consistency (APNG).
     pub prev_indices: Option<&'a [u8]>,
+    /// Pre-computed OKLab values. If Some, skip batch sRGB→OKLab conversion.
+    /// The buffer is copied internally since error diffusion mutates it.
+    pub precomputed_labs: Option<&'a [OKLab]>,
 }
 
 /// Apply serpentine Floyd-Steinberg error diffusion with AQ modulation.
@@ -517,6 +520,7 @@ pub fn dither_image(
         run_priority,
         dither_strength,
         prev_indices,
+        precomputed_labs,
     } = *params;
     if mode == DitherMode::None {
         let indices = simple_remap(pixels, palette);
@@ -544,7 +548,13 @@ pub fn dither_image(
 
     // Working buffer in OKLab (we add error diffusion to this)
     let mut lab_buf = vec![[0.0f32; 3]; pixels.len()];
-    crate::simd::batch_srgb_to_oklab(pixels, &mut lab_buf);
+    if let Some(labs) = precomputed_labs {
+        for (dst, src) in lab_buf.iter_mut().zip(labs.iter()) {
+            *dst = [src.l, src.a, src.b];
+        }
+    } else {
+        crate::simd::batch_srgb_to_oklab(pixels, &mut lab_buf);
+    }
 
     let mut indices = vec![0u8; pixels.len()];
 
@@ -711,6 +721,7 @@ pub fn dither_image_rgba(
         run_priority,
         dither_strength,
         prev_indices,
+        precomputed_labs,
     } = *params;
     let transparent_idx = palette.transparent_index().unwrap_or(0);
 
@@ -747,8 +758,14 @@ pub fn dither_image_rgba(
     let use_sierra = mode == DitherMode::SierraLite;
 
     let mut lab_buf = vec![[0.0f32; 3]; pixels.len()];
-    let rgb_pixels: Vec<rgb::RGB<u8>> = pixels.iter().map(|p| rgb::RGB::new(p.r, p.g, p.b)).collect();
-    crate::simd::batch_srgb_to_oklab(&rgb_pixels, &mut lab_buf);
+    if let Some(labs) = precomputed_labs {
+        for (dst, src) in lab_buf.iter_mut().zip(labs.iter()) {
+            *dst = [src.l, src.a, src.b];
+        }
+    } else {
+        let rgb_pixels: Vec<rgb::RGB<u8>> = pixels.iter().map(|p| rgb::RGB::new(p.r, p.g, p.b)).collect();
+        crate::simd::batch_srgb_to_oklab(&rgb_pixels, &mut lab_buf);
+    }
 
     let mut indices = vec![0u8; pixels.len()];
     let dither_map = if linear {
@@ -906,6 +923,7 @@ pub fn dither_image_rgba_alpha(
         run_priority,
         dither_strength,
         prev_indices,
+        precomputed_labs,
     } = *params;
     let transparent_idx = palette.transparent_index().unwrap_or(0);
 
@@ -942,7 +960,12 @@ pub fn dither_image_rgba_alpha(
     let use_sierra = mode == DitherMode::SierraLite;
 
     // Working buffer: [L, a, b, alpha] — batch-convert RGB via SIMD, then fill alpha
-    let mut lab_buf: Vec<[f32; 4]> = {
+    let mut lab_buf: Vec<[f32; 4]> = if let Some(labs) = precomputed_labs {
+        labs.iter()
+            .zip(pixels.iter())
+            .map(|(lab, p)| [lab.l, lab.a, lab.b, p.a as f32 / 255.0])
+            .collect()
+    } else {
         let mut rgb_buf = vec![[0.0f32; 3]; pixels.len()];
         let rgb_pixels: Vec<rgb::RGB<u8>> = pixels.iter().map(|p| rgb::RGB::new(p.r, p.g, p.b)).collect();
         crate::simd::batch_srgb_to_oklab(&rgb_pixels, &mut rgb_buf);
@@ -1117,13 +1140,20 @@ fn dither_image_ordered(
         run_priority,
         dither_strength,
         prev_indices,
+        precomputed_labs,
         ..
     } = *params;
     let run_bias = run_priority.bias();
 
-    // Fast OKLab conversion (~3x faster than exact cbrt)
+    // Use precomputed OKLab or fast batch conversion (~3x faster than exact cbrt)
     let mut lab_buf = vec![[0.0f32; 3]; pixels.len()];
-    crate::simd::batch_srgb_to_oklab_fast(pixels, &mut lab_buf);
+    if let Some(labs) = precomputed_labs {
+        for (dst, src) in lab_buf.iter_mut().zip(labs.iter()) {
+            *dst = [src.l, src.a, src.b];
+        }
+    } else {
+        crate::simd::batch_srgb_to_oklab_fast(pixels, &mut lab_buf);
+    }
 
     let mut indices = vec![0u8; pixels.len()];
 
@@ -1219,15 +1249,22 @@ fn dither_image_rgba_ordered(
         run_priority,
         dither_strength,
         prev_indices,
+        precomputed_labs,
         ..
     } = *params;
     let transparent_idx = palette.transparent_index().unwrap_or(0);
     let run_bias = run_priority.bias();
 
     let mut lab_buf = vec![[0.0f32; 3]; pixels.len()];
-    let rgb_pixels: Vec<rgb::RGB<u8>> =
-        pixels.iter().map(|p| rgb::RGB::new(p.r, p.g, p.b)).collect();
-    crate::simd::batch_srgb_to_oklab_fast(&rgb_pixels, &mut lab_buf);
+    if let Some(labs) = precomputed_labs {
+        for (dst, src) in lab_buf.iter_mut().zip(labs.iter()) {
+            *dst = [src.l, src.a, src.b];
+        }
+    } else {
+        let rgb_pixels: Vec<rgb::RGB<u8>> =
+            pixels.iter().map(|p| rgb::RGB::new(p.r, p.g, p.b)).collect();
+        crate::simd::batch_srgb_to_oklab_fast(&rgb_pixels, &mut lab_buf);
+    }
 
     let mut indices = vec![0u8; pixels.len()];
 
@@ -1327,13 +1364,19 @@ fn dither_image_rgba_alpha_ordered(
         run_priority,
         dither_strength,
         prev_indices,
+        precomputed_labs,
         ..
     } = *params;
     let transparent_idx = palette.transparent_index().unwrap_or(0);
     let run_bias = run_priority.bias();
 
     // Working buffer: [L, a, b, alpha]
-    let mut lab_buf: Vec<[f32; 4]> = {
+    let mut lab_buf: Vec<[f32; 4]> = if let Some(labs) = precomputed_labs {
+        labs.iter()
+            .zip(pixels.iter())
+            .map(|(lab, p)| [lab.l, lab.a, lab.b, p.a as f32 / 255.0])
+            .collect()
+    } else {
         let mut rgb_buf = vec![[0.0f32; 3]; pixels.len()];
         let rgb_pixels: Vec<rgb::RGB<u8>> =
             pixels.iter().map(|p| rgb::RGB::new(p.r, p.g, p.b)).collect();
@@ -1454,13 +1497,20 @@ fn dither_image_blue_noise(
         palette,
         run_priority,
         dither_strength,
+        precomputed_labs,
         ..
     } = *params;
     let run_bias = run_priority.bias();
 
     // Convert to OKLab for dither map computation (read-only after this)
     let mut lab_buf = vec![[0.0f32; 3]; pixels.len()];
-    crate::simd::batch_srgb_to_oklab(pixels, &mut lab_buf);
+    if let Some(labs) = precomputed_labs {
+        for (dst, src) in lab_buf.iter_mut().zip(labs.iter()) {
+            *dst = [src.l, src.a, src.b];
+        }
+    } else {
+        crate::simd::batch_srgb_to_oklab(pixels, &mut lab_buf);
+    }
 
     let dither_map = compute_dither_map(&lab_buf, width, height);
     let mut indices = vec![0u8; pixels.len()];
@@ -1540,14 +1590,21 @@ fn dither_image_rgba_blue_noise(
         palette,
         run_priority,
         dither_strength,
+        precomputed_labs,
         ..
     } = *params;
     let transparent_idx = palette.transparent_index().unwrap_or(0);
     let run_bias = run_priority.bias();
 
     let mut lab_buf = vec![[0.0f32; 3]; pixels.len()];
-    let rgb_pixels: Vec<rgb::RGB<u8>> = pixels.iter().map(|p| rgb::RGB::new(p.r, p.g, p.b)).collect();
-    crate::simd::batch_srgb_to_oklab(&rgb_pixels, &mut lab_buf);
+    if let Some(labs) = precomputed_labs {
+        for (dst, src) in lab_buf.iter_mut().zip(labs.iter()) {
+            *dst = [src.l, src.a, src.b];
+        }
+    } else {
+        let rgb_pixels: Vec<rgb::RGB<u8>> = pixels.iter().map(|p| rgb::RGB::new(p.r, p.g, p.b)).collect();
+        crate::simd::batch_srgb_to_oklab(&rgb_pixels, &mut lab_buf);
+    }
 
     let dither_map = compute_dither_map(&lab_buf, width, height);
     let mut indices = vec![0u8; pixels.len()];
@@ -1632,12 +1689,18 @@ fn dither_image_rgba_alpha_blue_noise(
         palette,
         run_priority,
         dither_strength,
+        precomputed_labs,
         ..
     } = *params;
     let transparent_idx = palette.transparent_index().unwrap_or(0);
     let run_bias = run_priority.bias();
 
-    let lab_buf: Vec<[f32; 4]> = {
+    let lab_buf: Vec<[f32; 4]> = if let Some(labs) = precomputed_labs {
+        labs.iter()
+            .zip(pixels.iter())
+            .map(|(lab, p)| [lab.l, lab.a, lab.b, p.a as f32 / 255.0])
+            .collect()
+    } else {
         let mut rgb_buf = vec![[0.0f32; 3]; pixels.len()];
         let rgb_pixels: Vec<rgb::RGB<u8>> = pixels.iter().map(|p| rgb::RGB::new(p.r, p.g, p.b)).collect();
         crate::simd::batch_srgb_to_oklab(&rgb_pixels, &mut rgb_buf);

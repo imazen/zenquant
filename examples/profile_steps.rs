@@ -94,6 +94,7 @@ fn main() {
         run_priority: remap::RunPriority::Balanced,
         dither_strength: 0.5,
         prev_indices: None,
+        precomputed_labs: None,
     };
     let mut indices = dither_image(&pixels, &params, None);
     let dither_ms = t.elapsed().as_secs_f64() * 1000.0;
@@ -110,6 +111,7 @@ fn main() {
         run_priority: remap::RunPriority::Balanced,
         dither_strength: 0.5,
         prev_indices: None,
+        precomputed_labs: None,
     };
     let _indices_ordered = dither_image(&pixels, &params_ordered, None);
     let ordered_ms = t.elapsed().as_secs_f64() * 1000.0;
@@ -143,6 +145,7 @@ fn main() {
         run_priority: remap::RunPriority::Balanced,
         dither_strength: 0.5,
         prev_indices: None,
+        precomputed_labs: None,
     };
     let mut indices2 = dither_image(&pixels, &params_noref, None);
     remap::viterbi_refine(
