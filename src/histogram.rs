@@ -51,10 +51,7 @@ fn quantize_key(lab: OKLab, bits: u32) -> u32 {
 pub fn build_histogram(pixels: &[rgb::RGB<u8>], weights: &[f32]) -> Vec<(OKLab, f32)> {
     assert_eq!(pixels.len(), weights.len());
 
-    let labs: Vec<OKLab> = pixels
-        .iter()
-        .map(|p| srgb_to_oklab(p.r, p.g, p.b))
-        .collect();
+    let labs: Vec<OKLab> = crate::simd::batch_srgb_to_oklab_vec(pixels);
 
     let bits = if pixels.len() <= 500_000 { 6 } else { 5 };
     build_hist_at_depth(&labs, weights, bits)

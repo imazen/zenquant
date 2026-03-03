@@ -457,6 +457,31 @@ fn compute_dither_map_4(lab_buf: &[[f32; 4]], width: usize, height: usize) -> Ve
     map
 }
 
+/// Bundled parameters for dither functions, reducing argument counts.
+///
+/// Groups the image dimensions, masking weights, palette, dither mode,
+/// run priority, dither strength, and optional previous-frame indices
+/// that are shared across all dither entry points.
+#[derive(Debug, Clone)]
+pub(crate) struct DitherParams<'a> {
+    /// Image width in pixels.
+    pub width: usize,
+    /// Image height in pixels.
+    pub height: usize,
+    /// Per-pixel AQ masking weights (length = width * height).
+    pub weights: &'a [f32],
+    /// Quantized palette to dither against.
+    pub palette: &'a Palette,
+    /// Dithering algorithm to use.
+    pub mode: DitherMode,
+    /// Run-length optimization priority.
+    pub run_priority: RunPriority,
+    /// Error diffusion strength (0.0 = none, 0.5 = half, 1.0 = full).
+    pub dither_strength: f32,
+    /// Previous frame's index buffer for temporal consistency (APNG).
+    pub prev_indices: Option<&'a [u8]>,
+}
+
 /// Apply serpentine Floyd-Steinberg error diffusion with AQ modulation.
 ///
 /// `dither_strength` controls the fraction of quantization error to diffuse
@@ -471,19 +496,21 @@ fn compute_dither_map_4(lab_buf: &[[f32; 4]], width: usize, height: usize) -> Ve
 ///   it's damped by 75% to prevent runaway error accumulation.
 /// - OKLab gamut clamping: prevents error-adjusted values from drifting
 ///   outside the representable color space.
-#[allow(clippy::too_many_arguments)]
 pub fn dither_image(
     pixels: &[rgb::RGB<u8>],
-    width: usize,
-    height: usize,
-    weights: &[f32],
-    palette: &Palette,
-    mode: DitherMode,
-    run_priority: RunPriority,
-    dither_strength: f32,
+    params: &DitherParams<'_>,
     mut mpe_acc: Option<&mut MpeAccumulator>,
-    prev_indices: Option<&[u8]>,
 ) -> Vec<u8> {
+    let DitherParams {
+        width,
+        height,
+        weights,
+        palette,
+        mode,
+        run_priority,
+        dither_strength,
+        prev_indices,
+    } = *params;
     if mode == DitherMode::None {
         let indices = simple_remap(pixels, palette);
         if let Some(ref mut acc) = mpe_acc {
@@ -498,29 +525,15 @@ pub fn dither_image(
     }
 
     if mode == DitherMode::BlueNoise {
-        return dither_image_blue_noise(
-            pixels,
-            width,
-            height,
-            weights,
-            palette,
-            run_priority,
-            dither_strength,
-            mpe_acc,
-        );
+        return dither_image_blue_noise(pixels, params, mpe_acc);
     }
 
     let run_bias = run_priority.bias();
     let linear = mode == DitherMode::Linear;
 
     // Working buffer in OKLab (we add error diffusion to this)
-    let mut lab_buf: Vec<[f32; 3]> = pixels
-        .iter()
-        .map(|p| {
-            let lab = srgb_to_oklab(p.r, p.g, p.b);
-            [lab.l, lab.a, lab.b]
-        })
-        .collect();
+    let mut lab_buf = vec![[0.0f32; 3]; pixels.len()];
+    crate::simd::batch_srgb_to_oklab(pixels, &mut lab_buf);
 
     let mut indices = vec![0u8; pixels.len()];
 
@@ -673,19 +686,21 @@ pub fn dither_image(
 
 /// Apply serpentine Floyd-Steinberg dithering for RGBA images.
 /// Transparent pixels pass through unchanged.
-#[allow(clippy::too_many_arguments)]
 pub fn dither_image_rgba(
     pixels: &[rgb::RGBA<u8>],
-    width: usize,
-    height: usize,
-    weights: &[f32],
-    palette: &Palette,
-    mode: DitherMode,
-    run_priority: RunPriority,
-    dither_strength: f32,
+    params: &DitherParams<'_>,
     mut mpe_acc: Option<&mut MpeAccumulator>,
-    prev_indices: Option<&[u8]>,
 ) -> Vec<u8> {
+    let DitherParams {
+        width,
+        height,
+        weights,
+        palette,
+        mode,
+        run_priority,
+        dither_strength,
+        prev_indices,
+    } = *params;
     let transparent_idx = palette.transparent_index().unwrap_or(0);
 
     if mode == DitherMode::None {
@@ -705,16 +720,7 @@ pub fn dither_image_rgba(
     }
 
     if mode == DitherMode::BlueNoise {
-        return dither_image_rgba_blue_noise(
-            pixels,
-            width,
-            height,
-            weights,
-            palette,
-            run_priority,
-            dither_strength,
-            mpe_acc,
-        );
+        return dither_image_rgba_blue_noise(pixels, params, mpe_acc);
     }
 
     let run_bias = run_priority.bias();
@@ -725,13 +731,9 @@ pub fn dither_image_rgba(
     let use_damping = !linear && dither_strength > 0.3;
     let use_sierra = mode == DitherMode::SierraLite;
 
-    let mut lab_buf: Vec<[f32; 3]> = pixels
-        .iter()
-        .map(|p| {
-            let lab = srgb_to_oklab(p.r, p.g, p.b);
-            [lab.l, lab.a, lab.b]
-        })
-        .collect();
+    let mut lab_buf = vec![[0.0f32; 3]; pixels.len()];
+    let rgb_pixels: Vec<rgb::RGB<u8>> = pixels.iter().map(|p| rgb::RGB::new(p.r, p.g, p.b)).collect();
+    crate::simd::batch_srgb_to_oklab(&rgb_pixels, &mut lab_buf);
 
     let mut indices = vec![0u8; pixels.len()];
     let dither_map = if linear {
@@ -875,19 +877,21 @@ pub fn dither_image_rgba(
 
 /// Alpha-aware serpentine dithering: error diffusion includes alpha channel.
 /// Used when the palette has per-entry alpha values (PNG, WebP, JXL, Generic).
-#[allow(clippy::too_many_arguments)]
 pub fn dither_image_rgba_alpha(
     pixels: &[rgb::RGBA<u8>],
-    width: usize,
-    height: usize,
-    weights: &[f32],
-    palette: &Palette,
-    mode: DitherMode,
-    run_priority: RunPriority,
-    dither_strength: f32,
+    params: &DitherParams<'_>,
     mut mpe_acc: Option<&mut MpeAccumulator>,
-    prev_indices: Option<&[u8]>,
 ) -> Vec<u8> {
+    let DitherParams {
+        width,
+        height,
+        weights,
+        palette,
+        mode,
+        run_priority,
+        dither_strength,
+        prev_indices,
+    } = *params;
     let transparent_idx = palette.transparent_index().unwrap_or(0);
 
     if mode == DitherMode::None {
@@ -907,16 +911,7 @@ pub fn dither_image_rgba_alpha(
     }
 
     if mode == DitherMode::BlueNoise {
-        return dither_image_rgba_alpha_blue_noise(
-            pixels,
-            width,
-            height,
-            weights,
-            palette,
-            run_priority,
-            dither_strength,
-            mpe_acc,
-        );
+        return dither_image_rgba_alpha_blue_noise(pixels, params, mpe_acc);
     }
 
     let run_bias = run_priority.bias();
@@ -927,15 +922,16 @@ pub fn dither_image_rgba_alpha(
     let use_damping = !linear && dither_strength > 0.3;
     let use_sierra = mode == DitherMode::SierraLite;
 
-    // Working buffer: [L, a, b, alpha]
-    let mut lab_buf: Vec<[f32; 4]> = pixels
-        .iter()
-        .map(|p| {
-            let lab = srgb_to_oklab(p.r, p.g, p.b);
-            let alpha = p.a as f32 / 255.0;
-            [lab.l, lab.a, lab.b, alpha]
-        })
-        .collect();
+    // Working buffer: [L, a, b, alpha] — batch-convert RGB via SIMD, then fill alpha
+    let mut lab_buf: Vec<[f32; 4]> = {
+        let mut rgb_buf = vec![[0.0f32; 3]; pixels.len()];
+        let rgb_pixels: Vec<rgb::RGB<u8>> = pixels.iter().map(|p| rgb::RGB::new(p.r, p.g, p.b)).collect();
+        crate::simd::batch_srgb_to_oklab(&rgb_pixels, &mut rgb_buf);
+        rgb_buf.into_iter()
+            .zip(pixels.iter())
+            .map(|([l, a, b], p)| [l, a, b, p.a as f32 / 255.0])
+            .collect()
+    };
 
     let mut indices = vec![0u8; pixels.len()];
     let dither_map = if linear {
@@ -1088,27 +1084,25 @@ pub fn dither_image_rgba_alpha(
 /// Each pixel gets noise from a tiled 64×64 blue noise map, modulated by the
 /// edge-aware dither map. No error propagation — each pixel is independent,
 /// so the result is fully deterministic per position.
-#[allow(clippy::too_many_arguments)]
 fn dither_image_blue_noise(
     pixels: &[rgb::RGB<u8>],
-    width: usize,
-    height: usize,
-    weights: &[f32],
-    palette: &Palette,
-    run_priority: RunPriority,
-    dither_strength: f32,
+    params: &DitherParams<'_>,
     mut mpe_acc: Option<&mut MpeAccumulator>,
 ) -> Vec<u8> {
+    let DitherParams {
+        width,
+        height,
+        weights,
+        palette,
+        run_priority,
+        dither_strength,
+        ..
+    } = *params;
     let run_bias = run_priority.bias();
 
     // Convert to OKLab for dither map computation (read-only after this)
-    let lab_buf: Vec<[f32; 3]> = pixels
-        .iter()
-        .map(|p| {
-            let lab = srgb_to_oklab(p.r, p.g, p.b);
-            [lab.l, lab.a, lab.b]
-        })
-        .collect();
+    let mut lab_buf = vec![[0.0f32; 3]; pixels.len()];
+    crate::simd::batch_srgb_to_oklab(pixels, &mut lab_buf);
 
     let dither_map = compute_dither_map(&lab_buf, width, height);
     let mut indices = vec![0u8; pixels.len()];
@@ -1176,27 +1170,26 @@ fn dither_image_blue_noise(
 
 /// Blue noise dithering for RGBA images with binary transparency.
 /// Transparent pixels (alpha == 0) map to transparent_idx.
-#[allow(clippy::too_many_arguments)]
 fn dither_image_rgba_blue_noise(
     pixels: &[rgb::RGBA<u8>],
-    width: usize,
-    height: usize,
-    weights: &[f32],
-    palette: &Palette,
-    run_priority: RunPriority,
-    dither_strength: f32,
+    params: &DitherParams<'_>,
     mut mpe_acc: Option<&mut MpeAccumulator>,
 ) -> Vec<u8> {
+    let DitherParams {
+        width,
+        height,
+        weights,
+        palette,
+        run_priority,
+        dither_strength,
+        ..
+    } = *params;
     let transparent_idx = palette.transparent_index().unwrap_or(0);
     let run_bias = run_priority.bias();
 
-    let lab_buf: Vec<[f32; 3]> = pixels
-        .iter()
-        .map(|p| {
-            let lab = srgb_to_oklab(p.r, p.g, p.b);
-            [lab.l, lab.a, lab.b]
-        })
-        .collect();
+    let mut lab_buf = vec![[0.0f32; 3]; pixels.len()];
+    let rgb_pixels: Vec<rgb::RGB<u8>> = pixels.iter().map(|p| rgb::RGB::new(p.r, p.g, p.b)).collect();
+    crate::simd::batch_srgb_to_oklab(&rgb_pixels, &mut lab_buf);
 
     let dither_map = compute_dither_map(&lab_buf, width, height);
     let mut indices = vec![0u8; pixels.len()];
@@ -1269,28 +1262,32 @@ fn dither_image_rgba_blue_noise(
 
 /// Blue noise dithering for RGBA images with full alpha channel.
 /// Applies noise to alpha as well (for palettes with per-entry alpha).
-#[allow(clippy::too_many_arguments)]
 fn dither_image_rgba_alpha_blue_noise(
     pixels: &[rgb::RGBA<u8>],
-    width: usize,
-    height: usize,
-    weights: &[f32],
-    palette: &Palette,
-    run_priority: RunPriority,
-    dither_strength: f32,
+    params: &DitherParams<'_>,
     mut mpe_acc: Option<&mut MpeAccumulator>,
 ) -> Vec<u8> {
+    let DitherParams {
+        width,
+        height,
+        weights,
+        palette,
+        run_priority,
+        dither_strength,
+        ..
+    } = *params;
     let transparent_idx = palette.transparent_index().unwrap_or(0);
     let run_bias = run_priority.bias();
 
-    let lab_buf: Vec<[f32; 4]> = pixels
-        .iter()
-        .map(|p| {
-            let lab = srgb_to_oklab(p.r, p.g, p.b);
-            let alpha = p.a as f32 / 255.0;
-            [lab.l, lab.a, lab.b, alpha]
-        })
-        .collect();
+    let lab_buf: Vec<[f32; 4]> = {
+        let mut rgb_buf = vec![[0.0f32; 3]; pixels.len()];
+        let rgb_pixels: Vec<rgb::RGB<u8>> = pixels.iter().map(|p| rgb::RGB::new(p.r, p.g, p.b)).collect();
+        crate::simd::batch_srgb_to_oklab(&rgb_pixels, &mut rgb_buf);
+        rgb_buf.into_iter()
+            .zip(pixels.iter())
+            .map(|([l, a, b], p)| [l, a, b, p.a as f32 / 255.0])
+            .collect()
+    };
 
     let dither_map = compute_dither_map_4(&lab_buf, width, height);
     let mut indices = vec![0u8; pixels.len()];
@@ -1446,18 +1443,17 @@ mod tests {
         let palette = make_test_palette();
         let pixels = make_gradient(64);
         let weights = vec![1.0; 64];
-        let indices = dither_image(
-            &pixels,
-            64,
-            1,
-            &weights,
-            &palette,
-            DitherMode::None,
-            RunPriority::Quality,
-            0.5,
-            None,
-            None,
-        );
+        let params = DitherParams {
+            width: 64,
+            height: 1,
+            weights: &weights,
+            palette: &palette,
+            mode: DitherMode::None,
+            run_priority: RunPriority::Quality,
+            dither_strength: 0.5,
+            prev_indices: None,
+        };
+        let indices = dither_image(&pixels, &params, None);
         assert_eq!(indices.len(), 64);
         for &idx in &indices {
             assert!((idx as usize) < palette.len());
@@ -1477,18 +1473,17 @@ mod tests {
             }
         }
         let weights = vec![0.5; width * height];
-        let indices = dither_image(
-            &pixels,
+        let params = DitherParams {
             width,
             height,
-            &weights,
-            &palette,
-            DitherMode::Adaptive,
-            RunPriority::Balanced,
-            0.5,
-            None,
-            None,
-        );
+            weights: &weights,
+            palette: &palette,
+            mode: DitherMode::Adaptive,
+            run_priority: RunPriority::Balanced,
+            dither_strength: 0.5,
+            prev_indices: None,
+        };
+        let indices = dither_image(&pixels, &params, None);
         assert_eq!(indices.len(), width * height);
         for &idx in &indices {
             assert!((idx as usize) < palette.len());

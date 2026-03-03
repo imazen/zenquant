@@ -31,7 +31,7 @@
 //!   maps each frame against it.
 //! - **`no_std` + `alloc`**: works in WASM and embedded contexts.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
@@ -57,6 +57,69 @@ pub mod error;
 pub(crate) mod joint;
 #[cfg(feature = "joint")]
 mod joint_predict;
+#[cfg(feature = "simd")]
+pub(crate) mod simd;
+#[cfg(not(feature = "simd"))]
+pub(crate) mod simd {
+    //! Scalar fallback when `simd` feature is disabled.
+    extern crate alloc;
+    use crate::oklab::{OKLab, srgb_to_oklab};
+    use alloc::vec::Vec;
+
+    pub(crate) fn batch_srgb_to_oklab(pixels: &[rgb::RGB<u8>], out: &mut [[f32; 3]]) {
+        for (px, o) in pixels.iter().zip(out.iter_mut()) {
+            let lab = srgb_to_oklab(px.r, px.g, px.b);
+            *o = [lab.l, lab.a, lab.b];
+        }
+    }
+
+    pub(crate) fn batch_srgb_to_oklab_vec(pixels: &[rgb::RGB<u8>]) -> Vec<OKLab> {
+        pixels
+            .iter()
+            .map(|p| srgb_to_oklab(p.r, p.g, p.b))
+            .collect()
+    }
+
+    #[derive(Debug, Clone)]
+    pub(crate) struct PaletteSimd {
+        entries: Vec<OKLab>,
+        start: usize,
+    }
+
+    impl PaletteSimd {
+        pub(crate) fn empty() -> Self {
+            Self {
+                entries: Vec::new(),
+                start: 0,
+            }
+        }
+
+        pub(crate) fn from_palette(palette: &crate::palette::Palette) -> Self {
+            let start = if palette.transparent_index().is_some() {
+                1
+            } else {
+                0
+            };
+            Self {
+                entries: palette.entries_oklab().to_vec(),
+                start,
+            }
+        }
+
+        pub(crate) fn nearest(&self, color: OKLab) -> u8 {
+            let mut best_idx = self.start;
+            let mut best_dist = f32::MAX;
+            for i in self.start..self.entries.len() {
+                let d = color.distance_sq(self.entries[i]);
+                if d < best_dist {
+                    best_dist = d;
+                    best_idx = i;
+                }
+            }
+            best_idx as u8
+        }
+    }
+}
 
 pub use error::QuantizeError;
 pub use imgref::{Img, ImgRef, ImgVec};
@@ -742,10 +805,7 @@ pub fn quantize(
 
     // Fast path: image already has ≤max_colors unique colors
     if let Some(exact_colors) = histogram::detect_exact_palette(pixels, max_colors) {
-        let centroids: Vec<oklab::OKLab> = exact_colors
-            .iter()
-            .map(|c| oklab::srgb_to_oklab(c.r, c.g, c.b))
-            .collect();
+        let centroids = simd::batch_srgb_to_oklab_vec(&exact_colors);
         let pal = palette::Palette::from_centroids_sorted(centroids, false, tuning.sort_strategy);
         let mut indices = dither::simple_remap(pixels, &pal);
         let pal = if tuning.gif_frequency_reorder {
@@ -815,18 +875,17 @@ pub fn quantize(
     } else {
         None
     };
-    let mut indices = dither::dither_image(
-        pixels,
+    let dither_params = dither::DitherParams {
         width,
         height,
-        &weights,
-        &pal,
-        effective_config.dither_mode,
-        effective_run_priority,
-        tuning.dither_strength,
-        mpe_acc.as_mut(),
-        None,
-    );
+        weights: &weights,
+        palette: &pal,
+        mode: effective_config.dither_mode,
+        run_priority: effective_run_priority,
+        dither_strength: tuning.dither_strength,
+        prev_indices: None,
+    };
+    let mut indices = dither::dither_image(pixels, &dither_params, mpe_acc.as_mut());
 
     // 5b. Run optimization
     //   Best:     full Viterbi DP (optimal run extension, ~26ms)
@@ -981,10 +1040,11 @@ pub fn quantize_rgba(
     if let Some((exact_colors, has_transparent)) =
         histogram::detect_exact_palette_rgba(pixels, max_colors)
     {
-        let centroids: Vec<oklab::OKLab> = exact_colors
+        let rgb_colors: Vec<rgb::RGB<u8>> = exact_colors
             .iter()
-            .map(|c| oklab::srgb_to_oklab(c.r, c.g, c.b))
+            .map(|c| rgb::RGB::new(c.r, c.g, c.b))
             .collect();
+        let centroids = simd::batch_srgb_to_oklab_vec(&rgb_colors);
         let pal = palette::Palette::from_centroids_sorted(
             centroids,
             has_transparent,
@@ -1064,18 +1124,17 @@ pub fn quantize_rgba(
         } else {
             config.viterbi_lambda.unwrap_or(0.0)
         };
-        let mut indices = dither::dither_image_rgba_alpha(
-            pixels,
+        let dither_params = dither::DitherParams {
             width,
             height,
-            &weights,
-            &pal,
-            effective_config.dither_mode,
-            effective_run_priority,
-            tuning.dither_strength,
-            None,
-            None,
-        );
+            weights: &weights,
+            palette: &pal,
+            mode: effective_config.dither_mode,
+            run_priority: effective_run_priority,
+            dither_strength: tuning.dither_strength,
+            prev_indices: None,
+        };
+        let mut indices = dither::dither_image_rgba_alpha(pixels, &dither_params, None);
 
         if viterbi_lambda > 0.0 {
             if use_viterbi {
@@ -1150,18 +1209,17 @@ pub fn quantize_rgba(
         } else {
             config.viterbi_lambda.unwrap_or(0.0)
         };
-        let mut indices = dither::dither_image_rgba(
-            pixels,
+        let dither_params = dither::DitherParams {
             width,
             height,
-            &weights,
-            &pal,
-            effective_config.dither_mode,
-            effective_run_priority,
-            tuning.dither_strength,
-            None,
-            None,
-        );
+            weights: &weights,
+            palette: &pal,
+            mode: effective_config.dither_mode,
+            run_priority: effective_run_priority,
+            dither_strength: tuning.dither_strength,
+            prev_indices: None,
+        };
+        let mut indices = dither::dither_image_rgba(pixels, &dither_params, None);
 
         if viterbi_lambda > 0.0 {
             if use_viterbi {
@@ -1302,10 +1360,7 @@ pub fn build_palette(
     // Fast path: all frames combined have ≤max_colors unique colors
     let all_exact = detect_exact_palette_multi_rgb(frames, max_colors);
     if let Some(exact_colors) = all_exact {
-        let centroids: Vec<oklab::OKLab> = exact_colors
-            .iter()
-            .map(|c| oklab::srgb_to_oklab(c.r, c.g, c.b))
-            .collect();
+        let centroids = simd::batch_srgb_to_oklab_vec(&exact_colors);
         let mut pal =
             palette::Palette::from_centroids_sorted(centroids, false, tuning.sort_strategy);
         pal.build_nn_cache();
@@ -1434,9 +1489,15 @@ pub fn build_palette_rgba(
     let all_exact = detect_exact_palette_multi_rgba(frames, max_colors);
     if let Some((exact_colors, has_transparent)) = all_exact {
         if tuning.alpha_mode == AlphaMode::Full {
-            let centroids: Vec<oklab::OKLabA> = exact_colors
+            let rgb_colors: Vec<rgb::RGB<u8>> = exact_colors
                 .iter()
-                .map(|c| oklab::srgb_to_oklab(c.r, c.g, c.b).with_alpha(c.a as f32 / 255.0))
+                .map(|c| rgb::RGB::new(c.r, c.g, c.b))
+                .collect();
+            let labs = simd::batch_srgb_to_oklab_vec(&rgb_colors);
+            let centroids: Vec<oklab::OKLabA> = labs
+                .into_iter()
+                .zip(exact_colors.iter())
+                .map(|(lab, c)| lab.with_alpha(c.a as f32 / 255.0))
                 .collect();
             let mut pal =
                 palette::Palette::from_centroids_alpha(centroids, false, tuning.sort_strategy);
@@ -1447,10 +1508,11 @@ pub fn build_palette_rgba(
                 mpe_result: None,
             });
         } else {
-            let centroids: Vec<oklab::OKLab> = exact_colors
+            let rgb_colors: Vec<rgb::RGB<u8>> = exact_colors
                 .iter()
-                .map(|c| oklab::srgb_to_oklab(c.r, c.g, c.b))
+                .map(|c| rgb::RGB::new(c.r, c.g, c.b))
                 .collect();
+            let centroids = simd::batch_srgb_to_oklab_vec(&rgb_colors);
             let mut pal = palette::Palette::from_centroids_sorted(
                 centroids,
                 has_transparent,
@@ -1639,18 +1701,17 @@ fn remap_rgb_impl(
         vec![1.0f32; pixels.len()]
     };
 
-    let mut indices = dither::dither_image(
-        pixels,
+    let dither_params = dither::DitherParams {
         width,
         height,
-        &weights,
-        &pal,
-        config.dither_mode,
-        effective_run_priority,
-        tuning.dither_strength,
-        None,
+        weights: &weights,
+        palette: &pal,
+        mode: config.dither_mode,
+        run_priority: effective_run_priority,
+        dither_strength: tuning.dither_strength,
         prev_indices,
-    );
+    };
+    let mut indices = dither::dither_image(pixels, &dither_params, None);
 
     let run_lambda = if use_masking {
         config
@@ -1795,32 +1856,20 @@ fn remap_rgba_impl(
     // the palette was built with full alpha quantization.
     let has_full_alpha = pal.entries_rgba().iter().any(|e| e[3] > 0 && e[3] < 255);
 
+    let dither_params = dither::DitherParams {
+        width,
+        height,
+        weights: &weights,
+        palette: &pal,
+        mode: config.dither_mode,
+        run_priority: effective_run_priority,
+        dither_strength: tuning.dither_strength,
+        prev_indices,
+    };
     let mut indices = if has_full_alpha {
-        dither::dither_image_rgba_alpha(
-            pixels,
-            width,
-            height,
-            &weights,
-            &pal,
-            config.dither_mode,
-            effective_run_priority,
-            tuning.dither_strength,
-            None,
-            prev_indices,
-        )
+        dither::dither_image_rgba_alpha(pixels, &dither_params, None)
     } else {
-        dither::dither_image_rgba(
-            pixels,
-            width,
-            height,
-            &weights,
-            &pal,
-            config.dither_mode,
-            effective_run_priority,
-            tuning.dither_strength,
-            None,
-            prev_indices,
-        )
+        dither::dither_image_rgba(pixels, &dither_params, None)
     };
 
     let run_lambda = if use_masking {

@@ -19,6 +19,8 @@ rgb = "0.8"
 imgref = "1"
 thiserror = { version = "2", default-features = false }
 linear-srgb = { version = "0.5.5", default-features = false }
+archmage = { version = "0.8", default-features = false, features = ["macros"], optional = true }
+magetypes = { version = "0.8", default-features = false, optional = true }
 # zenflate is no longer needed — joint uses a vendored LZ77 predictor
 # zenflate = { path = "../zenflate", optional = true, default-features = false, features = ["alloc"] }
 
@@ -41,8 +43,9 @@ exoquant = "0.2"
 gif = { version = "0.14", default-features = false, features = ["std"] }
 
 [features]
-default = ["std"]
+default = ["std", "simd"]
 std = ["linear-srgb/std"]
+simd = ["archmage", "magetypes"]
 # Joint deflate+quantization optimization for PNG.
 # Uses a vendored LZ77 predictor — no external dependency.
 joint = []

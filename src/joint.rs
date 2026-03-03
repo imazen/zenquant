@@ -612,10 +612,7 @@ pub(crate) fn optimize_rgb(
     _deflate_effort: u32,
     base_tolerance: f32,
 ) -> Vec<u8> {
-    let pixel_oklab: Vec<OKLab> = pixels
-        .iter()
-        .map(|p| crate::oklab::srgb_to_oklab(p.r, p.g, p.b))
-        .collect();
+    let pixel_oklab = crate::simd::batch_srgb_to_oklab_vec(pixels);
 
     optimize_inner(
         &pixel_oklab,
@@ -644,10 +641,11 @@ pub(crate) fn optimize_rgba(
     _deflate_effort: u32,
     base_tolerance: f32,
 ) -> Vec<u8> {
-    let pixel_oklab: Vec<OKLab> = pixels
+    let rgb_pixels: Vec<rgb::RGB<u8>> = pixels
         .iter()
-        .map(|p| crate::oklab::srgb_to_oklab(p.r, p.g, p.b))
+        .map(|p| rgb::RGB::new(p.r, p.g, p.b))
         .collect();
+    let pixel_oklab = crate::simd::batch_srgb_to_oklab_vec(&rgb_pixels);
 
     let transparent_index = palette.transparent_index();
 

@@ -30,6 +30,8 @@ pub struct Palette {
     /// neighbors[i] = up to K closest palette indices to entry i.
     neighbors: Vec<[u8; 16]>,
     neighbor_counts: Vec<u8>,
+    /// AoSoA SIMD layout for fast nearest-neighbor search.
+    simd_layout: crate::simd::PaletteSimd,
 }
 
 impl Palette {
@@ -50,7 +52,7 @@ impl Palette {
         strategy: PaletteSortStrategy,
     ) -> Self {
         if centroids.is_empty() {
-            return Self {
+            let empty = Self {
                 entries_srgb: Vec::new(),
                 entries_rgba: Vec::new(),
                 entries_oklab: Vec::new(),
@@ -58,7 +60,9 @@ impl Palette {
                 nn_cache: None,
                 neighbors: Vec::new(),
                 neighbor_counts: Vec::new(),
+                simd_layout: crate::simd::PaletteSimd::empty(),
             };
+            return empty;
         }
 
         // Convert to sRGB and keep OKLab paired
@@ -94,7 +98,7 @@ impl Palette {
 
         let (neighbors, neighbor_counts) = Self::compute_neighbors(&entries_oklab);
 
-        Self {
+        let mut pal = Self {
             entries_srgb,
             entries_rgba,
             entries_oklab,
@@ -102,7 +106,10 @@ impl Palette {
             nn_cache: None,
             neighbors,
             neighbor_counts,
-        }
+            simd_layout: crate::simd::PaletteSimd::empty(),
+        };
+        pal.simd_layout = crate::simd::PaletteSimd::from_palette(&pal);
+        pal
     }
 
     /// Build a palette from alpha-aware centroids (4D quantization result).
@@ -115,7 +122,7 @@ impl Palette {
         strategy: PaletteSortStrategy,
     ) -> Self {
         if centroids.is_empty() {
-            return Self {
+            let empty = Self {
                 entries_srgb: Vec::new(),
                 entries_rgba: Vec::new(),
                 entries_oklab: Vec::new(),
@@ -123,7 +130,9 @@ impl Palette {
                 nn_cache: None,
                 neighbors: Vec::new(),
                 neighbor_counts: Vec::new(),
+                simd_layout: crate::simd::PaletteSimd::empty(),
             };
+            return empty;
         }
 
         // Convert to sRGB+alpha, keep OKLab paired
@@ -178,7 +187,7 @@ impl Palette {
 
         let (neighbors, neighbor_counts) = Self::compute_neighbors(&entries_oklab);
 
-        Self {
+        let mut pal = Self {
             entries_srgb,
             entries_rgba,
             entries_oklab,
@@ -186,7 +195,10 @@ impl Palette {
             nn_cache: None,
             neighbors,
             neighbor_counts,
-        }
+            simd_layout: crate::simd::PaletteSimd::empty(),
+        };
+        pal.simd_layout = crate::simd::PaletteSimd::from_palette(&pal);
+        pal
     }
 
     /// Get sRGB palette entries.
@@ -477,33 +489,23 @@ impl Palette {
         const TOTAL: usize = SIZE * SIZE * SIZE; // 4096
         let shift = 8 - BITS; // 4
 
-        let start = if self.transparent_index.is_some() {
-            1
-        } else {
-            0
-        };
+        // Batch-convert all 4096 grid cell centers to OKLab
+        let grid_pixels: Vec<rgb::RGB<u8>> = (0..TOTAL)
+            .map(|idx| {
+                let ri = idx / (SIZE * SIZE);
+                let gi = (idx / SIZE) % SIZE;
+                let bi = idx % SIZE;
+                let r = ((ri << shift) | (1 << (shift - 1))) as u8;
+                let g = ((gi << shift) | (1 << (shift - 1))) as u8;
+                let b = ((bi << shift) | (1 << (shift - 1))) as u8;
+                rgb::RGB::new(r, g, b)
+            })
+            .collect();
+        let grid_labs = crate::simd::batch_srgb_to_oklab_vec(&grid_pixels);
+
         let mut cache = vec![0u8; TOTAL];
-
-        for ri in 0..SIZE {
-            for gi in 0..SIZE {
-                for bi in 0..SIZE {
-                    let r = ((ri << shift) | (1 << (shift - 1))) as u8;
-                    let g = ((gi << shift) | (1 << (shift - 1))) as u8;
-                    let b = ((bi << shift) | (1 << (shift - 1))) as u8;
-                    let lab = crate::oklab::srgb_to_oklab(r, g, b);
-
-                    let mut best_idx = start;
-                    let mut best_dist = f32::MAX;
-                    for i in start..self.entries_oklab.len() {
-                        let d = lab.distance_sq(self.entries_oklab[i]);
-                        if d < best_dist {
-                            best_dist = d;
-                            best_idx = i;
-                        }
-                    }
-                    cache[ri * SIZE * SIZE + gi * SIZE + bi] = best_idx as u8;
-                }
-            }
+        for (i, lab) in grid_labs.iter().enumerate() {
+            cache[i] = self.simd_layout.nearest(*lab);
         }
 
         self.nn_cache = Some(cache);
@@ -675,7 +677,7 @@ pub(crate) fn reorder_by_frequency(palette: &Palette, indices: &mut [u8]) -> Pal
 
     let (neighbors, neighbor_counts) = Palette::compute_neighbors(&new_oklab);
 
-    Palette {
+    let mut pal = Palette {
         entries_srgb: new_srgb,
         entries_rgba: new_rgba,
         entries_oklab: new_oklab,
@@ -683,7 +685,10 @@ pub(crate) fn reorder_by_frequency(palette: &Palette, indices: &mut [u8]) -> Pal
         nn_cache: None,
         neighbors,
         neighbor_counts,
-    }
+        simd_layout: crate::simd::PaletteSimd::empty(),
+    };
+    pal.simd_layout = crate::simd::PaletteSimd::from_palette(&pal);
+    pal
 }
 
 /// Compute sum of squared index deltas — metric for compression friendliness.
