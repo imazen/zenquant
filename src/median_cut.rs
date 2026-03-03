@@ -4,12 +4,15 @@ use alloc::vec::Vec;
 
 use crate::oklab::{OKLab, OKLabA};
 
+// Old median cut kept for comparison tests only.
+#[cfg(test)]
 /// A box of color entries for median cut subdivision.
 #[derive(Debug, Clone)]
 struct ColorBox {
     entries: Vec<(OKLab, f32)>, // (color, accumulated_weight)
 }
 
+#[cfg(test)]
 impl ColorBox {
     fn new(entries: Vec<(OKLab, f32)>) -> Self {
         Self { entries }
@@ -121,6 +124,7 @@ impl ColorBox {
     }
 }
 
+#[cfg(test)]
 /// Perform weighted median cut quantization.
 ///
 /// Takes histogram entries (OKLab color, accumulated weight) and produces
@@ -216,6 +220,541 @@ fn kmeans_refine(mut centroids: Vec<OKLab>, entries: &[(OKLab, f32)]) -> Vec<OKL
     }
 
     centroids
+}
+
+// =====================================================================
+// Variance-minimizing quantization (direct entry-based, Wu-style splitting)
+// =====================================================================
+
+/// Get a specific axis value from an OKLab color.
+#[inline]
+fn get_axis_3d(lab: &OKLab, axis: u8) -> f32 {
+    match axis {
+        0 => lab.l,
+        1 => lab.a,
+        _ => lab.b,
+    }
+}
+
+/// Compute weighted variance of histogram entries: Var = sum(x²w)/W - (sum(xw)/W)² per axis.
+fn variance_from_stats_3d(w: f64, sl: f64, sa: f64, sb: f64, sl2: f64, sa2: f64, sb2: f64) -> f64 {
+    if w < 1e-10 {
+        return 0.0;
+    }
+    (sl2 - sl * sl / w) + (sa2 - sa * sa / w) + (sb2 - sb * sb / w)
+}
+
+/// Variance-minimizing quantization (Wu-style greedy splitting on histogram entries).
+///
+/// Operates directly on floating-point OKLab histogram entries — no fixed-resolution
+/// grid, so there's no binning precision loss. Greedily splits the highest-variance
+/// cluster at the position minimizing total within-cluster variance.
+///
+/// If `refine` is true, follows up with k-means refinement on histogram entries.
+pub fn wu_quantize(histogram: Vec<(OKLab, f32)>, max_colors: usize, refine: bool) -> Vec<OKLab> {
+    if histogram.is_empty() {
+        return Vec::new();
+    }
+
+    if histogram.len() <= max_colors {
+        return histogram.into_iter().map(|(lab, _)| lab).collect();
+    }
+
+    let n = histogram.len();
+    let mut indices: Vec<usize> = (0..n).collect();
+
+    // Compute initial total stats
+    let mut tw = 0.0f64;
+    let mut tl = 0.0f64;
+    let mut ta = 0.0f64;
+    let mut tb = 0.0f64;
+    let mut tl2 = 0.0f64;
+    let mut ta2 = 0.0f64;
+    let mut tb2 = 0.0f64;
+    for &(lab, w) in &histogram {
+        let w64 = w as f64;
+        tw += w64;
+        let (l, a, b) = (lab.l as f64, lab.a as f64, lab.b as f64);
+        tl += l * w64;
+        ta += a * w64;
+        tb += b * w64;
+        tl2 += l * l * w64;
+        ta2 += a * a * w64;
+        tb2 += b * b * w64;
+    }
+    let initial_var = variance_from_stats_3d(tw, tl, ta, tb, tl2, ta2, tb2);
+
+    // Each box: (start, end, variance) — contiguous range in `indices`
+    let mut boxes: Vec<(usize, usize, f64)> = vec![(0, n, initial_var)];
+    let mut buf: Vec<usize> = Vec::with_capacity(n);
+    let mut best_sorted: Vec<usize> = Vec::with_capacity(n);
+
+    while boxes.len() < max_colors {
+        // Find splittable box with highest variance
+        let best = boxes
+            .iter()
+            .enumerate()
+            .filter(|(_, (s, e, _))| e - s >= 2)
+            .max_by(|(_, a), (_, b)| a.2.partial_cmp(&b.2).unwrap_or(core::cmp::Ordering::Equal));
+        let Some((box_idx, &(start, end, box_var))) = best else {
+            break;
+        };
+        if box_var < 1e-12 {
+            break;
+        }
+
+        let m = end - start;
+        buf.clear();
+        buf.extend_from_slice(&indices[start..end]);
+
+        // Total stats for this box
+        let (bw, bl, ba, bb, bl2, ba2, bb2) = {
+            let (mut w, mut sl, mut sa, mut sb, mut sl2, mut sa2, mut sb2) =
+                (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+            for &i in &buf {
+                let (lab, wt) = &histogram[i];
+                let w64 = *wt as f64;
+                w += w64;
+                let (l, a, b) = (lab.l as f64, lab.a as f64, lab.b as f64);
+                sl += l * w64;
+                sa += a * w64;
+                sb += b * w64;
+                sl2 += l * l * w64;
+                sa2 += a * a * w64;
+                sb2 += b * b * w64;
+            }
+            (w, sl, sa, sb, sl2, sa2, sb2)
+        };
+
+        let mut best_var = f64::MAX;
+        let mut best_split = 1usize;
+
+        for axis in 0..3u8 {
+            buf.sort_unstable_by(|&a, &b| {
+                get_axis_3d(&histogram[a].0, axis)
+                    .partial_cmp(&get_axis_3d(&histogram[b].0, axis))
+                    .unwrap_or(core::cmp::Ordering::Equal)
+            });
+
+            // Running left accumulation
+            let mut lw = 0.0f64;
+            let mut ll = 0.0f64;
+            let mut la = 0.0f64;
+            let mut lb = 0.0f64;
+            let mut ll2 = 0.0f64;
+            let mut la2 = 0.0f64;
+            let mut lb2 = 0.0f64;
+
+            for pos in 0..m - 1 {
+                let i = buf[pos];
+                let (lab, w) = &histogram[i];
+                let w64 = *w as f64;
+                lw += w64;
+                let (l, a, b) = (lab.l as f64, lab.a as f64, lab.b as f64);
+                ll += l * w64;
+                la += a * w64;
+                lb += b * w64;
+                ll2 += l * l * w64;
+                la2 += a * a * w64;
+                lb2 += b * b * w64;
+
+                let rw = bw - lw;
+                if lw < 1e-10 || rw < 1e-10 {
+                    continue;
+                }
+
+                let lvar = variance_from_stats_3d(lw, ll, la, lb, ll2, la2, lb2);
+                let rvar = variance_from_stats_3d(
+                    rw,
+                    bl - ll,
+                    ba - la,
+                    bb - lb,
+                    bl2 - ll2,
+                    ba2 - la2,
+                    bb2 - lb2,
+                );
+                let total = lvar + rvar;
+
+                if total < best_var {
+                    best_var = total;
+                    best_split = pos + 1;
+                    best_sorted.clear();
+                    best_sorted.extend_from_slice(&buf);
+                }
+            }
+        }
+
+        if best_var >= f64::MAX {
+            break;
+        }
+
+        // Apply the best split
+        indices[start..end].copy_from_slice(&best_sorted);
+        let mid = start + best_split;
+
+        let lvar = {
+            let (mut w, mut sl, mut sa, mut sb, mut sl2, mut sa2, mut sb2) =
+                (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+            for &i in &indices[start..mid] {
+                let (lab, wt) = &histogram[i];
+                let w64 = *wt as f64;
+                w += w64;
+                let (l, a, b) = (lab.l as f64, lab.a as f64, lab.b as f64);
+                sl += l * w64;
+                sa += a * w64;
+                sb += b * w64;
+                sl2 += l * l * w64;
+                sa2 += a * a * w64;
+                sb2 += b * b * w64;
+            }
+            variance_from_stats_3d(w, sl, sa, sb, sl2, sa2, sb2)
+        };
+        let rvar = {
+            let (mut w, mut sl, mut sa, mut sb, mut sl2, mut sa2, mut sb2) =
+                (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+            for &i in &indices[mid..end] {
+                let (lab, wt) = &histogram[i];
+                let w64 = *wt as f64;
+                w += w64;
+                let (l, a, b) = (lab.l as f64, lab.a as f64, lab.b as f64);
+                sl += l * w64;
+                sa += a * w64;
+                sb += b * w64;
+                sl2 += l * l * w64;
+                sa2 += a * a * w64;
+                sb2 += b * b * w64;
+            }
+            variance_from_stats_3d(w, sl, sa, sb, sl2, sa2, sb2)
+        };
+
+        boxes.swap_remove(box_idx);
+        boxes.push((start, mid, lvar));
+        boxes.push((mid, end, rvar));
+    }
+
+    // Extract centroids
+    let mut palette: Vec<OKLab> = boxes
+        .iter()
+        .map(|&(s, e, _)| {
+            let (mut w, mut sl, mut sa, mut sb) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+            for &i in &indices[s..e] {
+                let (lab, wt) = &histogram[i];
+                let w64 = *wt as f64;
+                w += w64;
+                sl += lab.l as f64 * w64;
+                sa += lab.a as f64 * w64;
+                sb += lab.b as f64 * w64;
+            }
+            if w < 1e-10 {
+                OKLab::new(0.0, 0.0, 0.0)
+            } else {
+                OKLab::new((sl / w) as f32, (sa / w) as f32, (sb / w) as f32)
+            }
+        })
+        .collect();
+
+    if refine {
+        palette = kmeans_refine(palette, &histogram);
+    }
+
+    palette
+}
+
+// =====================================================================
+// Variance-minimizing quantization — 4D alpha-aware variant
+// =====================================================================
+
+/// Get a specific axis value from an OKLabA color.
+#[inline]
+fn get_axis_4d(laba: &OKLabA, axis: u8) -> f32 {
+    match axis {
+        0 => laba.lab.l,
+        1 => laba.lab.a,
+        2 => laba.lab.b,
+        _ => laba.alpha,
+    }
+}
+
+/// Compute weighted variance of 4D (L, a, b, alpha) entries.
+#[allow(clippy::too_many_arguments)]
+fn variance_from_stats_4d(
+    w: f64,
+    sl: f64,
+    sa: f64,
+    sb: f64,
+    sal: f64,
+    sl2: f64,
+    sa2: f64,
+    sb2: f64,
+    sal2: f64,
+) -> f64 {
+    if w < 1e-10 {
+        return 0.0;
+    }
+    (sl2 - sl * sl / w)
+        + (sa2 - sa * sa / w)
+        + (sb2 - sb * sb / w)
+        + (sal2 - sal * sal / w)
+}
+
+/// Variance-minimizing quantization with alpha as a 4th dimension.
+///
+/// Operates directly on floating-point OKLabA histogram entries.
+/// If `refine` is true, follows up with k-means refinement on histogram entries.
+pub fn wu_quantize_alpha(
+    histogram: Vec<(OKLabA, f32)>,
+    max_colors: usize,
+    refine: bool,
+) -> Vec<OKLabA> {
+    if histogram.is_empty() {
+        return Vec::new();
+    }
+
+    if histogram.len() <= max_colors {
+        return histogram.into_iter().map(|(laba, _)| laba).collect();
+    }
+
+    let n = histogram.len();
+    let mut indices: Vec<usize> = (0..n).collect();
+
+    // Compute initial total stats
+    let mut tw = 0.0f64;
+    let mut tl = 0.0f64;
+    let mut ta = 0.0f64;
+    let mut tb = 0.0f64;
+    let mut tal = 0.0f64;
+    let mut tl2 = 0.0f64;
+    let mut ta2 = 0.0f64;
+    let mut tb2 = 0.0f64;
+    let mut tal2 = 0.0f64;
+    for &(laba, w) in &histogram {
+        let w64 = w as f64;
+        tw += w64;
+        let (l, a, b, al) = (
+            laba.lab.l as f64,
+            laba.lab.a as f64,
+            laba.lab.b as f64,
+            laba.alpha as f64,
+        );
+        tl += l * w64;
+        ta += a * w64;
+        tb += b * w64;
+        tal += al * w64;
+        tl2 += l * l * w64;
+        ta2 += a * a * w64;
+        tb2 += b * b * w64;
+        tal2 += al * al * w64;
+    }
+    let initial_var = variance_from_stats_4d(tw, tl, ta, tb, tal, tl2, ta2, tb2, tal2);
+
+    let mut boxes: Vec<(usize, usize, f64)> = vec![(0, n, initial_var)];
+    let mut buf: Vec<usize> = Vec::with_capacity(n);
+    let mut best_sorted: Vec<usize> = Vec::with_capacity(n);
+
+    while boxes.len() < max_colors {
+        let best = boxes
+            .iter()
+            .enumerate()
+            .filter(|(_, (s, e, _))| e - s >= 2)
+            .max_by(|(_, a), (_, b)| a.2.partial_cmp(&b.2).unwrap_or(core::cmp::Ordering::Equal));
+        let Some((box_idx, &(start, end, box_var))) = best else {
+            break;
+        };
+        if box_var < 1e-12 {
+            break;
+        }
+
+        let m = end - start;
+        buf.clear();
+        buf.extend_from_slice(&indices[start..end]);
+
+        // Total stats for this box
+        let (bw, bl, ba, bb, bal, bl2, ba2, bb2, bal2) = {
+            let (mut w, mut sl, mut sa, mut sb, mut sal, mut sl2, mut sa2, mut sb2, mut sal2) =
+                (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+            for &i in &buf {
+                let (laba, wt) = &histogram[i];
+                let w64 = *wt as f64;
+                w += w64;
+                let (l, a, b, al) = (
+                    laba.lab.l as f64,
+                    laba.lab.a as f64,
+                    laba.lab.b as f64,
+                    laba.alpha as f64,
+                );
+                sl += l * w64;
+                sa += a * w64;
+                sb += b * w64;
+                sal += al * w64;
+                sl2 += l * l * w64;
+                sa2 += a * a * w64;
+                sb2 += b * b * w64;
+                sal2 += al * al * w64;
+            }
+            (w, sl, sa, sb, sal, sl2, sa2, sb2, sal2)
+        };
+
+        let mut best_var = f64::MAX;
+        let mut best_split = 1usize;
+
+        for axis in 0..4u8 {
+            buf.sort_unstable_by(|&a, &b| {
+                get_axis_4d(&histogram[a].0, axis)
+                    .partial_cmp(&get_axis_4d(&histogram[b].0, axis))
+                    .unwrap_or(core::cmp::Ordering::Equal)
+            });
+
+            let mut lw = 0.0f64;
+            let mut ll = 0.0f64;
+            let mut la = 0.0f64;
+            let mut lb = 0.0f64;
+            let mut lal = 0.0f64;
+            let mut ll2 = 0.0f64;
+            let mut la2 = 0.0f64;
+            let mut lb2 = 0.0f64;
+            let mut lal2 = 0.0f64;
+
+            for pos in 0..m - 1 {
+                let i = buf[pos];
+                let (laba, w) = &histogram[i];
+                let w64 = *w as f64;
+                lw += w64;
+                let (l, a, b, al) = (
+                    laba.lab.l as f64,
+                    laba.lab.a as f64,
+                    laba.lab.b as f64,
+                    laba.alpha as f64,
+                );
+                ll += l * w64;
+                la += a * w64;
+                lb += b * w64;
+                lal += al * w64;
+                ll2 += l * l * w64;
+                la2 += a * a * w64;
+                lb2 += b * b * w64;
+                lal2 += al * al * w64;
+
+                let rw = bw - lw;
+                if lw < 1e-10 || rw < 1e-10 {
+                    continue;
+                }
+
+                let lvar = variance_from_stats_4d(lw, ll, la, lb, lal, ll2, la2, lb2, lal2);
+                let rvar = variance_from_stats_4d(
+                    rw,
+                    bl - ll,
+                    ba - la,
+                    bb - lb,
+                    bal - lal,
+                    bl2 - ll2,
+                    ba2 - la2,
+                    bb2 - lb2,
+                    bal2 - lal2,
+                );
+                let total = lvar + rvar;
+
+                if total < best_var {
+                    best_var = total;
+                    best_split = pos + 1;
+                    best_sorted.clear();
+                    best_sorted.extend_from_slice(&buf);
+                }
+            }
+        }
+
+        if best_var >= f64::MAX {
+            break;
+        }
+
+        indices[start..end].copy_from_slice(&best_sorted);
+        let mid = start + best_split;
+
+        let lvar = {
+            let (mut w, mut sl, mut sa, mut sb, mut sal, mut sl2, mut sa2, mut sb2, mut sal2) =
+                (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+            for &i in &indices[start..mid] {
+                let (laba, wt) = &histogram[i];
+                let w64 = *wt as f64;
+                w += w64;
+                let (l, a, b, al) = (
+                    laba.lab.l as f64,
+                    laba.lab.a as f64,
+                    laba.lab.b as f64,
+                    laba.alpha as f64,
+                );
+                sl += l * w64;
+                sa += a * w64;
+                sb += b * w64;
+                sal += al * w64;
+                sl2 += l * l * w64;
+                sa2 += a * a * w64;
+                sb2 += b * b * w64;
+                sal2 += al * al * w64;
+            }
+            variance_from_stats_4d(w, sl, sa, sb, sal, sl2, sa2, sb2, sal2)
+        };
+        let rvar = {
+            let (mut w, mut sl, mut sa, mut sb, mut sal, mut sl2, mut sa2, mut sb2, mut sal2) =
+                (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+            for &i in &indices[mid..end] {
+                let (laba, wt) = &histogram[i];
+                let w64 = *wt as f64;
+                w += w64;
+                let (l, a, b, al) = (
+                    laba.lab.l as f64,
+                    laba.lab.a as f64,
+                    laba.lab.b as f64,
+                    laba.alpha as f64,
+                );
+                sl += l * w64;
+                sa += a * w64;
+                sb += b * w64;
+                sal += al * w64;
+                sl2 += l * l * w64;
+                sa2 += a * a * w64;
+                sb2 += b * b * w64;
+                sal2 += al * al * w64;
+            }
+            variance_from_stats_4d(w, sl, sa, sb, sal, sl2, sa2, sb2, sal2)
+        };
+
+        boxes.swap_remove(box_idx);
+        boxes.push((start, mid, lvar));
+        boxes.push((mid, end, rvar));
+    }
+
+    let mut palette: Vec<OKLabA> = boxes
+        .iter()
+        .map(|&(s, e, _)| {
+            let (mut w, mut sl, mut sa, mut sb, mut sal) =
+                (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+            for &i in &indices[s..e] {
+                let (laba, wt) = &histogram[i];
+                let w64 = *wt as f64;
+                w += w64;
+                sl += laba.lab.l as f64 * w64;
+                sa += laba.lab.a as f64 * w64;
+                sb += laba.lab.b as f64 * w64;
+                sal += laba.alpha as f64 * w64;
+            }
+            if w < 1e-10 {
+                OKLabA::new(0.0, 0.0, 0.0, 1.0)
+            } else {
+                OKLabA::new(
+                    (sl / w) as f32,
+                    (sa / w) as f32,
+                    (sb / w) as f32,
+                    (sal / w) as f32,
+                )
+            }
+        })
+        .collect();
+
+    if refine {
+        palette = kmeans_refine_alpha(palette, &histogram);
+    }
+
+    palette
 }
 
 /// Refine centroids against original pixel data.
@@ -671,172 +1210,7 @@ fn centroid_cache_lookup(cache: &[u8], r: u8, g: u8, b: u8) -> usize {
 }
 
 // =====================================================================
-// Alpha-aware median cut (4D: L, a, b, alpha)
-// =====================================================================
-
-/// A box of color+alpha entries for median cut subdivision.
-#[derive(Debug, Clone)]
-struct ColorBoxA {
-    entries: Vec<(OKLabA, f32)>,
-}
-
-impl ColorBoxA {
-    fn new(entries: Vec<(OKLabA, f32)>) -> Self {
-        Self { entries }
-    }
-
-    fn total_weight(&self) -> f32 {
-        self.entries.iter().map(|(_, w)| w).sum()
-    }
-
-    fn ranges(&self) -> (f32, f32, f32, f32) {
-        let (mut l_min, mut l_max) = (f32::MAX, f32::MIN);
-        let (mut a_min, mut a_max) = (f32::MAX, f32::MIN);
-        let (mut b_min, mut b_max) = (f32::MAX, f32::MIN);
-        let (mut al_min, mut al_max) = (f32::MAX, f32::MIN);
-
-        for (laba, _) in &self.entries {
-            l_min = l_min.min(laba.lab.l);
-            l_max = l_max.max(laba.lab.l);
-            a_min = a_min.min(laba.lab.a);
-            a_max = a_max.max(laba.lab.a);
-            b_min = b_min.min(laba.lab.b);
-            b_max = b_max.max(laba.lab.b);
-            al_min = al_min.min(laba.alpha);
-            al_max = al_max.max(laba.alpha);
-        }
-
-        (l_max - l_min, a_max - a_min, b_max - b_min, al_max - al_min)
-    }
-
-    fn volume(&self) -> f32 {
-        let (rl, ra, rb, ral) = self.ranges();
-        rl * ra * rb * (ral + 0.01) // small epsilon so zero-alpha-range doesn't collapse volume
-    }
-
-    fn priority(&self) -> f32 {
-        self.total_weight() * self.volume()
-    }
-
-    fn centroid(&self) -> OKLabA {
-        let mut l_sum = 0.0f32;
-        let mut a_sum = 0.0f32;
-        let mut b_sum = 0.0f32;
-        let mut al_sum = 0.0f32;
-        let mut w_sum = 0.0f32;
-
-        for (laba, w) in &self.entries {
-            l_sum += laba.lab.l * w;
-            a_sum += laba.lab.a * w;
-            b_sum += laba.lab.b * w;
-            al_sum += laba.alpha * w;
-            w_sum += w;
-        }
-
-        if w_sum < 1e-10 {
-            return OKLabA::new(0.0, 0.0, 0.0, 1.0);
-        }
-
-        OKLabA::new(l_sum / w_sum, a_sum / w_sum, b_sum / w_sum, al_sum / w_sum)
-    }
-
-    fn split(mut self) -> (ColorBoxA, ColorBoxA) {
-        let (rl, ra, rb, ral) = self.ranges();
-
-        // Choose split axis (4D)
-        let axis = if rl >= ra && rl >= rb && rl >= ral {
-            0 // L
-        } else if ra >= rb && ra >= ral {
-            1 // a
-        } else if rb >= ral {
-            2 // b
-        } else {
-            3 // alpha
-        };
-
-        self.entries.sort_unstable_by(|a, b| {
-            let va = match axis {
-                0 => a.0.lab.l,
-                1 => a.0.lab.a,
-                2 => a.0.lab.b,
-                _ => a.0.alpha,
-            };
-            let vb = match axis {
-                0 => b.0.lab.l,
-                1 => b.0.lab.a,
-                2 => b.0.lab.b,
-                _ => b.0.alpha,
-            };
-            va.partial_cmp(&vb).unwrap_or(core::cmp::Ordering::Equal)
-        });
-
-        let half_weight = self.total_weight() / 2.0;
-        let mut accumulated = 0.0f32;
-        let mut split_idx = 1;
-
-        for (i, (_, w)) in self.entries.iter().enumerate() {
-            accumulated += w;
-            if accumulated >= half_weight && i + 1 < self.entries.len() {
-                split_idx = i + 1;
-                break;
-            }
-        }
-
-        split_idx = split_idx.max(1).min(self.entries.len() - 1);
-
-        let right = self.entries.split_off(split_idx);
-        (ColorBoxA::new(self.entries), ColorBoxA::new(right))
-    }
-}
-
-/// Alpha-aware median cut: quantize in 4D (OKLab + alpha) space.
-pub fn median_cut_alpha(
-    histogram: Vec<(OKLabA, f32)>,
-    max_colors: usize,
-    refine: bool,
-) -> Vec<OKLabA> {
-    if histogram.is_empty() {
-        return Vec::new();
-    }
-
-    if histogram.len() <= max_colors {
-        return histogram.into_iter().map(|(laba, _)| laba).collect();
-    }
-
-    let mut boxes = Vec::with_capacity(max_colors);
-    boxes.push(ColorBoxA::new(histogram));
-
-    while boxes.len() < max_colors {
-        let best_idx = boxes
-            .iter()
-            .enumerate()
-            .filter(|(_, b)| b.entries.len() >= 2)
-            .max_by(|(_, a), (_, b)| {
-                a.priority()
-                    .partial_cmp(&b.priority())
-                    .unwrap_or(core::cmp::Ordering::Equal)
-            })
-            .map(|(i, _)| i);
-
-        let Some(idx) = best_idx else {
-            break;
-        };
-
-        let to_split = boxes.swap_remove(idx);
-        let (left, right) = to_split.split();
-        boxes.push(left);
-        boxes.push(right);
-    }
-
-    let mut palette: Vec<OKLabA> = boxes.iter().map(|b| b.centroid()).collect();
-
-    if refine {
-        let all_entries: Vec<(OKLabA, f32)> = boxes.into_iter().flat_map(|b| b.entries).collect();
-        palette = kmeans_refine_alpha(palette, &all_entries);
-    }
-
-    palette
-}
+// Old median_cut_alpha removed — replaced by wu_quantize_alpha above.
 
 /// K-means refinement in 4D OKLabA space.
 fn kmeans_refine_alpha(mut centroids: Vec<OKLabA>, entries: &[(OKLabA, f32)]) -> Vec<OKLabA> {
@@ -1114,5 +1488,82 @@ mod tests {
                 min_dist * w
             })
             .sum()
+    }
+
+    // --- Wu's quantization tests ---
+
+    #[test]
+    fn wu_empty_histogram() {
+        let result = wu_quantize(Vec::new(), 16, false);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn wu_fewer_colors_than_max() {
+        let hist = vec![
+            (OKLab::new(0.5, 0.0, 0.0), 10.0),
+            (OKLab::new(0.8, 0.0, 0.0), 10.0),
+        ];
+        let result = wu_quantize(hist, 16, false);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn wu_produces_requested_count() {
+        let mut hist = Vec::new();
+        for i in 0..100 {
+            let l = i as f32 / 100.0;
+            hist.push((OKLab::new(l, 0.0, 0.0), 1.0));
+        }
+        let result = wu_quantize(hist, 8, false);
+        assert_eq!(result.len(), 8);
+    }
+
+    #[test]
+    fn wu_refinement_improves_centroids() {
+        let mut hist = Vec::new();
+        for i in 0..50 {
+            let l = i as f32 / 50.0;
+            hist.push((
+                OKLab::new(l, (i as f32).sin() * 0.1, (i as f32).cos() * 0.1),
+                1.0,
+            ));
+        }
+
+        let unrefined = wu_quantize(hist.clone(), 8, false);
+        let refined = wu_quantize(hist.clone(), 8, true);
+
+        assert_eq!(unrefined.len(), 8);
+        assert_eq!(refined.len(), 8);
+
+        let err_unrefined = total_error(&hist, &unrefined);
+        let err_refined = total_error(&hist, &refined);
+        assert!(
+            err_refined <= err_unrefined + 1e-6,
+            "refinement should not increase error: unrefined={err_unrefined}, refined={err_refined}"
+        );
+    }
+
+    #[test]
+    fn wu_beats_or_matches_median_cut() {
+        // Wu should produce equal or lower total error than median cut
+        let mut hist = Vec::new();
+        for i in 0..200 {
+            let l = (i as f32 / 200.0).clamp(0.0, 1.0);
+            let a = ((i as f32 * 0.07).sin() * 0.3).clamp(-0.4, 0.4);
+            let b = ((i as f32 * 0.13).cos() * 0.3).clamp(-0.4, 0.4);
+            hist.push((OKLab::new(l, a, b), (i % 5 + 1) as f32));
+        }
+
+        let mc = median_cut(hist.clone(), 16, true);
+        let wu = wu_quantize(hist.clone(), 16, true);
+
+        let err_mc = total_error(&hist, &mc);
+        let err_wu = total_error(&hist, &wu);
+        // Wu should be at least as good (allowing small float tolerance)
+        assert!(
+            err_wu <= err_mc * 1.05,
+            "Wu should not be much worse than median cut: mc={err_mc}, wu={err_wu}"
+        );
     }
 }

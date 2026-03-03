@@ -864,7 +864,7 @@ pub fn quantize(
     let hist = histogram::build_histogram(pixels, &weights);
 
     // 3. Median cut with histogram-level k-means refinement (always enabled)
-    let mut centroids = median_cut::median_cut(hist, max_colors, true);
+    let mut centroids = median_cut::wu_quantize(hist, max_colors, true);
 
     // 3b. Pixel-level k-means refinement (skip for Fast — histogram refinement suffices).
     if kmeans_iters > 0 {
@@ -1102,7 +1102,7 @@ pub fn quantize_rgba(
         } else {
             max_colors
         };
-        let mut centroids = median_cut::median_cut_alpha(hist, opaque_colors, true);
+        let mut centroids = median_cut::wu_quantize_alpha(hist, opaque_colors, true);
 
         if kmeans_iters > 0 {
             centroids = median_cut::refine_against_pixels_alpha(
@@ -1177,7 +1177,7 @@ pub fn quantize_rgba(
         } else {
             max_colors
         };
-        let mut centroids = median_cut::median_cut(hist, opaque_colors, true);
+        let mut centroids = median_cut::wu_quantize(hist, opaque_colors, true);
 
         if kmeans_iters > 0 {
             centroids = median_cut::refine_against_pixels_rgba(
@@ -1403,7 +1403,7 @@ pub fn build_palette(
     }
 
     // Median cut on merged histogram
-    let mut centroids = median_cut::median_cut(merged_hist, max_colors, true);
+    let mut centroids = median_cut::wu_quantize(merged_hist, max_colors, true);
 
     // K-means refinement against all pixels (internally subsampled)
     if kmeans_iters > 0 {
@@ -1545,7 +1545,7 @@ pub fn build_palette_rgba(
             histogram::build_histogram_alpha(&all_pixels, &all_weights);
         let _ = has_transparent; // transparency handled by alpha channel in palette entries
 
-        let mut centroids = median_cut::median_cut_alpha(merged_hist, max_colors, true);
+        let mut centroids = median_cut::wu_quantize_alpha(merged_hist, max_colors, true);
 
         if kmeans_iters > 0 {
             centroids = median_cut::refine_against_pixels_alpha(
@@ -1571,7 +1571,7 @@ pub fn build_palette_rgba(
             max_colors
         };
 
-        let mut centroids = median_cut::median_cut(merged_hist, opaque_colors, true);
+        let mut centroids = median_cut::wu_quantize(merged_hist, opaque_colors, true);
 
         if kmeans_iters > 0 {
             centroids = median_cut::refine_against_pixels_rgba(

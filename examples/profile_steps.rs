@@ -51,12 +51,12 @@ fn main() {
         hist.len()
     );
 
-    // Step 3: Median cut
+    // Step 3: Wu quantize
     let t = Instant::now();
-    let centroids_mc = median_cut::median_cut(hist, 256, true);
+    let centroids_mc = median_cut::wu_quantize(hist, 256, true);
     let mc_ms = t.elapsed().as_secs_f64() * 1000.0;
     println!(
-        "3. Median cut:      {:>8.1}ms  ({} colors)",
+        "3. Wu quantize:     {:>8.1}ms  ({} colors)",
         mc_ms,
         centroids_mc.len()
     );
