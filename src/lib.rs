@@ -880,24 +880,28 @@ pub fn quantize(
         Quality::Fast => 0,
     };
 
+    // Compute OKLab once — shared across masking, histogram, k-means, dither, viterbi, joint
+    let labs = simd::batch_srgb_to_oklab_vec(pixels);
+
     // 1. Compute AQ masking weights (skip for fast mode — uniform weights)
     let weights = if use_masking {
-        masking::compute_masking_weights(pixels, width, height)
+        masking::compute_masking_weights_from_labs(&labs, width, height)
     } else {
         vec![1.0f32; pixels.len()]
     };
 
     // 2. Build weighted histogram
-    let hist = histogram::build_histogram(pixels, &weights);
+    let hist = histogram::build_histogram_from_labs(&labs, &weights);
 
     // 3. Median cut with histogram-level k-means refinement (always enabled)
     let mut centroids = median_cut::wu_quantize(hist, max_colors, true);
 
     // 3b. Pixel-level k-means refinement (skip for Fast — histogram refinement suffices).
     if kmeans_iters > 0 {
-        centroids = median_cut::refine_against_pixels(
+        centroids = median_cut::refine_against_pixels_from_labs(
             centroids,
             pixels,
+            &labs,
             &weights,
             kmeans_iters,
             config.kmeans_sample_cap,
@@ -928,7 +932,7 @@ pub fn quantize(
         run_priority: effective_run_priority,
         dither_strength: tuning.dither_strength,
         prev_indices: None,
-        precomputed_labs: None,
+        precomputed_labs: Some(&labs),
     };
     let mut indices = dither::dither_image(pixels, &dither_params, mpe_acc.as_mut());
 
@@ -951,8 +955,9 @@ pub fn quantize(
     };
     if run_lambda > 0.0 {
         if use_viterbi {
-            remap::viterbi_refine(
+            remap::viterbi_refine_with_labs(
                 pixels,
+                &labs,
                 width,
                 height,
                 &weights,
@@ -961,8 +966,8 @@ pub fn quantize(
                 run_lambda,
             );
         } else {
-            remap::run_extend_refine(
-                pixels,
+            remap::run_extend_refine_with_labs(
+                &labs,
                 width,
                 height,
                 &weights,
@@ -1002,8 +1007,8 @@ pub fn quantize(
         config.output_format,
         OutputFormat::PngJoint | OutputFormat::PngMinSize
     ) {
-        joint::optimize_rgb(
-            pixels,
+        joint::optimize_rgb_with_labs(
+            &labs,
             width,
             height,
             &weights,
@@ -1124,6 +1129,14 @@ pub fn quantize_rgba(
         Quality::Balanced => 2,
         Quality::Fast => 0,
     };
+
+    // Compute OKLab once from RGB channels — shared across dither, viterbi, joint, k-means
+    let rgb_pixels: Vec<rgb::RGB<u8>> = pixels
+        .iter()
+        .map(|p| rgb::RGB::new(p.r, p.g, p.b))
+        .collect();
+    let labs = simd::batch_srgb_to_oklab_vec(&rgb_pixels);
+
     let weights = if use_masking {
         masking::compute_masking_weights_rgba(pixels, width, height)
     } else {
@@ -1177,14 +1190,15 @@ pub fn quantize_rgba(
             run_priority: effective_run_priority,
             dither_strength: tuning.dither_strength,
             prev_indices: None,
-            precomputed_labs: None,
+            precomputed_labs: Some(&labs),
         };
         let mut indices = dither::dither_image_rgba_alpha(pixels, &dither_params, None);
 
         if viterbi_lambda > 0.0 {
             if use_viterbi {
-                remap::viterbi_refine_rgba(
+                remap::viterbi_refine_rgba_with_labs(
                     pixels,
+                    &labs,
                     width,
                     height,
                     &weights,
@@ -1193,8 +1207,9 @@ pub fn quantize_rgba(
                     viterbi_lambda,
                 );
             } else {
-                remap::run_extend_refine_rgba(
+                remap::run_extend_refine_rgba_with_labs(
                     pixels,
+                    &labs,
                     width,
                     height,
                     &weights,
@@ -1217,9 +1232,10 @@ pub fn quantize_rgba(
         let mut centroids = median_cut::wu_quantize(hist, opaque_colors, true);
 
         if kmeans_iters > 0 {
-            centroids = median_cut::refine_against_pixels_rgba(
+            centroids = median_cut::refine_against_pixels_rgba_from_labs(
                 centroids,
                 pixels,
+                &labs,
                 &weights,
                 kmeans_iters,
                 config.kmeans_sample_cap,
@@ -1254,14 +1270,15 @@ pub fn quantize_rgba(
             run_priority: effective_run_priority,
             dither_strength: tuning.dither_strength,
             prev_indices: None,
-            precomputed_labs: None,
+            precomputed_labs: Some(&labs),
         };
         let mut indices = dither::dither_image_rgba(pixels, &dither_params, None);
 
         if viterbi_lambda > 0.0 {
             if use_viterbi {
-                remap::viterbi_refine_rgba(
+                remap::viterbi_refine_rgba_with_labs(
                     pixels,
+                    &labs,
                     width,
                     height,
                     &weights,
@@ -1270,8 +1287,9 @@ pub fn quantize_rgba(
                     viterbi_lambda,
                 );
             } else {
-                remap::run_extend_refine_rgba(
+                remap::run_extend_refine_rgba_with_labs(
                     pixels,
+                    &labs,
                     width,
                     height,
                     &weights,
@@ -1328,8 +1346,8 @@ pub fn quantize_rgba(
         config.output_format,
         OutputFormat::PngJoint | OutputFormat::PngMinSize
     ) {
-        joint::optimize_rgba(
-            pixels,
+        joint::optimize_rgba_with_labs(
+            &labs,
             width,
             height,
             &weights,
@@ -1701,8 +1719,11 @@ fn remap_rgb_impl(
     let use_masking = matches!(effective_quality, Quality::Balanced | Quality::Best);
     let use_viterbi = matches!(effective_quality, Quality::Best);
 
+    // Compute OKLab once — shared across masking, dither, viterbi
+    let labs = simd::batch_srgb_to_oklab_vec(pixels);
+
     let weights = if use_masking {
-        masking::compute_masking_weights(pixels, width, height)
+        masking::compute_masking_weights_from_labs(&labs, width, height)
     } else {
         vec![1.0f32; pixels.len()]
     };
@@ -1716,7 +1737,7 @@ fn remap_rgb_impl(
         run_priority: effective_run_priority,
         dither_strength: tuning.dither_strength,
         prev_indices,
-        precomputed_labs: None,
+        precomputed_labs: Some(&labs),
     };
     let mut indices = dither::dither_image(pixels, &dither_params, None);
 
@@ -1734,8 +1755,9 @@ fn remap_rgb_impl(
     };
     if run_lambda > 0.0 {
         if use_viterbi {
-            remap::viterbi_refine(
+            remap::viterbi_refine_with_labs(
                 pixels,
+                &labs,
                 width,
                 height,
                 &weights,
@@ -1744,8 +1766,8 @@ fn remap_rgb_impl(
                 run_lambda,
             );
         } else {
-            remap::run_extend_refine(
-                pixels,
+            remap::run_extend_refine_with_labs(
+                &labs,
                 width,
                 height,
                 &weights,
@@ -1861,6 +1883,13 @@ fn remap_rgba_impl(
     let use_masking = matches!(effective_quality, Quality::Balanced | Quality::Best);
     let use_viterbi = matches!(effective_quality, Quality::Best);
 
+    // Compute OKLab once from RGB channels — shared across dither, viterbi
+    let rgb_pixels: Vec<rgb::RGB<u8>> = pixels
+        .iter()
+        .map(|p| rgb::RGB::new(p.r, p.g, p.b))
+        .collect();
+    let labs = simd::batch_srgb_to_oklab_vec(&rgb_pixels);
+
     let weights = if use_masking {
         masking::compute_masking_weights_rgba(pixels, width, height)
     } else {
@@ -1880,7 +1909,7 @@ fn remap_rgba_impl(
         run_priority: effective_run_priority,
         dither_strength: tuning.dither_strength,
         prev_indices,
-        precomputed_labs: None,
+        precomputed_labs: Some(&labs),
     };
     let mut indices = if has_full_alpha {
         dither::dither_image_rgba_alpha(pixels, &dither_params, None)
@@ -1902,8 +1931,9 @@ fn remap_rgba_impl(
     };
     if run_lambda > 0.0 {
         if use_viterbi {
-            remap::viterbi_refine_rgba(
+            remap::viterbi_refine_rgba_with_labs(
                 pixels,
+                &labs,
                 width,
                 height,
                 &weights,
@@ -1912,8 +1942,9 @@ fn remap_rgba_impl(
                 run_lambda,
             );
         } else {
-            remap::run_extend_refine_rgba(
+            remap::run_extend_refine_rgba_with_labs(
                 pixels,
+                &labs,
                 width,
                 height,
                 &weights,
