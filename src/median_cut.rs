@@ -461,6 +461,89 @@ pub fn wu_quantize(histogram: Vec<(OKLab, f32)>, max_colors: usize, refine: bool
 }
 
 // =====================================================================
+// Farthest-point seeding (deterministic k-means++)
+// =====================================================================
+
+/// Farthest-point seeding: deterministic k-means++ on histogram entries.
+///
+/// 1. First centroid = highest-weight entry
+/// 2. Each subsequent = entry with max `sqrt(weight) * min_dist_sq` to existing centroids
+/// 3. O(K*N) — trivial for 256 × 600-4000 histogram entries
+pub fn farthest_point_seed(histogram: &[(OKLab, f32)], k: usize) -> Vec<OKLab> {
+    if histogram.is_empty() || k == 0 {
+        return Vec::new();
+    }
+
+    let n = histogram.len();
+    if n <= k {
+        return histogram.iter().map(|(lab, _)| *lab).collect();
+    }
+
+    // min_dist[i] = minimum distance² from entry i to any chosen centroid
+    let mut min_dist = vec![f32::MAX; n];
+    let mut centroids = Vec::with_capacity(k);
+
+    // First centroid = highest-weight entry
+    let first = histogram
+        .iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| a.1.partial_cmp(&b.1).unwrap_or(core::cmp::Ordering::Equal))
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    centroids.push(histogram[first].0);
+
+    // Update min distances from first centroid
+    for i in 0..n {
+        min_dist[i] = histogram[i].0.distance_sq(centroids[0]);
+    }
+
+    for _ in 1..k {
+        // Pick entry with max weighted min-distance: sqrt(weight) * min_dist
+        let mut best_idx = 0;
+        let mut best_score = -1.0f32;
+        for i in 0..n {
+            let score = histogram[i].1.sqrt() * min_dist[i];
+            if score > best_score {
+                best_score = score;
+                best_idx = i;
+            }
+        }
+
+        let new_centroid = histogram[best_idx].0;
+        centroids.push(new_centroid);
+
+        // Update min distances
+        for i in 0..n {
+            let d = histogram[i].0.distance_sq(new_centroid);
+            if d < min_dist[i] {
+                min_dist[i] = d;
+            }
+        }
+    }
+
+    centroids
+}
+
+/// Quantize using farthest-point seeding + histogram-level k-means refinement.
+///
+/// Alternative to [`wu_quantize`]. Seeds centroids via farthest-point (deterministic
+/// k-means++) then refines with k-means on histogram entries.
+pub fn farthest_point_quantize(
+    histogram: Vec<(OKLab, f32)>,
+    max_colors: usize,
+) -> Vec<OKLab> {
+    if histogram.is_empty() {
+        return Vec::new();
+    }
+    if histogram.len() <= max_colors {
+        return histogram.into_iter().map(|(lab, _)| lab).collect();
+    }
+
+    let centroids = farthest_point_seed(&histogram, max_colors);
+    kmeans_refine(centroids, &histogram)
+}
+
+// =====================================================================
 // Variance-minimizing quantization — 4D alpha-aware variant
 // =====================================================================
 
@@ -775,8 +858,24 @@ pub fn wu_quantize_alpha(
 ///    is less than 1/4 of that centroid's distance to its nearest neighbor are
 ///    guaranteed to not change cluster and skip the search entirely.
 pub fn refine_against_pixels(
+    centroids: Vec<OKLab>,
+    pixels: &[rgb::RGB<u8>],
+    weights: &[f32],
+    iterations: usize,
+    max_samples: usize,
+) -> Vec<OKLab> {
+    let labs = crate::simd::batch_srgb_to_oklab_vec(pixels);
+    refine_against_pixels_from_labs(centroids, pixels, &labs, weights, iterations, max_samples)
+}
+
+/// Pixel-level k-means refinement using pre-computed OKLab values.
+///
+/// Same as [`refine_against_pixels`] but skips the sRGB→OKLab batch conversion.
+/// The `pixels` parameter is still needed for the sRGB NN cache lookup.
+pub fn refine_against_pixels_from_labs(
     mut centroids: Vec<OKLab>,
     pixels: &[rgb::RGB<u8>],
+    labs: &[OKLab],
     weights: &[f32],
     iterations: usize,
     max_samples: usize,
@@ -787,9 +886,6 @@ pub fn refine_against_pixels(
     }
 
     let n = pixels.len();
-
-    // Pre-convert all pixels to OKLab once (avoids repeated cube-root per iteration)
-    let labs = crate::simd::batch_srgb_to_oklab_vec(pixels);
 
     // Pre-compute grid OKLab values once (4096 entries, avoids 4096 srgb_to_oklab per iteration)
     let grid_labs = precompute_nn_grid();
@@ -910,20 +1006,12 @@ pub fn refine_against_pixels(
 /// Transparent pixels (alpha == 0) are skipped.
 /// When `pixels.len() > max_samples`, stride-subsamples internally.
 pub fn refine_against_pixels_rgba(
-    mut centroids: Vec<OKLab>,
+    centroids: Vec<OKLab>,
     pixels: &[rgb::RGBA<u8>],
     weights: &[f32],
     iterations: usize,
     max_samples: usize,
 ) -> Vec<OKLab> {
-    let k = centroids.len();
-    if k == 0 {
-        return centroids;
-    }
-
-    let n = pixels.len();
-
-    // Pre-convert all pixels to OKLab once (avoids repeated cube-root per iteration)
     // Batch-convert RGB channels, then zero out transparent pixels
     let rgb_pixels: Vec<rgb::RGB<u8>> = pixels
         .iter()
@@ -935,6 +1023,27 @@ pub fn refine_against_pixels_rgba(
             *lab = OKLab::new(0.0, 0.0, 0.0);
         }
     }
+    refine_against_pixels_rgba_from_labs(centroids, pixels, &labs, weights, iterations, max_samples)
+}
+
+/// Pixel-level k-means refinement for RGBA using pre-computed OKLab values.
+///
+/// Same as [`refine_against_pixels_rgba`] but skips the sRGB→OKLab batch conversion.
+/// Transparent pixels in `labs` should already be zeroed by the caller.
+pub fn refine_against_pixels_rgba_from_labs(
+    mut centroids: Vec<OKLab>,
+    pixels: &[rgb::RGBA<u8>],
+    labs: &[OKLab],
+    weights: &[f32],
+    iterations: usize,
+    max_samples: usize,
+) -> Vec<OKLab> {
+    let k = centroids.len();
+    if k == 0 {
+        return centroids;
+    }
+
+    let n = pixels.len();
 
     // Pre-compute grid OKLab values once (4096 entries)
     let grid_labs = precompute_nn_grid();

@@ -19,6 +19,23 @@ pub fn compute_masking_weights(pixels: &[rgb::RGB<u8>], width: usize, height: us
     masking_to_weights(&per_pixel)
 }
 
+/// Compute masking weights from pre-computed OKLab values.
+///
+/// Extracts L from `labs[i].l` instead of converting sRGB per pixel.
+pub fn compute_masking_weights_from_labs(
+    labs: &[crate::oklab::OKLab],
+    width: usize,
+    height: usize,
+) -> Vec<f32> {
+    let luminance: Vec<f32> = labs.iter().map(|lab| lab.l).collect();
+    let contrast = compute_local_contrast(&luminance, width, height);
+    let block_w = width.div_ceil(4);
+    let block_h = height.div_ceil(4);
+    let block_masking = erode_to_blocks(&contrast, width, height, block_w, block_h);
+    let per_pixel = upscale_bilinear(&block_masking, block_w, block_h, width, height);
+    masking_to_weights(&per_pixel)
+}
+
 /// Same as above but for RGBA input.
 pub fn compute_masking_weights_rgba(
     pixels: &[rgb::RGBA<u8>],
