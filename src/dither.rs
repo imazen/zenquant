@@ -1873,6 +1873,7 @@ mod tests {
             run_priority: RunPriority::Quality,
             dither_strength: 0.5,
             prev_indices: None,
+            precomputed_labs: None,
         };
         let indices = dither_image(&pixels, &params, None);
         assert_eq!(indices.len(), 64);
@@ -1903,6 +1904,7 @@ mod tests {
             run_priority: RunPriority::Balanced,
             dither_strength: 0.5,
             prev_indices: None,
+            precomputed_labs: None,
         };
         let indices = dither_image(&pixels, &params, None);
         assert_eq!(indices.len(), width * height);
@@ -1933,6 +1935,7 @@ mod tests {
             run_priority: RunPriority::Balanced,
             dither_strength: 0.5,
             prev_indices: None,
+            precomputed_labs: None,
         };
         let indices = dither_image(&pixels, &params, None);
         assert_eq!(indices.len(), width * height);

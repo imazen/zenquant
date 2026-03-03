@@ -9,6 +9,7 @@ use zenquant::_dev::dither::{DitherMode as DM, DitherParams, dither_image};
 use zenquant::_dev::histogram;
 use zenquant::_dev::masking;
 use zenquant::_dev::median_cut;
+use zenquant::_dev::oklab::{OKLab, srgb_to_oklab};
 use zenquant::_dev::palette::{Palette, PaletteSortStrategy};
 use zenquant::_dev::remap;
 
@@ -35,15 +36,24 @@ fn main() {
     println!("Size: {width}x{height} = {} pixels", pixels.len());
     println!();
 
-    // Step 1: AQ masking
+    // Step 0: Shared OKLab conversion (computed once, shared across pipeline)
     let t = Instant::now();
-    let weights = masking::compute_masking_weights(&pixels, width, height);
+    let labs: Vec<OKLab> = pixels
+        .iter()
+        .map(|p| srgb_to_oklab(p.r, p.g, p.b))
+        .collect();
+    let oklab_ms = t.elapsed().as_secs_f64() * 1000.0;
+    println!("0. OKLab convert:   {:>8.1}ms", oklab_ms);
+
+    // Step 1: AQ masking (from pre-computed labs)
+    let t = Instant::now();
+    let weights = masking::compute_masking_weights_from_labs(&labs, width, height);
     let masking_ms = t.elapsed().as_secs_f64() * 1000.0;
     println!("1. AQ masking:      {:>8.1}ms", masking_ms);
 
-    // Step 2: Histogram
+    // Step 2: Histogram (from pre-computed labs)
     let t = Instant::now();
-    let hist = histogram::build_histogram(&pixels, &weights);
+    let hist = histogram::build_histogram_from_labs(&labs, &weights);
     let hist_ms = t.elapsed().as_secs_f64() * 1000.0;
     println!(
         "2. Histogram:       {:>8.1}ms  ({} entries)",
@@ -61,17 +71,29 @@ fn main() {
         centroids_mc.len()
     );
 
-    // Step 3b: Pixel-level k-means refinement (balanced = 2 iters)
+    // Step 3b: Pixel-level k-means refinement (balanced = 2 iters, from labs)
     let t = Instant::now();
-    let centroids_2 =
-        median_cut::refine_against_pixels(centroids_mc.clone(), &pixels, &weights, 2, 131_072);
+    let _centroids_2 = median_cut::refine_against_pixels_from_labs(
+        centroids_mc.clone(),
+        &pixels,
+        &labs,
+        &weights,
+        2,
+        131_072,
+    );
     let kmeans_2_ms = t.elapsed().as_secs_f64() * 1000.0;
     println!("3b. K-means (2it):  {:>8.1}ms", kmeans_2_ms);
 
-    // Step 3c: Pixel-level k-means refinement (quality = 8 iters)
+    // Step 3c: Pixel-level k-means refinement (quality = 8 iters, from labs)
     let t = Instant::now();
-    let centroids =
-        median_cut::refine_against_pixels(centroids_mc.clone(), &pixels, &weights, 8, 131_072);
+    let centroids = median_cut::refine_against_pixels_from_labs(
+        centroids_mc.clone(),
+        &pixels,
+        &labs,
+        &weights,
+        8,
+        131_072,
+    );
     let kmeans_ms = t.elapsed().as_secs_f64() * 1000.0;
     println!("3c. K-means (8it):  {:>8.1}ms", kmeans_ms);
 
@@ -83,7 +105,7 @@ fn main() {
     let pal_ms = t.elapsed().as_secs_f64() * 1000.0;
     println!("4. Palette+cache:   {:>8.1}ms", pal_ms);
 
-    // Step 5: Dithering (Adaptive)
+    // Step 5: Dithering (Adaptive, with pre-computed labs)
     let t = Instant::now();
     let params = DitherParams {
         width,
@@ -94,13 +116,13 @@ fn main() {
         run_priority: remap::RunPriority::Balanced,
         dither_strength: 0.5,
         prev_indices: None,
-        precomputed_labs: None,
+        precomputed_labs: Some(&labs),
     };
     let mut indices = dither_image(&pixels, &params, None);
     let dither_ms = t.elapsed().as_secs_f64() * 1000.0;
     println!("5. Dither Adaptive: {:>8.1}ms", dither_ms);
 
-    // Step 5a: Dithering (Ordered — fast OKLab FS)
+    // Step 5a: Dithering (Ordered, with pre-computed labs)
     let t = Instant::now();
     let params_ordered = DitherParams {
         width,
@@ -111,22 +133,26 @@ fn main() {
         run_priority: remap::RunPriority::Balanced,
         dither_strength: 0.5,
         prev_indices: None,
-        precomputed_labs: None,
+        precomputed_labs: Some(&labs),
     };
     let _indices_ordered = dither_image(&pixels, &params_ordered, None);
     let ordered_ms = t.elapsed().as_secs_f64() * 1000.0;
     println!("5a. Dither Ordered: {:>8.1}ms", ordered_ms);
 
-    // Step 5b: Viterbi
+    // Step 5b: Viterbi (with pre-computed labs)
     let t = Instant::now();
-    remap::viterbi_refine(&pixels, width, height, &weights, &pal, &mut indices, 0.01);
+    remap::viterbi_refine_with_labs(
+        &pixels, &labs, width, height, &weights, &pal, &mut indices, 0.01,
+    );
     let viterbi_ms = t.elapsed().as_secs_f64() * 1000.0;
     println!("5b. Viterbi:        {:>8.1}ms", viterbi_ms);
 
     println!();
-    let total = masking_ms + hist_ms + mc_ms + kmeans_ms + pal_ms + dither_ms + viterbi_ms;
+    let total =
+        oklab_ms + masking_ms + hist_ms + mc_ms + kmeans_ms + pal_ms + dither_ms + viterbi_ms;
     println!("Total (Adaptive):   {:>8.1}ms", total);
-    let total_ordered = masking_ms + hist_ms + mc_ms + kmeans_ms + pal_ms + ordered_ms + viterbi_ms;
+    let total_ordered =
+        oklab_ms + masking_ms + hist_ms + mc_ms + kmeans_ms + pal_ms + ordered_ms + viterbi_ms;
     println!("Total (Ordered):    {:>8.1}ms", total_ordered);
 
     // Also test without k-means
@@ -145,20 +171,14 @@ fn main() {
         run_priority: remap::RunPriority::Balanced,
         dither_strength: 0.5,
         prev_indices: None,
-        precomputed_labs: None,
+        precomputed_labs: Some(&labs),
     };
     let mut indices2 = dither_image(&pixels, &params_noref, None);
-    remap::viterbi_refine(
-        &pixels,
-        width,
-        height,
-        &weights,
-        &pal_noref,
-        &mut indices2,
-        0.01,
+    remap::viterbi_refine_with_labs(
+        &pixels, &labs, width, height, &weights, &pal_noref, &mut indices2, 0.01,
     );
     let noref_ms = t.elapsed().as_secs_f64() * 1000.0;
     println!("Dither+Viterbi (no k-means): {:>8.1}ms", noref_ms);
-    let total_noref = masking_ms + hist_ms + mc_ms + pal_ms + noref_ms;
+    let total_noref = oklab_ms + masking_ms + hist_ms + mc_ms + pal_ms + noref_ms;
     println!("Total without k-means:       {:>8.1}ms", total_noref);
 }
