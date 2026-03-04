@@ -83,10 +83,13 @@ fn main() {
     ];
 
     println!(
-        "{:<20} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}",
-        "Preset", "BA", "SS2", "zsim", "MPE", "eBA", "eSS2", "defl", "ms"
+        "{:<20} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}",
+        "Preset", "BA", "SS2", "zsim", "MPE", "eBA", "eSS2", "defl", "ms", "ms/MP"
     );
-    println!("{}", "-".repeat(96));
+    println!("{}", "-".repeat(104));
+
+    // Compute total megapixels for ms/MP
+    let total_mp: f64 = images.iter().map(|(_, _, w, h)| (*w * *h) as f64 / 1_000_000.0).sum();
 
     for (name, config) in &presets {
         let mut total_ba = 0.0f64;
@@ -166,8 +169,9 @@ fn main() {
         }
 
         let n = count as f64;
+        let ms_per_mp = total_ms / total_mp;
         println!(
-            "{:<20} {:>8.3} {:>8.2} {:>8.2} {:>8.4} {:>8.3} {:>8.2} {:>8.0} {:>8.1}",
+            "{:<20} {:>8.3} {:>8.2} {:>8.2} {:>8.4} {:>8.3} {:>8.2} {:>8.0} {:>8.1} {:>8.1}",
             name,
             total_ba / n,
             total_ss2 / n,
@@ -177,14 +181,17 @@ fn main() {
             total_ess2 / n,
             total_deflate as f64 / n,
             total_ms / n,
+            ms_per_mp,
         );
     }
 
-    // Also run imagequant and quantizr for comparison
+    // Also run competitors for comparison
     println!();
     for (comp_name, comp_fn) in [
         ("imagequant", run_imagequant as fn(&[rgb::RGB<u8>], usize, usize) -> (Vec<[u8; 3]>, Vec<u8>)),
         ("quantizr", run_quantizr as fn(&[rgb::RGB<u8>], usize, usize) -> (Vec<[u8; 3]>, Vec<u8>)),
+        ("quantette-wu", run_quantette_wu as fn(&[rgb::RGB<u8>], usize, usize) -> (Vec<[u8; 3]>, Vec<u8>)),
+        ("quantette-km", run_quantette_km as fn(&[rgb::RGB<u8>], usize, usize) -> (Vec<[u8; 3]>, Vec<u8>)),
     ] {
         let mut total_ba = 0.0f64;
         let mut total_ss2 = 0.0f64;
@@ -241,14 +248,17 @@ fn main() {
             }
         }
         let n = count as f64;
+        let ms_per_mp = total_ms / total_mp;
         println!(
-            "{:<20} {:>8.3} {:>8.2} {:>8.2} {:>8.0} {:>8.1}",
+            "{:<20} {:>8.3} {:>8.2} {:>8.2} {:>8} {:>8} {:>8} {:>8.0} {:>8.1} {:>8.1}",
             comp_name,
             total_ba / n,
             total_ss2 / n,
             total_zsim / n,
+            "", "", "",
             total_deflate as f64 / n,
             total_ms / n,
+            ms_per_mp,
         );
     }
 }
@@ -271,6 +281,46 @@ fn run_imagequant(pixels: &[rgb::RGB<u8>], width: usize, height: usize) -> (Vec<
     result.set_dithering_level(0.5).unwrap();
     let (pal, idx) = result.remapped(&mut img).unwrap();
     (pal.iter().map(|c| [c.r, c.g, c.b]).collect(), idx)
+}
+
+fn run_quantette_wu(pixels: &[rgb::RGB<u8>], width: usize, height: usize) -> (Vec<[u8; 3]>, Vec<u8>) {
+    run_quantette(pixels, width, height, false)
+}
+
+fn run_quantette_km(pixels: &[rgb::RGB<u8>], width: usize, height: usize) -> (Vec<[u8; 3]>, Vec<u8>) {
+    run_quantette(pixels, width, height, true)
+}
+
+fn run_quantette(
+    pixels: &[rgb::RGB<u8>],
+    width: usize,
+    height: usize,
+    use_kmeans: bool,
+) -> (Vec<[u8; 3]>, Vec<u8>) {
+    use quantette::deps::palette::Srgb;
+    use quantette::{ImageBuf, Pipeline, QuantizeMethod};
+    use quantette::dither::FloydSteinberg;
+
+    let srgb_pixels: Vec<Srgb<u8>> = pixels.iter().map(|p| Srgb::new(p.r, p.g, p.b)).collect();
+    let image = ImageBuf::new(width as u32, height as u32, srgb_pixels)
+        .expect("quantette ImageBuf");
+
+    let method = if use_kmeans {
+        QuantizeMethod::kmeans()
+    } else {
+        QuantizeMethod::Wu
+    };
+
+    let indexed = Pipeline::new()
+        .palette_size(256u16.try_into().unwrap())
+        .quantize_method(method)
+        .ditherer(Some(FloydSteinberg::new()))
+        .input_image(image.as_ref())
+        .output_srgb8_indexed_image();
+
+    let palette: Vec<[u8; 3]> = indexed.palette().iter().map(|c| [c.red, c.green, c.blue]).collect();
+    let indices = indexed.indices().to_vec();
+    (palette, indices)
 }
 
 fn run_quantizr(pixels: &[rgb::RGB<u8>], width: usize, height: usize) -> (Vec<[u8; 3]>, Vec<u8>) {

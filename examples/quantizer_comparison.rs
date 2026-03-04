@@ -34,6 +34,8 @@ const QUANTIZER_NAMES: &[&str] = &[
     "iq-s4-d100",
     "iq-s1-d100",
     "quantizr",
+    "quantette-wu",
+    "quantette-km",
     "color_quant",
     "exoquant",
 ];
@@ -341,6 +343,9 @@ fn load_cache(path: &Path) -> HashMap<String, QuantizerResult> {
                 "spd1 q100 d0.5" => "spd1 q100 d0.5",
                 "spd4 q100 d1.0" => "spd4 q100 d1.0",
                 "spd1 q100 d1.0" => "spd1 q100 d1.0",
+                "d0.7 quality-runs" => "d0.7 quality-runs",
+                "wu" => "wu",
+                "kmeans" => "kmeans",
                 _ => "",
             };
             cache.insert(
@@ -446,6 +451,14 @@ fn run_quantizer(
             let (p, i) = run_color_quant(pixels, width, height);
             Some((p, i, "no dithering"))
         }
+        "quantette-wu" => {
+            let (p, i) = run_quantette(pixels, width, height, false);
+            Some((p, i, "wu"))
+        }
+        "quantette-km" => {
+            let (p, i) = run_quantette(pixels, width, height, true);
+            Some((p, i, "kmeans"))
+        }
         "exoquant" => run_exoquant(pixels, width, height).map(|(p, i)| (p, i, "")),
         _ => None,
     }
@@ -497,6 +510,38 @@ fn run_quantizr(pixels: &[rgb::RGB<u8>], width: usize, height: usize) -> (Vec<[u
         .collect();
 
     (palette_rgb, indices)
+}
+
+fn run_quantette(
+    pixels: &[rgb::RGB<u8>],
+    width: usize,
+    height: usize,
+    use_kmeans: bool,
+) -> (Vec<[u8; 3]>, Vec<u8>) {
+    use quantette::deps::palette::Srgb;
+    use quantette::{ImageBuf, Pipeline, QuantizeMethod};
+    use quantette::dither::FloydSteinberg;
+
+    let srgb_pixels: Vec<Srgb<u8>> = pixels.iter().map(|p| Srgb::new(p.r, p.g, p.b)).collect();
+    let image = ImageBuf::new(width as u32, height as u32, srgb_pixels)
+        .expect("quantette ImageBuf");
+
+    let method = if use_kmeans {
+        QuantizeMethod::kmeans()
+    } else {
+        QuantizeMethod::Wu
+    };
+
+    let indexed = Pipeline::new()
+        .palette_size(256u16.try_into().unwrap())
+        .quantize_method(method)
+        .ditherer(Some(FloydSteinberg::new()))
+        .input_image(image.as_ref())
+        .output_srgb8_indexed_image();
+
+    let palette: Vec<[u8; 3]> = indexed.palette().iter().map(|c| [c.red, c.green, c.blue]).collect();
+    let indices = indexed.indices().to_vec();
+    (palette, indices)
 }
 
 fn run_color_quant(
@@ -680,10 +725,10 @@ fn print_summary(report: &ReportData) {
 
     eprintln!("\n--- Summary ---");
     eprintln!(
-        "{:<14} {:>7} {:>7} {:>8} {:>8} {:>8} {:>7}",
-        "Quantizer", "BA", "SS2", "DSSIM", "PNG", "GIF", "ms"
+        "{:<14} {:>7} {:>7} {:>8} {:>8} {:>8} {:>7} {:>7}",
+        "Quantizer", "BA", "SS2", "DSSIM", "PNG", "GIF", "ms", "ms/MP"
     );
-    eprintln!("{}", "-".repeat(64));
+    eprintln!("{}", "-".repeat(72));
 
     // Collect per-quantizer name
     let mut all_names: Vec<String> = Vec::new();
@@ -702,6 +747,7 @@ fn print_summary(report: &ReportData) {
         let mut sum_png = 0usize;
         let mut sum_gif = 0usize;
         let mut sum_ms = 0.0f64;
+        let mut sum_mp = 0.0f64;
         let mut count = 0u32;
 
         for img in &report.images {
@@ -712,14 +758,16 @@ fn print_summary(report: &ReportData) {
                 sum_png += q.png_bytes;
                 sum_gif += q.gif_bytes;
                 sum_ms += q.time_ms;
+                sum_mp += (img.width * img.height) as f64 / 1_000_000.0;
                 count += 1;
             }
         }
 
         if count > 0 {
             let n = count as f64;
+            let ms_per_mp = sum_ms / sum_mp;
             eprintln!(
-                "{:<14} {:>7.2} {:>7.1} {:>8.5} {:>8.0} {:>8.0} {:>7.1}",
+                "{:<14} {:>7.2} {:>7.1} {:>8.5} {:>8.0} {:>8.0} {:>7.1} {:>7.1}",
                 name,
                 sum_ba / n,
                 sum_ss2 / n,
@@ -727,6 +775,7 @@ fn print_summary(report: &ReportData) {
                 sum_png as f64 / n,
                 sum_gif as f64 / n,
                 sum_ms / n,
+                ms_per_mp,
             );
         }
     }
@@ -813,6 +862,10 @@ fn report_to_json(report: &ReportData) -> String {
             out.push_str(&q.gif_bytes.to_string());
             out.push_str(",\"time_ms\":");
             out.push_str(&format!("{:.1}", q.time_ms));
+            let mp = (img.width * img.height) as f64 / 1_000_000.0;
+            let ms_per_mp = if mp > 0.0 { q.time_ms / mp } else { 0.0 };
+            out.push_str(",\"ms_per_mp\":");
+            out.push_str(&format!("{:.1}", ms_per_mp));
             out.push_str("}}");
         }
         out.push_str("]}");
@@ -825,7 +878,8 @@ fn report_to_json(report: &ReportData) -> String {
     out.push_str("{\"key\":\"dssim\",\"label\":\"DSSIM\",\"direction\":\"asc\"},");
     out.push_str("{\"key\":\"png_bytes\",\"label\":\"PNG\",\"direction\":\"asc\"},");
     out.push_str("{\"key\":\"gif_bytes\",\"label\":\"GIF\",\"direction\":\"asc\"},");
-    out.push_str("{\"key\":\"time_ms\",\"label\":\"ms\",\"direction\":\"asc\"}");
+    out.push_str("{\"key\":\"time_ms\",\"label\":\"ms\",\"direction\":\"asc\"},");
+    out.push_str("{\"key\":\"ms_per_mp\",\"label\":\"ms/MP\",\"direction\":\"asc\"}");
     out.push_str("],\"showKeyLegend\":true}");
     out
 }
