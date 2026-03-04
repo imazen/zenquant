@@ -29,7 +29,6 @@ const QUANTIZER_NAMES: &[&str] = &[
     "zq-fast",
     "zq-balanced",
     "zq-best",
-    "zq-best-q-d70",
     "iq-s1-d50",
     "iq-s4-d100",
     "iq-s1-d100",
@@ -418,18 +417,6 @@ fn run_quantizer(
             let cfg = QuantizeConfig::new(OutputFormat::Png).with_max_colors(256);
             let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
             Some((r.palette().to_vec(), r.indices().to_vec(), ""))
-        }
-        "zq-best-q-d70" => {
-            let cfg = QuantizeConfig::new(OutputFormat::Png)
-                .with_max_colors(256)
-                ._with_dither_strength(0.7)
-                ._with_run_priority_quality();
-            let r = zenquant::quantize(pixels, width, height, &cfg).unwrap();
-            Some((
-                r.palette().to_vec(),
-                r.indices().to_vec(),
-                "d0.7 quality-runs",
-            ))
         }
         "iq-s1-d50" => {
             let (p, i) = run_imagequant(pixels, width, height, 1, 100, 0.5);
