@@ -37,6 +37,24 @@ const QUANTIZER_NAMES: &[&str] = &[
     "color_quant",
 ];
 
+const SOURCE_URL: &str =
+    "https://github.com/imazen/zenquant/blob/main/examples/quantizer_comparison.rs";
+
+fn display_info(name: &str) -> (&str, usize) {
+    match name {
+        "zq-fast" => ("zenquant fast", 434),
+        "zq-balanced" => ("zenquant balanced", 441),
+        "zq-best" => ("zenquant best", 448),
+        "quantette-km" => ("quantette kmeans", 473),
+        "iq-s1-d50" => ("imagequant s1 d50", 453),
+        "iq-s4-d100" => ("imagequant s4 d100", 457),
+        "iq-s1-d100" => ("imagequant s1 d100", 461),
+        "quantizr" => ("quantizr", 465),
+        "color_quant" => ("color_quant", 469),
+        _ => (name, 0),
+    }
+}
+
 #[derive(Clone, Debug)]
 struct ImageResult {
     name: String,
@@ -83,11 +101,12 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 3 {
         eprintln!(
-            "Usage: quantizer_comparison <corpus[,corpus,...]> <output_dir> [max_images] [--recalc=name,...]"
+            "Usage: quantizer_comparison <corpus[,corpus,...]> <output_dir> [max_images] [--recalc=name,...] [--benchmark]"
         );
         eprintln!("  corpus: cid22, clic2025, gb82-sc (comma-separated for multiple)");
         eprintln!("  --recalc=zq-best,zq-balanced  invalidate cache for specific quantizers");
         eprintln!("  --recalc=all                   ignore all cached results");
+        eprintln!("  --benchmark                    rigorous timing: sequential, min-of-5 runs");
         std::process::exit(1);
     }
 
@@ -105,6 +124,7 @@ fn main() {
         .flat_map(|v| v.split(',').map(|s| s.to_string()))
         .collect();
     let recalc_all = recalc.iter().any(|s| s == "all");
+    let benchmark = args.iter().any(|a| a == "--benchmark");
 
     // Parse comma-separated corpus names
     let corpus_names: Vec<&str> = corpus_arg.split(',').collect();
@@ -152,12 +172,15 @@ fn main() {
         }
     }
 
-    let num_threads: usize = args
-        .iter()
-        .filter_map(|a| a.strip_prefix("--threads="))
-        .next()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(8);
+    let num_threads: usize = if benchmark {
+        1
+    } else {
+        args.iter()
+            .filter_map(|a| a.strip_prefix("--threads="))
+            .next()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(8)
+    };
 
     let total = all_tasks.len();
     eprintln!(
@@ -233,11 +256,22 @@ fn main() {
                             }
                         }
 
-                        let t0 = Instant::now();
-                        let result = run_quantizer(qname, &pixels, width, height);
-                        let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                        let bench_runs = if benchmark { 5 } else { 1 };
+                        let mut best_ms = f64::INFINITY;
+                        let mut last_result = None;
+                        for run in 0..bench_runs {
+                            // Warmup: discard first run's timing in benchmark mode
+                            let t0 = Instant::now();
+                            let result = run_quantizer(qname, &pixels, width, height);
+                            let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                            if run > 0 || !benchmark {
+                                best_ms = best_ms.min(elapsed_ms);
+                            }
+                            last_result = result;
+                        }
+                        let elapsed_ms = best_ms;
 
-                        let (pal, idx, note) = match result {
+                        let (pal, idx, note) = match last_result {
                             Some(r) => r,
                             None => {
                                 log.push_str(&format!("  {qname}:skip"));
@@ -284,13 +318,13 @@ fn main() {
     report.images = images;
 
     // Generate HTML report
-    let html = generate_html(&report, &output_dir);
+    let html = generate_html(&report, &output_dir, benchmark);
     let html_path = output_dir.join("index.html");
     std::fs::write(&html_path, &html).expect("failed to write index.html");
     eprintln!("\nReport: {}", html_path.display());
 
     // Print summary
-    print_summary(&report);
+    print_summary(&report, benchmark);
 }
 
 // ---------------------------------------------------------------------------
@@ -676,17 +710,19 @@ fn save_indexed_png(path: &Path, palette: &[[u8; 3]], indices: &[u8], width: usi
 // Summary
 // ---------------------------------------------------------------------------
 
-fn print_summary(report: &ReportData) {
+fn print_summary(report: &ReportData, benchmark: bool) {
     if report.images.is_empty() {
         return;
     }
 
+    let ms_label = if benchmark { "ms" } else { "~ms" };
+    let ms_mp_label = if benchmark { "ms/MP" } else { "~ms/MP" };
     eprintln!("\n--- Summary ---");
     eprintln!(
-        "{:<14} {:>7} {:>7} {:>8} {:>8} {:>8} {:>7} {:>7}",
-        "Quantizer", "BA", "SS2", "DSSIM", "PNG", "GIF", "ms", "ms/MP"
+        "{:<20} {:>7} {:>7} {:>8} {:>8} {:>8} {:>7} {:>7}",
+        "Quantizer", "BA", "SS2", "DSSIM", "PNG", "GIF", ms_label, ms_mp_label
     );
-    eprintln!("{}", "-".repeat(72));
+    eprintln!("{}", "-".repeat(78));
 
     // Collect per-quantizer name
     let mut all_names: Vec<String> = Vec::new();
@@ -724,9 +760,10 @@ fn print_summary(report: &ReportData) {
         if count > 0 {
             let n = count as f64;
             let ms_per_mp = sum_ms / sum_mp;
+            let (display, _) = display_info(name);
             eprintln!(
-                "{:<14} {:>7.2} {:>7.1} {:>8.5} {:>8.0} {:>8.0} {:>7.1} {:>7.1}",
-                name,
+                "{:<20} {:>7.2} {:>7.1} {:>8.5} {:>8.0} {:>8.0} {:>7.1} {:>7.1}",
+                display,
                 sum_ba / n,
                 sum_ss2 / n,
                 sum_dssim / n,
@@ -743,7 +780,7 @@ fn print_summary(report: &ReportData) {
 // HTML generation
 // ---------------------------------------------------------------------------
 
-fn generate_html(report: &ReportData, output_dir: &Path) -> String {
+fn generate_html(report: &ReportData, output_dir: &Path, benchmark: bool) -> String {
     // Copy image-compare.js web component to output directory
     let component_src = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -759,7 +796,7 @@ fn generate_html(report: &ReportData, output_dir: &Path) -> String {
         )
     });
 
-    let data_json = report_to_json(report);
+    let data_json = report_to_json(report, benchmark);
     HTML_TEMPLATE.replace("{DATA_JSON}", &data_json)
 }
 
@@ -771,7 +808,7 @@ fn json_escape(s: &str) -> String {
         .replace('\t', "\\t")
 }
 
-fn report_to_json(report: &ReportData) -> String {
+fn report_to_json(report: &ReportData, benchmark: bool) -> String {
     // Outputs the ImageCompareConfig format expected by <image-compare>
     let mut out = String::with_capacity(4096);
     out.push_str("{\"title\":\"");
@@ -799,8 +836,12 @@ fn report_to_json(report: &ReportData) -> String {
 
         for q in &img.quantizers {
             out.push(',');
+            let (display, line) = display_info(&q.name);
             out.push_str("{\"name\":\"");
-            out.push_str(&json_escape(&q.name));
+            out.push_str(&json_escape(display));
+            out.push_str("\",\"nameUrl\":\"");
+            out.push_str(SOURCE_URL);
+            out.push_str(&format!("#L{line}"));
             out.push_str("\",\"url\":\"");
             out.push_str(&json_escape(&img.name));
             out.push('/');
@@ -836,8 +877,10 @@ fn report_to_json(report: &ReportData) -> String {
     out.push_str("{\"key\":\"dssim\",\"label\":\"DSSIM\",\"direction\":\"asc\"},");
     out.push_str("{\"key\":\"png_bytes\",\"label\":\"PNG\",\"direction\":\"asc\"},");
     out.push_str("{\"key\":\"gif_bytes\",\"label\":\"GIF\",\"direction\":\"asc\"},");
-    out.push_str("{\"key\":\"time_ms\",\"label\":\"ms\",\"direction\":\"asc\"},");
-    out.push_str("{\"key\":\"ms_per_mp\",\"label\":\"ms/MP\",\"direction\":\"asc\"}");
+    let ms_label = if benchmark { "ms" } else { "~ms" };
+    let ms_mp_label = if benchmark { "ms/MP" } else { "~ms/MP" };
+    out.push_str(&format!("{{\"key\":\"time_ms\",\"label\":\"{ms_label}\",\"direction\":\"asc\"}},"));
+    out.push_str(&format!("{{\"key\":\"ms_per_mp\",\"label\":\"{ms_mp_label}\",\"direction\":\"asc\"}}"));
     out.push_str("],\"showKeyLegend\":true}");
     out
 }
