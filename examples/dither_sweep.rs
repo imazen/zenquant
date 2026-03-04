@@ -15,11 +15,20 @@ use zenquant::{OutputFormat, QuantizeConfig};
 
 const DITHER_VALUES: &[f32] = &[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
 
-fn corpus_path(name: &str) -> &'static str {
+fn codec_corpus_dir() -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(
+        std::env::var("CODEC_CORPUS_DIR").unwrap_or_else(|_| "/home/lilith/work/codec-corpus".into()),
+    );
+    assert!(dir.is_dir(), "Codec corpus not found: {}. Set CODEC_CORPUS_DIR.", dir.display());
+    dir
+}
+
+fn corpus_path(name: &str) -> String {
+    let base = codec_corpus_dir();
     match name {
-        "cid22" => "/home/lilith/work/codec-corpus/CID22/CID22-512/training",
-        "clic2025" => "/home/lilith/work/codec-corpus/clic2025/final-test",
-        "gb82-sc" => "/home/lilith/work/codec-corpus/gb82-sc",
+        "cid22" => base.join("CID22/CID22-512/training").to_string_lossy().into_owned(),
+        "clic2025" => base.join("clic2025/final-test").to_string_lossy().into_owned(),
+        "gb82-sc" => base.join("gb82-sc").to_string_lossy().into_owned(),
         _ => panic!("Unknown corpus: {name}"),
     }
 }
@@ -30,7 +39,7 @@ fn main() {
     let max_images: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(5);
     let image_dir = corpus_path(corpus);
 
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(image_dir)
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(&image_dir)
         .unwrap_or_else(|e| panic!("cannot read {image_dir}: {e}"))
         .filter_map(|e| e.ok())
         .map(|e| e.path())

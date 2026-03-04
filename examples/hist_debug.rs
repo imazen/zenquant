@@ -16,10 +16,18 @@ fn count_bins(pixels: &[rgb::RGB<u8>], bits: u32) -> usize {
     bins.len()
 }
 
+fn codec_corpus_dir() -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(
+        std::env::var("CODEC_CORPUS_DIR").unwrap_or_else(|_| "/home/lilith/work/codec-corpus".into()),
+    );
+    assert!(dir.is_dir(), "Codec corpus not found: {}. Set CODEC_CORPUS_DIR.", dir.display());
+    dir
+}
+
 fn main() {
     let dir = std::env::args()
         .nth(1)
-        .unwrap_or("/home/lilith/work/codec-corpus/CID22/CID22-512/training".into());
+        .unwrap_or_else(|| codec_corpus_dir().join("CID22/CID22-512/training").to_string_lossy().into_owned());
     let max: usize = std::env::args()
         .nth(2)
         .and_then(|s| s.parse().ok())

@@ -5,16 +5,24 @@
 
 use zenquant::{OutputFormat, Quality, QuantizeConfig};
 
+fn codec_corpus_dir() -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(
+        std::env::var("CODEC_CORPUS_DIR").unwrap_or_else(|_| "/home/lilith/work/codec-corpus".into()),
+    );
+    assert!(dir.is_dir(), "Codec corpus not found: {}. Set CODEC_CORPUS_DIR.", dir.display());
+    dir
+}
+
+fn zenquant_output_dir() -> String {
+    std::env::var("ZENQUANT_OUTPUT_DIR").unwrap_or_else(|_| "/mnt/v/output/zenquant".into())
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let image_dir = args
-        .get(1)
-        .map(|s| s.as_str())
-        .unwrap_or("/home/lilith/work/codec-corpus/CID22/CID22-512/validation");
-    let output_dir = args
-        .get(2)
-        .map(|s| s.as_str())
-        .unwrap_or("/mnt/v/output/zenquant/compare");
+    let default_image_dir = codec_corpus_dir().join("CID22/CID22-512/validation").to_string_lossy().into_owned();
+    let default_output_dir = format!("{}/compare", zenquant_output_dir());
+    let image_dir = args.get(1).unwrap_or(&default_image_dir);
+    let output_dir = args.get(2).unwrap_or(&default_output_dir);
     let max_images: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(5);
 
     let mut paths: Vec<std::path::PathBuf> = std::fs::read_dir(image_dir)
