@@ -539,7 +539,10 @@ pub fn farthest_point_quantize(
         return Vec::new();
     }
     if histogram.len() <= max_colors {
-        return histogram.into_iter().map(|(lab, _)| lab).collect();
+        // Few histogram entries — use them all as seeds but still run k-means
+        // refinement so centroids snap to weighted means of their Voronoi cells.
+        let seeds: Vec<OKLab> = histogram.iter().map(|(lab, _)| *lab).collect();
+        return kmeans_refine(seeds, &histogram);
     }
 
     let centroids = farthest_point_seed(&histogram, max_colors);

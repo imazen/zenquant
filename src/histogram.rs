@@ -71,6 +71,8 @@ pub fn build_histogram(pixels: &[rgb::RGB<u8>], weights: &[f32]) -> Vec<(OKLab, 
 ///
 /// Skips sRGB→OKLab conversion entirely — uses the provided labs directly.
 /// Does not attempt pixel deduplication (labs are already computed).
+///
+/// Build histogram from pre-computed OKLab values.
 pub fn build_histogram_from_labs(labs: &[crate::oklab::OKLab], weights: &[f32]) -> Vec<(crate::oklab::OKLab, f32)> {
     assert_eq!(labs.len(), weights.len());
     let bits = if labs.len() <= 500_000 { 6 } else { 5 };
