@@ -64,26 +64,35 @@ fn main() {
     let presets: Vec<(&str, QuantizeConfig)> = vec![
         (
             "zq fast",
-            QuantizeConfig::new(OutputFormat::Png).with_quality(Quality::Fast),
+            QuantizeConfig::new(OutputFormat::Png)
+                .with_quality(Quality::Fast)
+                .with_compute_quality_metric(true),
         ),
         (
             "zq balanced",
-            QuantizeConfig::new(OutputFormat::Png).with_quality(Quality::Balanced),
+            QuantizeConfig::new(OutputFormat::Png)
+                .with_quality(Quality::Balanced)
+                .with_compute_quality_metric(true),
         ),
-        ("zq best", QuantizeConfig::new(OutputFormat::Png)),
+        (
+            "zq best",
+            QuantizeConfig::new(OutputFormat::Png).with_compute_quality_metric(true),
+        ),
     ];
 
     println!(
-        "{:<20} {:>8} {:>8} {:>8} {:>8} {:>8}",
-        "Preset", "BA", "SS2", "deflate", "runs", "ms"
+        "{:<20} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}",
+        "Preset", "BA", "SS2", "MPE", "eBA", "eSS2", "defl", "ms"
     );
-    println!("{}", "-".repeat(72));
+    println!("{}", "-".repeat(88));
 
     for (name, config) in &presets {
         let mut total_ba = 0.0f64;
         let mut total_ss2 = 0.0f64;
+        let mut total_mpe = 0.0f64;
+        let mut total_eba = 0.0f64;
+        let mut total_ess2 = 0.0f64;
         let mut total_deflate = 0u64;
-        let mut total_runs = 0.0f64;
         let mut total_ms = 0.0f64;
         let mut count = 0u32;
 
@@ -91,6 +100,17 @@ fn main() {
             let t = Instant::now();
             let result = zenquant::quantize(pixels, *width, *height, config).unwrap();
             let ms = t.elapsed().as_secs_f64() * 1000.0;
+
+            // Zenquant's internal MPE metric
+            let (mpe, eba, ess2) = if let Some(m) = result.mpe_result() {
+                (
+                    m.score as f64,
+                    m.butteraugli_estimate as f64,
+                    m.ssimulacra2_estimate as f64,
+                )
+            } else {
+                (f64::NAN, f64::NAN, f64::NAN)
+            };
 
             let test_rgb: Vec<RGB8> = result
                 .indices()
@@ -119,14 +139,15 @@ fn main() {
             )
             .unwrap_or(f64::NAN);
 
-            let avg_run = average_run_length(result.indices());
             let deflate = deflate_compress(result.indices());
 
             if ba.is_finite() && ss2.is_finite() {
                 total_ba += ba;
                 total_ss2 += ss2;
+                total_mpe += mpe;
+                total_eba += eba;
+                total_ess2 += ess2;
                 total_deflate += deflate as u64;
-                total_runs += avg_run as f64;
                 total_ms += ms;
                 count += 1;
             }
@@ -134,12 +155,14 @@ fn main() {
 
         let n = count as f64;
         println!(
-            "{:<20} {:>8.3} {:>8.2} {:>8.0} {:>8.1} {:>8.1}",
+            "{:<20} {:>8.3} {:>8.2} {:>8.4} {:>8.3} {:>8.2} {:>8.0} {:>8.1}",
             name,
             total_ba / n,
             total_ss2 / n,
+            total_mpe / n,
+            total_eba / n,
+            total_ess2 / n,
             total_deflate as f64 / n,
-            total_runs / n,
             total_ms / n,
         );
     }
