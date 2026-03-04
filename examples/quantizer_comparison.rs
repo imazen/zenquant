@@ -689,26 +689,26 @@ fn encode_gif_bytes(palette: &[[u8; 3]], indices: &[u8], width: usize, height: u
 // ---------------------------------------------------------------------------
 
 fn save_truecolor_png(path: &Path, pixels: &[rgb::RGB<u8>], width: usize, height: usize) {
-    let file = std::fs::File::create(path).unwrap();
-    let buf = std::io::BufWriter::new(file);
-    let mut encoder = png::Encoder::new(buf, width as u32, height as u32);
-    encoder.set_color(png::ColorType::Rgb);
-    encoder.set_depth(png::BitDepth::Eight);
-    let flat: Vec<u8> = pixels.iter().flat_map(|p| [p.r, p.g, p.b]).collect();
-    let mut writer = encoder.write_header().unwrap();
-    writer.write_image_data(&flat).unwrap();
+    let img = ImgVec::new(pixels.to_vec(), width, height);
+    let config = EncodeConfig::default();
+    let buf = zenpng::encode_rgb8(img.as_ref(), None, &config, &Unstoppable, &Unstoppable)
+        .expect("zenpng encode failed");
+    std::fs::write(path, &buf).unwrap();
 }
 
 fn save_indexed_png(path: &Path, palette: &[[u8; 3]], indices: &[u8], width: usize, height: usize) {
-    let file = std::fs::File::create(path).unwrap();
-    let buf = std::io::BufWriter::new(file);
-    let mut encoder = png::Encoder::new(buf, width as u32, height as u32);
-    encoder.set_color(png::ColorType::Indexed);
-    encoder.set_depth(png::BitDepth::Eight);
-    let palette_flat: Vec<u8> = palette.iter().flat_map(|c| c.iter().copied()).collect();
-    encoder.set_palette(palette_flat);
-    let mut writer = encoder.write_header().unwrap();
-    writer.write_image_data(indices).unwrap();
+    let pixels: Vec<RGB<u8>> = indices
+        .iter()
+        .map(|&i| {
+            let c = palette[i as usize];
+            RGB::new(c[0], c[1], c[2])
+        })
+        .collect();
+    let img = ImgVec::new(pixels, width, height);
+    let config = EncodeConfig::default();
+    let buf = zenpng::encode_rgb8(img.as_ref(), None, &config, &Unstoppable, &Unstoppable)
+        .expect("zenpng encode failed");
+    std::fs::write(path, &buf).unwrap();
 }
 
 // ---------------------------------------------------------------------------
