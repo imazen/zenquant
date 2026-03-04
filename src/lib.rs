@@ -246,7 +246,7 @@ impl QuantizeTuning {
                 3.0, // GIF's LZW rewards long runs heavily
             ),
             OutputFormat::Png => (
-                0.5,
+                0.7,
                 palette::PaletteSortStrategy::Luminance,
                 false,
                 AlphaMode::Full,
@@ -333,7 +333,7 @@ impl QuantizeConfig {
             output_format: format,
             run_priority: match format {
                 OutputFormat::PngMinSize => remap::RunPriority::Compression,
-                _ => remap::RunPriority::Balanced,
+                _ => remap::RunPriority::Quality,
             },
             dither_mode: match format {
                 OutputFormat::PngMinSize => dither::DitherMode::BlueNoise,

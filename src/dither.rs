@@ -376,7 +376,7 @@ fn compute_dither_map(lab_buf: &[[f32; 3]], width: usize, height: usize) -> Vec<
     // Above edge_high: hard edge, ratio = min_ratio
     let edge_low: f32 = 0.003;
     let edge_high: f32 = 0.05;
-    let min_ratio: f32 = 0.2;
+    let min_ratio: f32 = 0.4;
     let range = edge_high - edge_low;
 
     for y in 0..height {
@@ -424,7 +424,7 @@ fn compute_dither_map_4(lab_buf: &[[f32; 4]], width: usize, height: usize) -> Ve
 
     let edge_low: f32 = 0.003;
     let edge_high: f32 = 0.05;
-    let min_ratio: f32 = 0.2;
+    let min_ratio: f32 = 0.4;
     let range = edge_high - edge_low;
 
     for y in 0..height {
@@ -575,7 +575,7 @@ pub fn dither_image(
     };
 
     // Error magnitude threshold — errors beyond this get damped.
-    let max_err_sq = 0.002 * dither_strength;
+    let max_err_sq = 0.005 * dither_strength;
 
     let adaptive = matches!(mode, DitherMode::Adaptive | DitherMode::SierraLite | DitherMode::Linear);
     let use_sierra = mode == DitherMode::SierraLite;
@@ -618,7 +618,7 @@ pub fn dither_image(
                             orig_lab.distance_sq(palette.entries_oklab()[dithered_best as usize]);
                         let d_undithered =
                             orig_lab.distance_sq(palette.entries_oklab()[undithered_best as usize]);
-                        if d_dithered <= d_undithered * 2.0 {
+                        if d_dithered <= d_undithered * 4.0 {
                             dithered_best
                         } else {
                             undithered_best
@@ -751,7 +751,7 @@ pub fn dither_image_rgba(
 
     let run_bias = run_priority.bias();
     let linear = mode == DitherMode::Linear;
-    let max_err_sq = 0.002 * dither_strength;
+    let max_err_sq = 0.005 * dither_strength;
     let adaptive = matches!(mode, DitherMode::Adaptive | DitherMode::SierraLite | DitherMode::Linear);
     let use_fallback = !linear && dither_strength > 0.4;
     let use_damping = !linear && dither_strength > 0.3;
@@ -817,7 +817,7 @@ pub fn dither_image_rgba(
                             orig_lab.distance_sq(palette.entries_oklab()[dithered_best as usize]);
                         let d_undithered =
                             orig_lab.distance_sq(palette.entries_oklab()[undithered_best as usize]);
-                        if d_dithered <= d_undithered * 2.0 {
+                        if d_dithered <= d_undithered * 4.0 {
                             dithered_best
                         } else {
                             undithered_best
@@ -953,7 +953,7 @@ pub fn dither_image_rgba_alpha(
 
     let run_bias = run_priority.bias();
     let linear = mode == DitherMode::Linear;
-    let max_err_sq = 0.002 * dither_strength;
+    let max_err_sq = 0.005 * dither_strength;
     let adaptive = matches!(mode, DitherMode::Adaptive | DitherMode::SierraLite | DitherMode::Linear);
     let use_fallback = !linear && dither_strength > 0.4;
     let use_damping = !linear && dither_strength > 0.3;
@@ -1025,7 +1025,7 @@ pub fn dither_image_rgba_alpha(
                             orig_lab.distance_sq(palette.entries_oklab()[dithered_best as usize]);
                         let d_undithered = orig_lab
                             .distance_sq(palette.entries_oklab()[undithered_nearest as usize]);
-                        if d_dithered <= d_undithered * 2.0 {
+                        if d_dithered <= d_undithered * 4.0 {
                             dithered_best
                         } else {
                             undithered_nearest
