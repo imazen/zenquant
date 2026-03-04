@@ -863,14 +863,7 @@ pub fn quantize(
             pal
         };
         let mpe_result = if needs_metric {
-            Some(metric::compute_mpe(
-                pixels,
-                pal.entries(),
-                &indices,
-                width,
-                height,
-                None,
-            ))
+            Some(metric::MpeResult::zero(width, height))
         } else {
             None
         };
@@ -1128,14 +1121,7 @@ pub fn quantize_rgba(
             pal
         };
         let mpe_result = if needs_metric {
-            Some(metric::compute_mpe_rgba(
-                pixels,
-                pal.entries_rgba(),
-                &indices,
-                width,
-                height,
-                None,
-            ))
+            Some(metric::MpeResult::zero(width, height))
         } else {
             None
         };

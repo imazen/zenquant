@@ -42,6 +42,22 @@ pub struct MpeResult {
     pub ssimulacra2_estimate: f32,
 }
 
+impl MpeResult {
+    /// Construct a perfect-score result (zero error) for exact palette matches.
+    pub fn zero(width: usize, height: usize) -> Self {
+        let block_cols = (width + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        let block_rows = (height + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        Self {
+            score: 0.0,
+            block_scores: vec![0.0; block_cols * block_rows],
+            block_cols,
+            block_rows,
+            butteraugli_estimate: mpe_to_butteraugli(0.0),
+            ssimulacra2_estimate: mpe_to_ssimulacra2(0.0),
+        }
+    }
+}
+
 /// Accumulator for inline metric computation during dithering.
 ///
 /// Tracks per-block statistics with 5 accumulators per block.
