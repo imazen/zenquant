@@ -895,8 +895,8 @@ pub fn quantize(
         vec![1.0f32; pixels.len()]
     };
 
-    // 2. Build weighted histogram
-    let hist = histogram::build_histogram_from_labs(&labs, &weights);
+    // 2. Build weighted histogram (adaptive depth: bumps bit resolution if too few entries)
+    let (hist, _hist_bumped) = histogram::build_histogram_from_labs(&labs, &weights, max_colors);
 
     // 3. Farthest-point seeding with histogram-level k-means refinement
     let mut centroids = median_cut::farthest_point_quantize(hist, max_colors);

@@ -72,11 +72,40 @@ pub fn build_histogram(pixels: &[rgb::RGB<u8>], weights: &[f32]) -> Vec<(OKLab, 
 /// Skips sRGB→OKLab conversion entirely — uses the provided labs directly.
 /// Does not attempt pixel deduplication (labs are already computed).
 ///
-/// Build histogram from pre-computed OKLab values.
-pub fn build_histogram_from_labs(labs: &[crate::oklab::OKLab], weights: &[f32]) -> Vec<(crate::oklab::OKLab, f32)> {
+/// When `min_entries > 0`, adaptively increases bit depth (up to 7) to ensure
+/// the histogram has at least `min_entries` buckets. This prevents palette
+/// underutilization on large images where 5-bit bucketing is too coarse.
+///
+/// Returns `(histogram, was_bumped)` where `was_bumped` is true if the bit depth
+/// was increased beyond the default to meet `min_entries`.
+///
+/// Only bumps when the coarse histogram is at least 75% of `min_entries`,
+/// indicating genuine color diversity lost to bucketing precision. Below that,
+/// the image simply doesn't need that many palette entries.
+pub fn build_histogram_from_labs(labs: &[crate::oklab::OKLab], weights: &[f32], min_entries: usize) -> (Vec<(crate::oklab::OKLab, f32)>, bool) {
     assert_eq!(labs.len(), weights.len());
-    let bits = if labs.len() <= 500_000 { 6 } else { 5 };
-    build_hist_at_depth(labs, weights, bits)
+    let start_bits = if labs.len() <= 500_000 { 6 } else { 5 };
+    let hist = build_hist_at_depth(labs, weights, start_bits);
+
+    if min_entries == 0 || hist.len() >= min_entries || start_bits >= 7 {
+        return (hist, false);
+    }
+
+    // Only bump if the coarse histogram is at least 75% full — below that,
+    // the image genuinely has fewer meaningful color clusters than max_colors.
+    if hist.len() * 4 < min_entries * 3 {
+        return (hist, false);
+    }
+
+    // Try finer bucketing to get at least min_entries
+    for bits in (start_bits + 1)..=7 {
+        let finer = build_hist_at_depth(labs, weights, bits);
+        if finer.len() >= min_entries || bits == 7 {
+            return (finer, true);
+        }
+    }
+
+    (hist, false)
 }
 
 /// Attempt RGB pixel deduplication. Returns Some if unique < total/4.
@@ -127,7 +156,7 @@ fn build_histogram_dedup_rgb(
     Some(build_hist_at_depth(&labs, &unique_weights, bits))
 }
 
-fn build_hist_at_depth(labs: &[OKLab], weights: &[f32], bits: u32) -> Vec<(OKLab, f32)> {
+pub(crate) fn build_hist_at_depth(labs: &[OKLab], weights: &[f32], bits: u32) -> Vec<(OKLab, f32)> {
     let mut buckets: BTreeMap<u32, HistEntry> = BTreeMap::new();
 
     for (lab, &weight) in labs.iter().zip(weights.iter()) {

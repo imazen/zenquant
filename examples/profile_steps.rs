@@ -53,7 +53,7 @@ fn main() {
 
     // Step 2: Histogram (from pre-computed labs)
     let t = Instant::now();
-    let hist = histogram::build_histogram_from_labs(&labs, &weights);
+    let (hist, _bumped) = histogram::build_histogram_from_labs(&labs, &weights, 256);
     let hist_ms = t.elapsed().as_secs_f64() * 1000.0;
     println!(
         "2. Histogram:       {:>8.1}ms  ({} entries)",
