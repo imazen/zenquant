@@ -29,14 +29,12 @@ const QUANTIZER_NAMES: &[&str] = &[
     "zq-fast",
     "zq-balanced",
     "zq-best",
+    "quantette-km",
     "iq-s1-d50",
     "iq-s4-d100",
     "iq-s1-d100",
     "quantizr",
-    "quantette-wu",
-    "quantette-km",
     "color_quant",
-    "exoquant",
 ];
 
 #[derive(Clone, Debug)]
@@ -438,15 +436,10 @@ fn run_quantizer(
             let (p, i) = run_color_quant(pixels, width, height);
             Some((p, i, "no dithering"))
         }
-        "quantette-wu" => {
-            let (p, i) = run_quantette(pixels, width, height, false);
-            Some((p, i, "wu"))
-        }
         "quantette-km" => {
-            let (p, i) = run_quantette(pixels, width, height, true);
+            let (p, i) = run_quantette(pixels, width, height, true, 1.0);
             Some((p, i, "kmeans"))
         }
-        "exoquant" => run_exoquant(pixels, width, height).map(|(p, i)| (p, i, "")),
         _ => None,
     }
 }
@@ -504,17 +497,19 @@ fn run_quantette(
     width: usize,
     height: usize,
     use_kmeans: bool,
+    sampling_factor: f32,
 ) -> (Vec<[u8; 3]>, Vec<u8>) {
     use quantette::deps::palette::Srgb;
     use quantette::{ImageBuf, Pipeline, QuantizeMethod};
     use quantette::dither::FloydSteinberg;
+    use quantette::kmeans::KmeansOptions;
 
     let srgb_pixels: Vec<Srgb<u8>> = pixels.iter().map(|p| Srgb::new(p.r, p.g, p.b)).collect();
     let image = ImageBuf::new(width as u32, height as u32, srgb_pixels)
         .expect("quantette ImageBuf");
 
     let method = if use_kmeans {
-        QuantizeMethod::kmeans()
+        QuantizeMethod::Kmeans(KmeansOptions::new().sampling_factor(sampling_factor))
     } else {
         QuantizeMethod::Wu
     };
@@ -552,30 +547,6 @@ fn run_color_quant(
         .collect();
 
     (palette, indices)
-}
-
-fn run_exoquant(
-    pixels: &[rgb::RGB<u8>],
-    width: usize,
-    _height: usize,
-) -> Option<(Vec<[u8; 3]>, Vec<u8>)> {
-    use exoquant::{Color, convert_to_indexed, ditherer, optimizer};
-
-    let exo_pixels: Vec<Color> = pixels
-        .iter()
-        .map(|p| Color::new(p.r, p.g, p.b, 255))
-        .collect();
-
-    let (palette, indices) = convert_to_indexed(
-        &exo_pixels,
-        width,
-        256,
-        &optimizer::KMeans,
-        &ditherer::FloydSteinberg::new(),
-    );
-
-    let palette_rgb: Vec<[u8; 3]> = palette.iter().map(|c| [c.r, c.g, c.b]).collect();
-    Some((palette_rgb, indices))
 }
 
 // ---------------------------------------------------------------------------

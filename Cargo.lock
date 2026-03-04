@@ -275,12 +275,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "exoquant"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5048aeecde83b7455a63b44aa54da5321d6171cff2adb8a5959849e142e5e4aa"
-
-[[package]]
 name = "fast-srgb8"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1141,6 +1135,7 @@ dependencies = [
  "rgb",
  "whereat",
  "zencodec-types",
+ "zenpixels",
 ]
 
 [[package]]
@@ -1172,7 +1167,6 @@ dependencies = [
  "color_quant",
  "dssim-core",
  "enough",
- "exoquant",
  "fast-ssim2",
  "flate2",
  "gif",
