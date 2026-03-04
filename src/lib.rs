@@ -1253,7 +1253,7 @@ pub fn quantize_rgba(
         } else {
             max_colors
         };
-        let mut centroids = median_cut::wu_quantize(hist, opaque_colors, true);
+        let mut centroids = median_cut::farthest_point_quantize(hist, opaque_colors);
 
         if kmeans_iters > 0 {
             centroids = median_cut::refine_against_pixels_rgba_from_labs(
