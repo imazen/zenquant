@@ -469,7 +469,6 @@ pub fn wu_quantize(histogram: Vec<(OKLab, f32)>, max_colors: usize, refine: bool
 /// 1. First centroid = highest-weight entry
 /// 2. Each subsequent = entry with max `sqrt(weight) * min_dist_sq` to existing centroids
 /// 3. O(K*N) — trivial for 256 × 600-4000 histogram entries
-#[allow(dead_code)]
 pub fn farthest_point_seed(histogram: &[(OKLab, f32)], k: usize) -> Vec<OKLab> {
     if histogram.is_empty() || k == 0 {
         return Vec::new();
@@ -529,7 +528,6 @@ pub fn farthest_point_seed(histogram: &[(OKLab, f32)], k: usize) -> Vec<OKLab> {
 ///
 /// Alternative to [`wu_quantize`]. Seeds centroids via farthest-point (deterministic
 /// k-means++) then refines with k-means on histogram entries.
-#[allow(dead_code)]
 pub fn farthest_point_quantize(
     histogram: Vec<(OKLab, f32)>,
     max_colors: usize,

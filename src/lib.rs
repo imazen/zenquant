@@ -905,8 +905,8 @@ pub fn quantize(
     // 2. Build weighted histogram
     let hist = histogram::build_histogram_from_labs(&labs, &weights);
 
-    // 3. Median cut with histogram-level k-means refinement (always enabled)
-    let mut centroids = median_cut::wu_quantize(hist, max_colors, true);
+    // 3. Farthest-point seeding with histogram-level k-means refinement
+    let mut centroids = median_cut::farthest_point_quantize(hist, max_colors);
 
     // 3b. Pixel-level k-means refinement (skip for Fast — histogram refinement suffices).
     if kmeans_iters > 0 {
