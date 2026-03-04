@@ -41,6 +41,7 @@ color_quant = "1"
 dssim-core = { version = "3", default-features = false }
 exoquant = "0.2"
 gif = { version = "0.14", default-features = false, features = ["std"] }
+zensim = { path = "../zensim/zensim", features = ["imgref"] }
 
 [features]
 default = ["std", "simd"]

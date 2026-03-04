@@ -24,6 +24,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c0fb818f2e02ca08cc6416725044fadc84bcf5a96e2eb7ab103c966123667d86"
 dependencies = [
  "archmage-macros",
+ "safe_unaligned_simd",
 ]
 
 [[package]]
@@ -960,6 +961,7 @@ dependencies = [
  "rgb",
  "whereat",
  "zenpixels",
+ "zenpixels-convert",
 ]
 
 [[package]]
@@ -981,10 +983,18 @@ name = "zenpixels"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
- "enough",
  "imgref",
+ "rgb",
+]
+
+[[package]]
+name = "zenpixels-convert"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
  "linear-srgb 0.5.5",
  "rgb",
+ "zenpixels",
 ]
 
 [[package]]
@@ -1011,7 +1021,21 @@ dependencies = [
  "rgb",
  "thiserror",
  "zengif",
+ "zensim",
  "zenwebp",
+]
+
+[[package]]
+name = "zensim"
+version = "0.1.0"
+dependencies = [
+ "archmage",
+ "bytemuck",
+ "imgref",
+ "magetypes",
+ "rayon",
+ "rgb",
+ "thiserror",
 ]
 
 [[package]]
