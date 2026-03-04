@@ -133,13 +133,31 @@ faster. Actual pipeline OKLab cost is ~40-50ms for 4.4MP.
 ## Competitors (for reference)
 
 ### CID22-512 Photos (41 images, 512x512)
-| Quantizer    |    BA |   SS2 |    ms |
-|--------------|-------|-------|-------|
-| zenquant best| 3.088 | 81.29 |  92.7 |
-| zenquant bal | 3.142 | 82.06 |  58.9 |
-| zenquant fast| 3.217 | 82.57 |  43.0 |
-| quantizr     | 4.157 | 78.67 |  30.0 |
-| imagequant   | 5.379 | 73.84 |  47.2 |
+| Quantizer    |    BA |   SS2 |  zsim |    ms |
+|--------------|-------|-------|-------|-------|
+| zenquant best| 3.088 | 81.29 | 87.98 |  94.0 |
+| zenquant bal | 3.142 | 82.06 | 88.86 |  60.3 |
+| zenquant fast| 3.217 | 82.57 | 89.36 |  43.5 |
+| quantizr     | 4.157 | 78.67 | 86.10 |  32.5 |
+| imagequant   | 5.379 | 73.84 | 84.33 |  49.9 |
+
+### Screenshots gb82-sc (10 images, mixed sizes)
+| Quantizer    |    BA |   SS2 |  zsim |    ms |
+|--------------|-------|-------|-------|-------|
+| zenquant best| 1.788 | 89.99 | 95.98 | 540.6 |
+| zenquant bal | 1.917 | 89.73 | 95.87 | 408.1 |
+| zenquant fast| 2.128 | 88.94 | 95.35 | 303.5 |
+| quantizr     | 1.884 | 91.70 | 96.91 |  81.0 |
+| imagequant   | 9.640 | 74.97 | 87.96 |  97.0 |
+
+### CLIC2025 Large Photos (5 images, ~2.8MP)
+| Quantizer    |    BA |   SS2 |  zsim |     ms |
+|--------------|-------|-------|-------|--------|
+| zenquant best| 4.858 | 73.55 | 85.03 |  676.0 |
+| zenquant bal | 4.842 | 73.05 | 85.25 |  410.8 |
+| zenquant fast| 4.617 | 73.48 | 85.39 |  284.7 |
+| quantizr     | 6.479 | 68.26 | 82.04 |  316.5 |
+| imagequant   | 8.325 | 69.72 | 83.75 |  223.3 |
 
 ### 4.4MP Image
 | Quantizer    |    BA |   SS2 |     ms |
