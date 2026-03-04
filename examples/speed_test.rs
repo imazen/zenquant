@@ -92,15 +92,14 @@ fn main() {
     let total_mp: f64 = images.iter().map(|(_, _, w, h)| (*w * *h) as f64 / 1_000_000.0).sum();
 
     for (name, config) in &presets {
-        let mut total_ba = 0.0f64;
-        let mut total_ss2 = 0.0f64;
-        let mut total_zsim = 0.0f64;
-        let mut total_mpe = 0.0f64;
-        let mut total_eba = 0.0f64;
-        let mut total_ess2 = 0.0f64;
-        let mut total_deflate = 0u64;
-        let mut total_ms = 0.0f64;
-        let mut count = 0u32;
+        let mut vals_ba = Vec::new();
+        let mut vals_ss2 = Vec::new();
+        let mut vals_zsim = Vec::new();
+        let mut vals_mpe = Vec::new();
+        let mut vals_eba = Vec::new();
+        let mut vals_ess2 = Vec::new();
+        let mut vals_deflate = Vec::new();
+        let mut vals_ms = Vec::new();
 
         for (pixels, ref_rgb, width, height) in &images {
             let t = Instant::now();
@@ -156,32 +155,45 @@ fn main() {
             let deflate = deflate_compress(result.indices());
 
             if ba.is_finite() && ss2.is_finite() {
-                total_ba += ba;
-                total_ss2 += ss2;
-                total_zsim += zs;
-                total_mpe += mpe;
-                total_eba += eba;
-                total_ess2 += ess2;
-                total_deflate += deflate as u64;
-                total_ms += ms;
-                count += 1;
+                vals_ba.push(ba);
+                vals_ss2.push(ss2);
+                vals_zsim.push(zs);
+                vals_mpe.push(mpe);
+                vals_eba.push(eba);
+                vals_ess2.push(ess2);
+                vals_deflate.push(deflate as f64);
+                vals_ms.push(ms);
             }
         }
 
-        let n = count as f64;
-        let ms_per_mp = total_ms / total_mp;
+        let n = vals_ba.len() as f64;
+        let ms_per_mp = vals_ms.iter().sum::<f64>() / total_mp;
         println!(
             "{:<20} {:>8.3} {:>8.2} {:>8.2} {:>8.4} {:>8.3} {:>8.2} {:>8.0} {:>8.1} {:>8.1}",
-            name,
-            total_ba / n,
-            total_ss2 / n,
-            total_zsim / n,
-            total_mpe / n,
-            total_eba / n,
-            total_ess2 / n,
-            total_deflate as f64 / n,
-            total_ms / n,
+            format!("{name} mean"),
+            vals_ba.iter().sum::<f64>() / n,
+            vals_ss2.iter().sum::<f64>() / n,
+            vals_zsim.iter().sum::<f64>() / n,
+            vals_mpe.iter().sum::<f64>() / n,
+            vals_eba.iter().sum::<f64>() / n,
+            vals_ess2.iter().sum::<f64>() / n,
+            vals_deflate.iter().sum::<f64>() / n,
+            vals_ms.iter().sum::<f64>() / n,
             ms_per_mp,
+        );
+        let p95_ms_per_mp = percentile_f64(&mut vals_ms.clone()) / total_mp * n;
+        println!(
+            "{:<20} {:>8.3} {:>8.2} {:>8.2} {:>8.4} {:>8.3} {:>8.2} {:>8.0} {:>8.1} {:>8.1}",
+            format!("{name} p95"),
+            percentile_f64(&mut vals_ba),
+            percentile_f64(&mut vals_ss2),
+            percentile_f64(&mut vals_zsim),
+            percentile_f64(&mut vals_mpe),
+            percentile_f64(&mut vals_eba),
+            percentile_f64(&mut vals_ess2),
+            percentile_f64(&mut vals_deflate),
+            percentile_f64(&mut vals_ms),
+            p95_ms_per_mp,
         );
     }
 
@@ -193,12 +205,11 @@ fn main() {
         ("quantette-wu", run_quantette_wu as fn(&[rgb::RGB<u8>], usize, usize) -> (Vec<[u8; 3]>, Vec<u8>)),
         ("quantette-km", run_quantette_km as fn(&[rgb::RGB<u8>], usize, usize) -> (Vec<[u8; 3]>, Vec<u8>)),
     ] {
-        let mut total_ba = 0.0f64;
-        let mut total_ss2 = 0.0f64;
-        let mut total_zsim = 0.0f64;
-        let mut total_deflate = 0u64;
-        let mut total_ms = 0.0f64;
-        let mut count = 0u32;
+        let mut vals_ba = Vec::new();
+        let mut vals_ss2 = Vec::new();
+        let mut vals_zsim = Vec::new();
+        let mut vals_deflate = Vec::new();
+        let mut vals_ms = Vec::new();
 
         for (pixels, ref_rgb, width, height) in &images {
             let t = Instant::now();
@@ -239,28 +250,48 @@ fn main() {
                 .unwrap_or(f64::NAN);
 
             if ba.is_finite() && ss2.is_finite() {
-                total_ba += ba;
-                total_ss2 += ss2;
-                total_zsim += zs;
-                total_deflate += deflate_compress(&idx) as u64;
-                total_ms += ms;
-                count += 1;
+                vals_ba.push(ba);
+                vals_ss2.push(ss2);
+                vals_zsim.push(zs);
+                vals_deflate.push(deflate_compress(&idx) as f64);
+                vals_ms.push(ms);
             }
         }
-        let n = count as f64;
-        let ms_per_mp = total_ms / total_mp;
+        let n = vals_ba.len() as f64;
+        let ms_per_mp = vals_ms.iter().sum::<f64>() / total_mp;
         println!(
             "{:<20} {:>8.3} {:>8.2} {:>8.2} {:>8} {:>8} {:>8} {:>8.0} {:>8.1} {:>8.1}",
-            comp_name,
-            total_ba / n,
-            total_ss2 / n,
-            total_zsim / n,
+            format!("{comp_name} mean"),
+            vals_ba.iter().sum::<f64>() / n,
+            vals_ss2.iter().sum::<f64>() / n,
+            vals_zsim.iter().sum::<f64>() / n,
             "", "", "",
-            total_deflate as f64 / n,
-            total_ms / n,
+            vals_deflate.iter().sum::<f64>() / n,
+            vals_ms.iter().sum::<f64>() / n,
             ms_per_mp,
         );
+        let p95_ms_per_mp = percentile_f64(&mut vals_ms.clone()) / total_mp * n;
+        println!(
+            "{:<20} {:>8.3} {:>8.2} {:>8.2} {:>8} {:>8} {:>8} {:>8.0} {:>8.1} {:>8.1}",
+            format!("{comp_name} p95"),
+            percentile_f64(&mut vals_ba),
+            percentile_f64(&mut vals_ss2),
+            percentile_f64(&mut vals_zsim),
+            "", "", "",
+            percentile_f64(&mut vals_deflate),
+            percentile_f64(&mut vals_ms),
+            p95_ms_per_mp,
+        );
     }
+}
+
+fn percentile_f64(values: &mut [f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let idx = ((values.len() - 1) as f64 * 0.95) as usize;
+    values[idx.min(values.len() - 1)]
 }
 
 fn deflate_compress(data: &[u8]) -> usize {

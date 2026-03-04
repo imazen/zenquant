@@ -55,8 +55,9 @@ fn main() {
         paths.len()
     );
 
-    // Accumulators for averages
+    // Accumulators for averages and per-image values for p95
     let mut totals = [Totals::default(); 3]; // zenquant, imagequant, quantizr
+    let mut per_image: [PerImageVals; 3] = Default::default();
     let names = ["zenquant", "imagequant", "quantizr"];
 
     // Print header
@@ -153,6 +154,9 @@ fn main() {
         totals[0].add(&zq_stats, zq_ms);
         totals[1].add(&iq_stats, iq_ms);
         totals[2].add(&qr_stats, qr_ms);
+        per_image[0].add(&zq_stats, zq_ms);
+        per_image[1].add(&iq_stats, iq_ms);
+        per_image[2].add(&qr_stats, qr_ms);
     }
 
     let n = totals[0].count as f64;
@@ -176,6 +180,26 @@ fn main() {
             totals[0].time_ms / n,
             totals[1].time_ms / n,
             totals[2].time_ms / n,
+        );
+
+        println!(
+            "{:<36} {:>7.3} {:>7.3} {:>7.3}  {:>7.2} {:>7.2} {:>7.2}  {:>7.1} {:>7.1} {:>7.1}  {:>8.0} {:>8.0} {:>8.0}  {:>7.1} {:>7.1} {:>7.1}",
+            "P95",
+            percentile_f64(&mut per_image[0].butteraugli),
+            percentile_f64(&mut per_image[1].butteraugli),
+            percentile_f64(&mut per_image[2].butteraugli),
+            percentile_f64(&mut per_image[0].ssimulacra2),
+            percentile_f64(&mut per_image[1].ssimulacra2),
+            percentile_f64(&mut per_image[2].ssimulacra2),
+            percentile_f64(&mut per_image[0].avg_run),
+            percentile_f64(&mut per_image[1].avg_run),
+            percentile_f64(&mut per_image[2].avg_run),
+            percentile_f64(&mut per_image[0].deflate_size),
+            percentile_f64(&mut per_image[1].deflate_size),
+            percentile_f64(&mut per_image[2].deflate_size),
+            percentile_f64(&mut per_image[0].time_ms),
+            percentile_f64(&mut per_image[1].time_ms),
+            percentile_f64(&mut per_image[2].time_ms),
         );
 
         // Summary comparison
@@ -213,6 +237,34 @@ impl Totals {
         self.time_ms += time_ms;
         self.count += 1;
     }
+}
+
+#[derive(Debug, Clone, Default)]
+struct PerImageVals {
+    butteraugli: Vec<f64>,
+    ssimulacra2: Vec<f64>,
+    avg_run: Vec<f64>,
+    deflate_size: Vec<f64>,
+    time_ms: Vec<f64>,
+}
+
+impl PerImageVals {
+    fn add(&mut self, stats: &Stats, time_ms: f64) {
+        self.butteraugli.push(stats.butteraugli);
+        self.ssimulacra2.push(stats.ssimulacra2);
+        self.avg_run.push(stats.avg_run as f64);
+        self.deflate_size.push(stats.deflate_size as f64);
+        self.time_ms.push(time_ms);
+    }
+}
+
+fn percentile_f64(values: &mut [f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let idx = ((values.len() - 1) as f64 * 0.95) as usize;
+    values[idx.min(values.len() - 1)]
 }
 
 #[derive(Debug)]

@@ -715,6 +715,15 @@ fn save_indexed_png(path: &Path, palette: &[[u8; 3]], indices: &[u8], width: usi
 // Summary
 // ---------------------------------------------------------------------------
 
+fn percentile_f64(values: &mut [f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let idx = ((values.len() - 1) as f64 * 0.95) as usize;
+    values[idx.min(values.len() - 1)]
+}
+
 fn print_summary(report: &ReportData, benchmark: bool) {
     if report.images.is_empty() {
         return;
@@ -722,7 +731,7 @@ fn print_summary(report: &ReportData, benchmark: bool) {
 
     let ms_label = if benchmark { "ms" } else { "~ms" };
     let ms_mp_label = if benchmark { "ms/MP" } else { "~ms/MP" };
-    eprintln!("\n--- Summary ---");
+    eprintln!("\n--- Summary (mean / p95) ---");
     eprintln!(
         "{:<20} {:>7} {:>7} {:>8} {:>8} {:>8} {:>7} {:>7}",
         "Quantizer", "BA", "SS2", "DSSIM", "PNG", "GIF", ms_label, ms_mp_label
@@ -740,42 +749,53 @@ fn print_summary(report: &ReportData, benchmark: bool) {
     }
 
     for name in &all_names {
-        let mut sum_ba = 0.0f64;
-        let mut sum_ss2 = 0.0f64;
-        let mut sum_dssim = 0.0f64;
-        let mut sum_png = 0usize;
-        let mut sum_gif = 0usize;
-        let mut sum_ms = 0.0f64;
+        let mut vals_ba = Vec::new();
+        let mut vals_ss2 = Vec::new();
+        let mut vals_dssim = Vec::new();
+        let mut vals_png = Vec::new();
+        let mut vals_gif = Vec::new();
+        let mut vals_ms = Vec::new();
         let mut sum_mp = 0.0f64;
-        let mut count = 0u32;
 
         for img in &report.images {
             if let Some(q) = img.quantizers.iter().find(|q| &q.name == name) {
-                sum_ba += q.butteraugli;
-                sum_ss2 += q.ssimulacra2;
-                sum_dssim += q.dssim;
-                sum_png += q.png_bytes;
-                sum_gif += q.gif_bytes;
-                sum_ms += q.time_ms;
+                vals_ba.push(q.butteraugli);
+                vals_ss2.push(q.ssimulacra2);
+                vals_dssim.push(q.dssim);
+                vals_png.push(q.png_bytes as f64);
+                vals_gif.push(q.gif_bytes as f64);
+                vals_ms.push(q.time_ms);
                 sum_mp += (img.width * img.height) as f64 / 1_000_000.0;
-                count += 1;
             }
         }
 
-        if count > 0 {
-            let n = count as f64;
+        if !vals_ba.is_empty() {
+            let n = vals_ba.len() as f64;
+            let sum_ms: f64 = vals_ms.iter().sum();
             let ms_per_mp = sum_ms / sum_mp;
             let (display, _) = display_info(name);
             eprintln!(
                 "{:<20} {:>7.2} {:>7.1} {:>8.5} {:>8.0} {:>8.0} {:>7.1} {:>7.1}",
-                display,
-                sum_ba / n,
-                sum_ss2 / n,
-                sum_dssim / n,
-                sum_png as f64 / n,
-                sum_gif as f64 / n,
+                format!("{display} mean"),
+                vals_ba.iter().sum::<f64>() / n,
+                vals_ss2.iter().sum::<f64>() / n,
+                vals_dssim.iter().sum::<f64>() / n,
+                vals_png.iter().sum::<f64>() / n,
+                vals_gif.iter().sum::<f64>() / n,
                 sum_ms / n,
                 ms_per_mp,
+            );
+            let p95_ms_per_mp = percentile_f64(&mut vals_ms.clone()) / sum_mp * n;
+            eprintln!(
+                "{:<20} {:>7.2} {:>7.1} {:>8.5} {:>8.0} {:>8.0} {:>7.1} {:>7.1}",
+                format!("{display} p95"),
+                percentile_f64(&mut vals_ba),
+                percentile_f64(&mut vals_ss2),
+                percentile_f64(&mut vals_dssim),
+                percentile_f64(&mut vals_png),
+                percentile_f64(&mut vals_gif),
+                percentile_f64(&mut vals_ms),
+                p95_ms_per_mp,
             );
         }
     }
@@ -873,6 +893,72 @@ fn report_to_json(report: &ReportData, benchmark: bool) -> String {
             out.push_str("}}");
         }
         out.push_str("]}");
+    }
+
+    // Aggregates: mean + p95 per quantizer variant
+    out.push_str("],\"aggregates\":[");
+    {
+        // Collect variant names in order
+        let mut all_names: Vec<String> = Vec::new();
+        for img in &report.images {
+            for q in &img.quantizers {
+                if !all_names.contains(&q.name) {
+                    all_names.push(q.name.clone());
+                }
+            }
+        }
+
+        let stat_keys = ["butteraugli", "ssimulacra2", "dssim", "png_bytes", "gif_bytes", "time_ms", "ms_per_mp"];
+        let mut first_agg = true;
+
+        for name in &all_names {
+            // Collect per-image values
+            let mut vals: Vec<Vec<f64>> = vec![Vec::new(); stat_keys.len()];
+
+            for img in &report.images {
+                if let Some(q) = img.quantizers.iter().find(|q| &q.name == name) {
+                    let mp = (img.width * img.height) as f64 / 1_000_000.0;
+                    let ms_per_mp = if mp > 0.0 { q.time_ms / mp } else { 0.0 };
+                    let row = [q.butteraugli, q.ssimulacra2, q.dssim, q.png_bytes as f64, q.gif_bytes as f64, q.time_ms, ms_per_mp];
+                    for (i, &v) in row.iter().enumerate() {
+                        vals[i].push(v);
+                    }
+                }
+            }
+
+            if vals[0].is_empty() { continue; }
+
+            let n = vals[0].len() as f64;
+            let (display, line) = display_info(name);
+            let name_url = format!("{SOURCE_URL}#L{line}");
+
+            // Mean row
+            if !first_agg { out.push(','); }
+            first_agg = false;
+            out.push_str(&format!(
+                "{{\"name\":\"{} mean\",\"nameUrl\":\"{}\",\"stats\":{{",
+                json_escape(display), json_escape(&name_url)
+            ));
+            for (i, key) in stat_keys.iter().enumerate() {
+                if i > 0 { out.push(','); }
+                let mean = vals[i].iter().sum::<f64>() / n;
+                out.push_str(&format!("\"{}\":{:.4}", key, mean));
+            }
+            out.push_str("}}");
+
+            // P95 row
+            out.push(',');
+            out.push_str(&format!(
+                "{{\"name\":\"{} p95\",\"nameUrl\":\"{}\",\"stats\":{{",
+                json_escape(display), json_escape(&name_url)
+            ));
+            for (i, key) in stat_keys.iter().enumerate() {
+                if i > 0 { out.push(','); }
+                let p95 = percentile_f64(&mut vals[i]);
+                out.push_str(&format!("\"{}\":{:.4}", key, p95));
+            }
+            out.push_str("}}");
+        }
     }
 
     // Column definitions
