@@ -30,23 +30,11 @@ jobs:
           - windows-11-arm
     steps:
       - uses: actions/checkout@v6
-      - name: Configure git for private repos
-        run: git config --global url."https://x-access-token:${{ secrets.GH_PAT }}@github.com/".insteadOf "https://github.com/"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Patch path deps to git refs
-        shell: bash
-        run: |
-          sed \
-            -e 's|path = "\.\./zengif"|git = "https://github.com/imazen/zengif"|g' \
-            -e 's|path = "\.\./zenwebp"|git = "https://github.com/imazen/zenwebp"|g' \
-            -e 's|path = "\.\./zensim/zensim"|git = "https://github.com/imazen/zensim"|g' \
-            -e 's|path = "\.\./zenpng"|git = "https://github.com/imazen/zenpng"|g' \
-            Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
-
-      - name: Test
-        run: cargo test
+      - name: Test (lib only, dev-deps are cross-repo path deps)
+        run: cargo test --lib
 
       - name: Check (no_std)
         run: cargo check --no-default-features
@@ -56,8 +44,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Configure git for private repos
-        run: git config --global url."https://x-access-token:${{ secrets.GH_PAT }}@github.com/".insteadOf "https://github.com/"
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@cross
       - uses: Swatinem/rust-cache@v2
@@ -75,15 +61,13 @@ jobs:
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
 
       - name: Test (i686)
-        run: cross test --target i686-unknown-linux-gnu
+        run: cross test --target i686-unknown-linux-gnu --lib
 
   wasm:
     name: WASM check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Configure git for private repos
-        run: git config --global url."https://x-access-token:${{ secrets.GH_PAT }}@github.com/".insteadOf "https://github.com/"
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-wasip1
@@ -107,8 +91,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Configure git for private repos
-        run: git config --global url."https://x-access-token:${{ secrets.GH_PAT }}@github.com/".insteadOf "https://github.com/"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -144,8 +126,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Configure git for private repos
-        run: git config --global url."https://x-access-token:${{ secrets.GH_PAT }}@github.com/".insteadOf "https://github.com/"
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@cargo-hack
       - uses: Swatinem/rust-cache@v2
@@ -168,8 +148,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Configure git for private repos
-        run: git config --global url."https://x-access-token:${{ secrets.GH_PAT }}@github.com/".insteadOf "https://github.com/"
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: Swatinem/rust-cache@v2
