@@ -862,10 +862,22 @@ pub fn quantize(
         } else {
             pal
         };
+        let mpe_result = if needs_metric {
+            Some(metric::compute_mpe(
+                pixels,
+                pal.entries(),
+                &indices,
+                width,
+                height,
+                None,
+            ))
+        } else {
+            None
+        };
         return Ok(QuantizeResult {
             palette: pal,
             indices,
-            mpe_result: None,
+            mpe_result,
         });
     }
 
@@ -1115,10 +1127,22 @@ pub fn quantize_rgba(
         } else {
             pal
         };
+        let mpe_result = if needs_metric {
+            Some(metric::compute_mpe_rgba(
+                pixels,
+                pal.entries_rgba(),
+                &indices,
+                width,
+                height,
+                None,
+            ))
+        } else {
+            None
+        };
         return Ok(QuantizeResult {
             palette: pal,
             indices,
-            mpe_result: None,
+            mpe_result,
         });
     }
 
