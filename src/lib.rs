@@ -1482,8 +1482,8 @@ pub fn build_palette(
         }
     }
 
-    // Median cut on merged histogram
-    let mut centroids = median_cut::wu_quantize(merged_hist, max_colors, true);
+    // Farthest-point seeding on merged histogram
+    let mut centroids = median_cut::farthest_point_quantize(merged_hist, max_colors);
 
     // K-means refinement against all pixels (internally subsampled)
     if kmeans_iters > 0 {
@@ -1651,7 +1651,7 @@ pub fn build_palette_rgba(
             max_colors
         };
 
-        let mut centroids = median_cut::wu_quantize(merged_hist, opaque_colors, true);
+        let mut centroids = median_cut::farthest_point_quantize(merged_hist, opaque_colors);
 
         if kmeans_iters > 0 {
             centroids = median_cut::refine_against_pixels_rgba(

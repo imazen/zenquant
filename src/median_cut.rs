@@ -228,6 +228,7 @@ fn kmeans_refine(mut centroids: Vec<OKLab>, entries: &[(OKLab, f32)]) -> Vec<OKL
 
 /// Get a specific axis value from an OKLab color.
 #[inline]
+#[allow(dead_code)] // Used by wu_quantize (test-only)
 fn get_axis_3d(lab: &OKLab, axis: u8) -> f32 {
     match axis {
         0 => lab.l,
@@ -237,6 +238,7 @@ fn get_axis_3d(lab: &OKLab, axis: u8) -> f32 {
 }
 
 /// Compute weighted variance of histogram entries: Var = sum(x²w)/W - (sum(xw)/W)² per axis.
+#[allow(dead_code)] // Used by wu_quantize (test-only)
 fn variance_from_stats_3d(w: f64, sl: f64, sa: f64, sb: f64, sl2: f64, sa2: f64, sb2: f64) -> f64 {
     if w < 1e-10 {
         return 0.0;
@@ -251,6 +253,7 @@ fn variance_from_stats_3d(w: f64, sl: f64, sa: f64, sb: f64, sl2: f64, sa2: f64,
 /// cluster at the position minimizing total within-cluster variance.
 ///
 /// If `refine` is true, follows up with k-means refinement on histogram entries.
+#[allow(dead_code)] // Retained for tests; production uses farthest_point_quantize
 pub fn wu_quantize(histogram: Vec<(OKLab, f32)>, max_colors: usize, refine: bool) -> Vec<OKLab> {
     if histogram.is_empty() {
         return Vec::new();
