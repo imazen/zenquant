@@ -12,13 +12,15 @@
 //!   gb82-sc  → gb82-sc
 
 use butteraugli::ButteraugliParams;
+use enough::Unstoppable;
 use fast_ssim2::compute_ssimulacra2;
 use imgref::ImgVec;
-use rgb::RGB8;
+use rgb::{RGB8, RGB};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use zenpng::EncodeConfig;
 use zenquant::{OutputFormat, Quality, QuantizeConfig};
 
 // ---------------------------------------------------------------------------
@@ -653,16 +655,19 @@ fn encode_indexed_png_bytes(
     width: usize,
     height: usize,
 ) -> usize {
-    let mut buf = Vec::new();
-    {
-        let mut encoder = png::Encoder::new(&mut buf, width as u32, height as u32);
-        encoder.set_color(png::ColorType::Indexed);
-        encoder.set_depth(png::BitDepth::Eight);
-        let palette_flat: Vec<u8> = palette.iter().flat_map(|c| c.iter().copied()).collect();
-        encoder.set_palette(palette_flat);
-        let mut writer = encoder.write_header().unwrap();
-        writer.write_image_data(indices).unwrap();
-    }
+    // Reconstruct RGB pixels from palette+indices; zenpng auto-detects indexed (≤256 colors)
+    let pixels: Vec<RGB<u8>> = indices
+        .iter()
+        .map(|&i| {
+            let c = palette[i as usize];
+            RGB::new(c[0], c[1], c[2])
+        })
+        .collect();
+    let img = ImgVec::new(pixels, width, height);
+    let config = EncodeConfig::default()
+        .with_compression(zenpng::Compression::Aggressive);
+    let buf = zenpng::encode_rgb8(img.as_ref(), None, &config, &Unstoppable, &Unstoppable)
+        .expect("zenpng encode failed");
     buf.len()
 }
 

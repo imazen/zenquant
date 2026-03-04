@@ -18,6 +18,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "almost-enough"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18520c0909bd8c14257b4733b5e4d03e306c5c48bdac4e51ed207ca2072071e2"
+dependencies = [
+ "enough",
+]
+
+[[package]]
 name = "archmage"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1124,6 +1133,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "zenflate"
+version = "0.2.1"
+dependencies = [
+ "archmage",
+ "enough",
+ "safe_unaligned_simd",
+]
+
+[[package]]
 name = "zengif"
 version = "0.6.0"
 dependencies = [
@@ -1158,6 +1176,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "zenpng"
+version = "0.1.0"
+dependencies = [
+ "almost-enough",
+ "archmage",
+ "bytemuck",
+ "enough",
+ "imgref",
+ "linear-srgb 0.5.5 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rgb",
+ "safe_unaligned_simd",
+ "thiserror",
+ "zencodec-types",
+ "zenflate",
+ "zenpixels",
+]
+
+[[package]]
 name = "zenquant"
 version = "0.1.0"
 dependencies = [
@@ -1181,6 +1217,7 @@ dependencies = [
  "rgb",
  "thiserror",
  "zengif",
+ "zenpng",
  "zensim",
  "zenwebp",
 ]
