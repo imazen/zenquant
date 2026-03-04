@@ -177,34 +177,30 @@ The `OutputFormat` controls palette sorting and dither tuning for each format's 
 
 ## Benchmarks
 
-Averaged over 209 images from the [CID22](https://zenodo.org/records/11186568) 512x512 training set. All quantizers configured for 256 colors with 50% dithering. Measured on an AMD Ryzen 9 7950X, single-threaded.
+Averaged over 50 images from three corpora ([CID22](https://zenodo.org/records/11186568), [CLIC 2025](https://storage.googleapis.com/clic2025), screenshots). All quantizers configured for 256 colors with default dithering. PNG sizes use aggressive deflate via [zenpng](https://github.com/imazen/zenpng).
 
-| Quantizer | Butteraugli | SSIMULACRA2 | Deflate size | Time |
-|-----------|-------------|-------------|--------------|------|
-| **zenquant** (Best) | **3.36** | 80.5 | **108 KB** | 118 ms |
-| quantizr 1.4 | 3.23 | **81.3** | 125 KB | 29 ms |
-| imagequant 4.4 | 4.73 | 75.9 | 106 KB | 39 ms |
+| Quantizer | Butteraugli | SSIMULACRA2 | DSSIM | PNG size |
+|-----------|-------------|-------------|-------|----------|
+| **zenquant** (Best) | **3.17** | 82.9 | 0.00058 | **600 KB** |
+| **zenquant** (Fast) | 3.29 | 82.6 | 0.00069 | 596 KB |
+| quantette (k-means) | 3.86 | **83.9** | **0.00050** | 631 KB |
+| imagequant s1 d100 | 4.10 | 82.2 | 0.00056 | 652 KB |
+| quantizr | 4.44 | 79.7 | 0.00098 | 598 KB |
+| color_quant | 8.96 | 72.1 | 0.00141 | 640 KB |
 
-Lower butteraugli = better. Higher SSIMULACRA2 = better. Smaller deflate = more compressible.
+Lower butteraugli/DSSIM = better. Higher SSIMULACRA2 = better.
 
-zenquant and quantizr produce similar perceptual quality (within noise on individual images). imagequant produces the most compressible index streams but at notably worse perceptual quality — its LZW-aware dithering sacrifices visual fidelity for smaller files.
+**[Interactive visual comparison (9 quantizers, 50 images)](https://imageflow-resources.s3.us-west-2.amazonaws.com/demos/zenquant/2026-03-04/index.html)** — slider, diff, and zoom views with per-image metrics. Keyboard shortcuts: 1 = original, 2–0 = variants.
 
 zenquant's advantage is most visible on images with smooth gradients and subtle color transitions, where AQ masking prevents banding that other quantizers miss.
 
 ### Reproduce the benchmarks
 
 ```bash
-# Requires CID22 corpus (or provide your own image directory)
-cargo run --example compare --release -- /path/to/images
+cargo run --example quantizer_comparison --release -- gb82-sc,cid22,clic2025 /tmp/output 20
 ```
 
-### Generate visual comparisons
-
-```bash
-cargo run --example compare_images --release -- /path/to/images /tmp/output 5
-```
-
-This generates side-by-side montages (requires ImageMagick `montage`).
+The comparison tool generates an interactive HTML report with cached results. Add `--benchmark` for rigorous sequential timing (min-of-5 runs).
 
 ## Integration
 
