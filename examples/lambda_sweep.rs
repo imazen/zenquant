@@ -58,6 +58,7 @@ fn main() {
     eprintln!("Lambda sweep on {} images from {image_dir}", paths.len());
 
     // Pre-load images
+    #[allow(clippy::type_complexity)]
     let images: Vec<(Vec<rgb::RGB<u8>>, Vec<RGB8>, usize, usize)> = paths
         .iter()
         .filter_map(|path| {

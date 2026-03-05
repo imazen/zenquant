@@ -53,6 +53,7 @@ fn main() {
     paths.truncate(max_images);
 
     // Pre-load images
+    #[allow(clippy::type_complexity)]
     let images: Vec<(Vec<rgb::RGB<u8>>, Vec<RGB8>, usize, usize)> = paths
         .iter()
         .filter_map(|path| {

@@ -122,7 +122,7 @@ fn main() {
                 "-geometry",
                 "+2+2",
                 "-title",
-                &format!("{stem}"),
+                stem,
                 "-label",
                 "",
                 &montage_path,

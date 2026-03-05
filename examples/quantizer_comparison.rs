@@ -199,6 +199,7 @@ fn main() {
     for chunk_start in (0..total).step_by(num_threads) {
         let chunk_end = (chunk_start + num_threads).min(total);
         std::thread::scope(|s| {
+            #[allow(clippy::needless_range_loop)]
             for task_idx in chunk_start..chunk_end {
                 let (corpus_name, path) = &all_tasks[task_idx];
                 let results = Arc::clone(&results);
@@ -248,14 +249,13 @@ fn main() {
 
                     for &qname in QUANTIZER_NAMES {
                         let should_recalc = recalc_all || recalc.iter().any(|r| r == qname);
-                        if !should_recalc {
-                            if let Some(cached) = cache.get(qname) {
-                                if img_dir.join(format!("{qname}.png")).exists() {
-                                    image_result.quantizers.push(cached.clone());
-                                    log.push_str(&format!("  {qname}:cached"));
-                                    continue;
-                                }
-                            }
+                        if !should_recalc
+                            && let Some(cached) = cache.get(qname)
+                            && img_dir.join(format!("{qname}.png")).exists()
+                        {
+                            image_result.quantizers.push(cached.clone());
+                            log.push_str(&format!("  {qname}:cached"));
+                            continue;
                         }
 
                         let bench_runs = if benchmark { 5 } else { 1 };
@@ -426,6 +426,7 @@ fn save_cache(path: &Path, cache: &HashMap<String, QuantizerResult>) {
 // ---------------------------------------------------------------------------
 
 /// Dispatch to the right quantizer by name. Returns (palette, indices, note).
+#[allow(clippy::type_complexity)]
 fn run_quantizer(
     name: &str,
     pixels: &[rgb::RGB<u8>],

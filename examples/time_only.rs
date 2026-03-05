@@ -115,7 +115,7 @@ fn main() {
             let mut result = quantizr::QuantizeResult::quantize(&image, &options);
             result.set_dithering_level(0.5).unwrap();
             let mut idx = vec![0u8; *width * *height];
-            let _ = result.remap_image(&image, &mut idx).unwrap();
+            result.remap_image(&image, &mut idx).unwrap();
         }
         let total_ms = t.elapsed().as_secs_f64() * 1000.0;
         println!("{:<8} {:>8.1}", "qr", total_ms / images.len() as f64);

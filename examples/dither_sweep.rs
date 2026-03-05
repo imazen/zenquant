@@ -69,6 +69,7 @@ fn main() {
     );
 
     // Pre-load images
+    #[allow(clippy::type_complexity)]
     let images: Vec<(String, Vec<rgb::RGB<u8>>, Vec<RGB8>, usize, usize)> = paths
         .iter()
         .filter_map(|path| {
@@ -99,7 +100,7 @@ fn main() {
         let mut total_dssim = 0.0f64;
         let mut count = 0u32;
 
-        for (name, pixels, ref_rgb, width, height) in &images {
+        for (_name, pixels, ref_rgb, width, height) in &images {
             let width = *width;
             let height = *height;
 
