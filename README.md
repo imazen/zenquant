@@ -6,6 +6,8 @@
 
 Color quantization with perceptual masking. Reduces truecolor images to 256-color indexed palettes in OKLab space, using butteraugli-inspired adaptive quantization (AQ) weights to concentrate palette entries where human vision is most sensitive.
 
+Honest comparison: quantette's k-means mode is really good — it leads on per-pixel metrics (highest SSIMULACRA2, lowest DSSIM), though it has strong error diffusion artifacts in the red channel on some images, producing bright red pixels in smooth regions. imagequant is honestly the best-looking to the human eye, even when it's sometimes slightly behind on the numbers. zenquant focuses on doing a solid visual job while prioritizing file size; the size advantage is less obvious when paired with [zenpng](https://github.com/imazen/zenpng)'s aggressive compression, but grows at faster encode speeds or with typical codecs like the `png` crate.
+
 ## What it does
 
 Most quantizers treat every pixel equally. zenquant spends palette entries on smooth gradients, skin tones, and other regions where banding is visible — and wastes fewer entries on noisy textures where the eye can't tell the difference.
@@ -177,18 +179,21 @@ The `OutputFormat` controls palette sorting and dither tuning for each format's 
 
 ## Benchmarks
 
-Averaged over 50 images from three corpora ([CID22](https://zenodo.org/records/11186568), [CLIC 2025](https://storage.googleapis.com/clic2025), screenshots). All quantizers configured for 256 colors with default dithering. PNG sizes use aggressive deflate via [zenpng](https://github.com/imazen/zenpng).
+Averaged over 50 images from three corpora ([CID22](https://zenodo.org/records/11186568), [CLIC 2025](https://storage.googleapis.com/clic2025), screenshots). All quantizers configured for 256 colors with default dithering. PNG sizes use aggressive deflate via [zenpng](https://github.com/imazen/zenpng). Sorted by DSSIM.
 
-| Quantizer | Butteraugli | SSIMULACRA2 | DSSIM | PNG size |
-|-----------|-------------|-------------|-------|----------|
-| **zenquant** (Best) | **3.17** | 82.9 | 0.00058 | **600 KB** |
-| **zenquant** (Fast) | 3.29 | 82.6 | 0.00069 | 596 KB |
-| quantette (k-means) | 3.86 | **83.9** | **0.00050** | 631 KB |
-| imagequant s1 d100 | 4.10 | 82.2 | 0.00056 | 652 KB |
-| quantizr | 4.44 | 79.7 | 0.00098 | 598 KB |
-| color_quant | 8.96 | 72.1 | 0.00141 | 640 KB |
+| Quantizer | Butteraugli | SSIMULACRA2 | DSSIM | PNG size | GIF size | ~ms |
+|-----------|-------------|-------------|-------|----------|----------|-----|
+| quantette (k-means) | 3.86 | **83.9** | **0.00050** | 616 KB | 799 KB | 265 |
+| imagequant s1 d100 | 4.10 | 82.2 | 0.00056 | 637 KB | 848 KB | 546 |
+| imagequant s4 d100 | 4.39 | 81.9 | 0.00057 | 640 KB | 854 KB | 315 |
+| **zenquant** (Best) | **3.17** | 82.9 | 0.00058 | 586 KB | 764 KB | 542 |
+| imagequant s1 d50 | 4.15 | 82.0 | 0.00060 | 627 KB | 836 KB | 465 |
+| **zenquant** (Balanced) | 3.21 | 82.9 | 0.00064 | **579 KB** | 751 KB | 453 |
+| **zenquant** (Fast) | 3.29 | 82.6 | 0.00069 | 582 KB | **749 KB** | 321 |
+| quantizr | 4.44 | 79.7 | 0.00098 | 584 KB | 764 KB | 544 |
+| color_quant | 8.96 | 72.1 | 0.00141 | 625 KB | 841 KB | 180 |
 
-Lower butteraugli/DSSIM = better. Higher SSIMULACRA2 = better.
+Lower butteraugli/DSSIM = better. Higher SSIMULACRA2 = better. Smaller file size = better.
 
 **[Interactive visual comparison (9 quantizers, 50 images)](https://imageflow-resources.s3.us-west-2.amazonaws.com/demos/zenquant/2026-03-04/index.html)** — slider, diff, and zoom views with per-image metrics. Keyboard shortcuts: 1 = original, 2–0 = variants.
 

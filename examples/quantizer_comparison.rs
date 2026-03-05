@@ -15,7 +15,7 @@ use butteraugli::ButteraugliParams;
 use enough::Unstoppable;
 use fast_ssim2::compute_ssimulacra2;
 use imgref::ImgVec;
-use rgb::{RGB8, RGB};
+use rgb::{RGB, RGB8};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -536,13 +536,13 @@ fn run_quantette(
     sampling_factor: f32,
 ) -> (Vec<[u8; 3]>, Vec<u8>) {
     use quantette::deps::palette::Srgb;
-    use quantette::{ImageBuf, Pipeline, QuantizeMethod};
     use quantette::dither::FloydSteinberg;
     use quantette::kmeans::KmeansOptions;
+    use quantette::{ImageBuf, Pipeline, QuantizeMethod};
 
     let srgb_pixels: Vec<Srgb<u8>> = pixels.iter().map(|p| Srgb::new(p.r, p.g, p.b)).collect();
-    let image = ImageBuf::new(width as u32, height as u32, srgb_pixels)
-        .expect("quantette ImageBuf");
+    let image =
+        ImageBuf::new(width as u32, height as u32, srgb_pixels).expect("quantette ImageBuf");
 
     let method = if use_kmeans {
         QuantizeMethod::Kmeans(KmeansOptions::new().sampling_factor(sampling_factor))
@@ -557,7 +557,11 @@ fn run_quantette(
         .input_image(image.as_ref())
         .output_srgb8_indexed_image();
 
-    let palette: Vec<[u8; 3]> = indexed.palette().iter().map(|c| [c.red, c.green, c.blue]).collect();
+    let palette: Vec<[u8; 3]> = indexed
+        .palette()
+        .iter()
+        .map(|c| [c.red, c.green, c.blue])
+        .collect();
     let indices = indexed.indices().to_vec();
     (palette, indices)
 }
@@ -664,8 +668,7 @@ fn encode_indexed_png_bytes(
         })
         .collect();
     let img = ImgVec::new(pixels, width, height);
-    let config = EncodeConfig::default()
-        .with_compression(zenpng::Compression::Aggressive);
+    let config = EncodeConfig::default().with_compression(zenpng::Compression::Aggressive);
     let buf = zenpng::encode_rgb8(img.as_ref(), None, &config, &Unstoppable, &Unstoppable)
         .expect("zenpng encode failed");
     buf.len()
@@ -908,7 +911,15 @@ fn report_to_json(report: &ReportData, benchmark: bool) -> String {
             }
         }
 
-        let stat_keys = ["butteraugli", "ssimulacra2", "dssim", "png_bytes", "gif_bytes", "time_ms", "ms_per_mp"];
+        let stat_keys = [
+            "butteraugli",
+            "ssimulacra2",
+            "dssim",
+            "png_bytes",
+            "gif_bytes",
+            "time_ms",
+            "ms_per_mp",
+        ];
         let mut first_agg = true;
 
         for name in &all_names {
@@ -919,28 +930,43 @@ fn report_to_json(report: &ReportData, benchmark: bool) -> String {
                 if let Some(q) = img.quantizers.iter().find(|q| &q.name == name) {
                     let mp = (img.width * img.height) as f64 / 1_000_000.0;
                     let ms_per_mp = if mp > 0.0 { q.time_ms / mp } else { 0.0 };
-                    let row = [q.butteraugli, q.ssimulacra2, q.dssim, q.png_bytes as f64, q.gif_bytes as f64, q.time_ms, ms_per_mp];
+                    let row = [
+                        q.butteraugli,
+                        q.ssimulacra2,
+                        q.dssim,
+                        q.png_bytes as f64,
+                        q.gif_bytes as f64,
+                        q.time_ms,
+                        ms_per_mp,
+                    ];
                     for (i, &v) in row.iter().enumerate() {
                         vals[i].push(v);
                     }
                 }
             }
 
-            if vals[0].is_empty() { continue; }
+            if vals[0].is_empty() {
+                continue;
+            }
 
             let n = vals[0].len() as f64;
             let (display, line) = display_info(name);
             let name_url = format!("{SOURCE_URL}#L{line}");
 
             // Mean row
-            if !first_agg { out.push(','); }
+            if !first_agg {
+                out.push(',');
+            }
             first_agg = false;
             out.push_str(&format!(
                 "{{\"name\":\"{} mean\",\"nameUrl\":\"{}\",\"stats\":{{",
-                json_escape(display), json_escape(&name_url)
+                json_escape(display),
+                json_escape(&name_url)
             ));
             for (i, key) in stat_keys.iter().enumerate() {
-                if i > 0 { out.push(','); }
+                if i > 0 {
+                    out.push(',');
+                }
                 let mean = vals[i].iter().sum::<f64>() / n;
                 out.push_str(&format!("\"{}\":{:.4}", key, mean));
             }
@@ -950,10 +976,13 @@ fn report_to_json(report: &ReportData, benchmark: bool) -> String {
             out.push(',');
             out.push_str(&format!(
                 "{{\"name\":\"{} p95\",\"nameUrl\":\"{}\",\"stats\":{{",
-                json_escape(display), json_escape(&name_url)
+                json_escape(display),
+                json_escape(&name_url)
             ));
             for (i, key) in stat_keys.iter().enumerate() {
-                if i > 0 { out.push(','); }
+                if i > 0 {
+                    out.push(',');
+                }
                 let p95 = percentile_f64(&mut vals[i]);
                 out.push_str(&format!("\"{}\":{:.4}", key, p95));
             }
@@ -970,8 +999,12 @@ fn report_to_json(report: &ReportData, benchmark: bool) -> String {
     out.push_str("{\"key\":\"gif_bytes\",\"label\":\"GIF\",\"direction\":\"asc\"},");
     let ms_label = if benchmark { "ms" } else { "~ms" };
     let ms_mp_label = if benchmark { "ms/MP" } else { "~ms/MP" };
-    out.push_str(&format!("{{\"key\":\"time_ms\",\"label\":\"{ms_label}\",\"direction\":\"asc\"}},"));
-    out.push_str(&format!("{{\"key\":\"ms_per_mp\",\"label\":\"{ms_mp_label}\",\"direction\":\"asc\"}}"));
+    out.push_str(&format!(
+        "{{\"key\":\"time_ms\",\"label\":\"{ms_label}\",\"direction\":\"asc\"}},"
+    ));
+    out.push_str(&format!(
+        "{{\"key\":\"ms_per_mp\",\"label\":\"{ms_mp_label}\",\"direction\":\"asc\"}}"
+    ));
     out.push_str("],\"showKeyLegend\":true}");
     out
 }

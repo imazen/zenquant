@@ -116,6 +116,7 @@ impl ViterbiBufs {
 /// Same as [`viterbi_scanline`] but reads from `labs[x]` instead of
 /// converting `pixels[x]` to OKLab. The `pixels` are still needed for
 /// the sRGB NN cache lookup.
+#[allow(clippy::too_many_arguments)]
 fn viterbi_scanline_with_labs(
     pixels: &[rgb::RGB<u8>],
     labs: &[OKLab],
@@ -239,6 +240,7 @@ fn viterbi_scanline_with_labs(
 /// Per-scanline Viterbi DP using pre-computed OKLab values.
 ///
 /// Same as [`viterbi_refine`] but skips sRGB→OKLab conversion.
+#[allow(clippy::too_many_arguments)]
 pub fn viterbi_refine_with_labs(
     pixels: &[rgb::RGB<u8>],
     labs: &[OKLab],
@@ -268,6 +270,7 @@ pub fn viterbi_refine_with_labs(
 }
 
 /// Per-scanline Viterbi DP for RGBA images using pre-computed OKLab values.
+#[allow(clippy::too_many_arguments)]
 pub fn viterbi_refine_rgba_with_labs(
     pixels: &[rgb::RGBA<u8>],
     labs: &[OKLab],
@@ -363,6 +366,7 @@ pub fn run_extend_refine_with_labs(
 }
 
 /// Lightweight run-extension post-pass for RGBA using pre-computed OKLab.
+#[allow(clippy::too_many_arguments)]
 pub fn run_extend_refine_rgba_with_labs(
     pixels: &[rgb::RGBA<u8>],
     labs: &[OKLab],

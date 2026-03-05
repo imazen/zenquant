@@ -17,15 +17,23 @@ use zenquant::{OutputFormat, Quality, QuantizeConfig};
 
 fn codec_corpus_dir() -> std::path::PathBuf {
     let dir = std::path::PathBuf::from(
-        std::env::var("CODEC_CORPUS_DIR").unwrap_or_else(|_| "/home/lilith/work/codec-corpus".into()),
+        std::env::var("CODEC_CORPUS_DIR")
+            .unwrap_or_else(|_| "/home/lilith/work/codec-corpus".into()),
     );
-    assert!(dir.is_dir(), "Codec corpus not found: {}. Set CODEC_CORPUS_DIR.", dir.display());
+    assert!(
+        dir.is_dir(),
+        "Codec corpus not found: {}. Set CODEC_CORPUS_DIR.",
+        dir.display()
+    );
     dir
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let default_dir = codec_corpus_dir().join("CID22/CID22-512/validation").to_string_lossy().into_owned();
+    let default_dir = codec_corpus_dir()
+        .join("CID22/CID22-512/validation")
+        .to_string_lossy()
+        .into_owned();
     let image_dir = args.get(1).unwrap_or(&default_dir);
     let max_images: usize = args
         .get(2)
@@ -95,7 +103,10 @@ fn main() {
     println!("{}", "-".repeat(104));
 
     // Compute total megapixels for ms/MP
-    let total_mp: f64 = images.iter().map(|(_, _, w, h)| (*w * *h) as f64 / 1_000_000.0).sum();
+    let total_mp: f64 = images
+        .iter()
+        .map(|(_, _, w, h)| (*w * *h) as f64 / 1_000_000.0)
+        .sum();
 
     for (name, config) in &presets {
         let mut vals_ba = Vec::new();
@@ -206,10 +217,22 @@ fn main() {
     // Also run competitors for comparison
     println!();
     for (comp_name, comp_fn) in [
-        ("imagequant", run_imagequant as fn(&[rgb::RGB<u8>], usize, usize) -> (Vec<[u8; 3]>, Vec<u8>)),
-        ("quantizr", run_quantizr as fn(&[rgb::RGB<u8>], usize, usize) -> (Vec<[u8; 3]>, Vec<u8>)),
-        ("quantette-wu", run_quantette_wu as fn(&[rgb::RGB<u8>], usize, usize) -> (Vec<[u8; 3]>, Vec<u8>)),
-        ("quantette-km", run_quantette_km as fn(&[rgb::RGB<u8>], usize, usize) -> (Vec<[u8; 3]>, Vec<u8>)),
+        (
+            "imagequant",
+            run_imagequant as fn(&[rgb::RGB<u8>], usize, usize) -> (Vec<[u8; 3]>, Vec<u8>),
+        ),
+        (
+            "quantizr",
+            run_quantizr as fn(&[rgb::RGB<u8>], usize, usize) -> (Vec<[u8; 3]>, Vec<u8>),
+        ),
+        (
+            "quantette-wu",
+            run_quantette_wu as fn(&[rgb::RGB<u8>], usize, usize) -> (Vec<[u8; 3]>, Vec<u8>),
+        ),
+        (
+            "quantette-km",
+            run_quantette_km as fn(&[rgb::RGB<u8>], usize, usize) -> (Vec<[u8; 3]>, Vec<u8>),
+        ),
     ] {
         let mut vals_ba = Vec::new();
         let mut vals_ss2 = Vec::new();
@@ -271,7 +294,9 @@ fn main() {
             vals_ba.iter().sum::<f64>() / n,
             vals_ss2.iter().sum::<f64>() / n,
             vals_zsim.iter().sum::<f64>() / n,
-            "", "", "",
+            "",
+            "",
+            "",
             vals_deflate.iter().sum::<f64>() / n,
             vals_ms.iter().sum::<f64>() / n,
             ms_per_mp,
@@ -283,7 +308,9 @@ fn main() {
             percentile_f64(&mut vals_ba),
             percentile_f64(&mut vals_ss2),
             percentile_f64(&mut vals_zsim),
-            "", "", "",
+            "",
+            "",
+            "",
             percentile_f64(&mut vals_deflate),
             percentile_f64(&mut vals_ms),
             p95_ms_per_mp,
@@ -320,11 +347,19 @@ fn run_imagequant(pixels: &[rgb::RGB<u8>], width: usize, height: usize) -> (Vec<
     (pal.iter().map(|c| [c.r, c.g, c.b]).collect(), idx)
 }
 
-fn run_quantette_wu(pixels: &[rgb::RGB<u8>], width: usize, height: usize) -> (Vec<[u8; 3]>, Vec<u8>) {
+fn run_quantette_wu(
+    pixels: &[rgb::RGB<u8>],
+    width: usize,
+    height: usize,
+) -> (Vec<[u8; 3]>, Vec<u8>) {
     run_quantette(pixels, width, height, false)
 }
 
-fn run_quantette_km(pixels: &[rgb::RGB<u8>], width: usize, height: usize) -> (Vec<[u8; 3]>, Vec<u8>) {
+fn run_quantette_km(
+    pixels: &[rgb::RGB<u8>],
+    width: usize,
+    height: usize,
+) -> (Vec<[u8; 3]>, Vec<u8>) {
     run_quantette(pixels, width, height, true)
 }
 
@@ -335,12 +370,12 @@ fn run_quantette(
     use_kmeans: bool,
 ) -> (Vec<[u8; 3]>, Vec<u8>) {
     use quantette::deps::palette::Srgb;
-    use quantette::{ImageBuf, Pipeline, QuantizeMethod};
     use quantette::dither::FloydSteinberg;
+    use quantette::{ImageBuf, Pipeline, QuantizeMethod};
 
     let srgb_pixels: Vec<Srgb<u8>> = pixels.iter().map(|p| Srgb::new(p.r, p.g, p.b)).collect();
-    let image = ImageBuf::new(width as u32, height as u32, srgb_pixels)
-        .expect("quantette ImageBuf");
+    let image =
+        ImageBuf::new(width as u32, height as u32, srgb_pixels).expect("quantette ImageBuf");
 
     let method = if use_kmeans {
         QuantizeMethod::kmeans()
@@ -355,7 +390,11 @@ fn run_quantette(
         .input_image(image.as_ref())
         .output_srgb8_indexed_image();
 
-    let palette: Vec<[u8; 3]> = indexed.palette().iter().map(|c| [c.red, c.green, c.blue]).collect();
+    let palette: Vec<[u8; 3]> = indexed
+        .palette()
+        .iter()
+        .map(|c| [c.red, c.green, c.blue])
+        .collect();
     let indices = indexed.indices().to_vec();
     (palette, indices)
 }

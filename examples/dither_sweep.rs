@@ -17,17 +17,28 @@ const DITHER_VALUES: &[f32] = &[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9
 
 fn codec_corpus_dir() -> std::path::PathBuf {
     let dir = std::path::PathBuf::from(
-        std::env::var("CODEC_CORPUS_DIR").unwrap_or_else(|_| "/home/lilith/work/codec-corpus".into()),
+        std::env::var("CODEC_CORPUS_DIR")
+            .unwrap_or_else(|_| "/home/lilith/work/codec-corpus".into()),
     );
-    assert!(dir.is_dir(), "Codec corpus not found: {}. Set CODEC_CORPUS_DIR.", dir.display());
+    assert!(
+        dir.is_dir(),
+        "Codec corpus not found: {}. Set CODEC_CORPUS_DIR.",
+        dir.display()
+    );
     dir
 }
 
 fn corpus_path(name: &str) -> String {
     let base = codec_corpus_dir();
     match name {
-        "cid22" => base.join("CID22/CID22-512/training").to_string_lossy().into_owned(),
-        "clic2025" => base.join("clic2025/final-test").to_string_lossy().into_owned(),
+        "cid22" => base
+            .join("CID22/CID22-512/training")
+            .to_string_lossy()
+            .into_owned(),
+        "clic2025" => base
+            .join("clic2025/final-test")
+            .to_string_lossy()
+            .into_owned(),
         "gb82-sc" => base.join("gb82-sc").to_string_lossy().into_owned(),
         _ => panic!("Unknown corpus: {name}"),
     }

@@ -45,8 +45,8 @@ pub struct MpeResult {
 impl MpeResult {
     /// Construct a perfect-score result (zero error) for exact palette matches.
     pub fn zero(width: usize, height: usize) -> Self {
-        let block_cols = (width + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        let block_rows = (height + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        let block_cols = width.div_ceil(BLOCK_SIZE);
+        let block_rows = height.div_ceil(BLOCK_SIZE);
         Self {
             score: 0.0,
             block_scores: vec![0.0; block_cols * block_rows],

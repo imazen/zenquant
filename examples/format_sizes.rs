@@ -4,14 +4,22 @@ use zenquant::{OutputFormat, Quality, QuantizeConfig};
 
 fn codec_corpus_dir() -> std::path::PathBuf {
     let dir = std::path::PathBuf::from(
-        std::env::var("CODEC_CORPUS_DIR").unwrap_or_else(|_| "/home/lilith/work/codec-corpus".into()),
+        std::env::var("CODEC_CORPUS_DIR")
+            .unwrap_or_else(|_| "/home/lilith/work/codec-corpus".into()),
     );
-    assert!(dir.is_dir(), "Codec corpus not found: {}. Set CODEC_CORPUS_DIR.", dir.display());
+    assert!(
+        dir.is_dir(),
+        "Codec corpus not found: {}. Set CODEC_CORPUS_DIR.",
+        dir.display()
+    );
     dir
 }
 
 fn main() {
-    let image_dir = codec_corpus_dir().join("CID22/CID22-512/validation").to_string_lossy().into_owned();
+    let image_dir = codec_corpus_dir()
+        .join("CID22/CID22-512/validation")
+        .to_string_lossy()
+        .into_owned();
 
     let mut paths: Vec<std::path::PathBuf> = std::fs::read_dir(image_dir)
         .unwrap()

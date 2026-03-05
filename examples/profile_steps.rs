@@ -15,15 +15,23 @@ use zenquant::_dev::remap;
 
 fn codec_corpus_dir() -> std::path::PathBuf {
     let dir = std::path::PathBuf::from(
-        std::env::var("CODEC_CORPUS_DIR").unwrap_or_else(|_| "/home/lilith/work/codec-corpus".into()),
+        std::env::var("CODEC_CORPUS_DIR")
+            .unwrap_or_else(|_| "/home/lilith/work/codec-corpus".into()),
     );
-    assert!(dir.is_dir(), "Codec corpus not found: {}. Set CODEC_CORPUS_DIR.", dir.display());
+    assert!(
+        dir.is_dir(),
+        "Codec corpus not found: {}. Set CODEC_CORPUS_DIR.",
+        dir.display()
+    );
     dir
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let default_path = codec_corpus_dir().join("CID22/CID22-512/training/1001682.png").to_string_lossy().into_owned();
+    let default_path = codec_corpus_dir()
+        .join("CID22/CID22-512/training/1001682.png")
+        .to_string_lossy()
+        .into_owned();
     let image_path = args.get(1).unwrap_or(&default_path);
 
     let img = image::open(image_path).unwrap().to_rgb8();

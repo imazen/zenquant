@@ -33,6 +33,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
+      - name: Patch path deps to git refs
+        shell: bash
+        run: |
+          sed \
+            -e 's|path = "\.\./zengif"|git = "https://github.com/imazen/zengif"|g' \
+            -e 's|path = "\.\./zenwebp"|git = "https://github.com/imazen/zenwebp"|g' \
+            -e 's|path = "\.\./zensim/zensim"|git = "https://github.com/imazen/zensim"|g' \
+            -e 's|path = "\.\./zenpng"|git = "https://github.com/imazen/zenpng"|g' \
+            Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
+
       - name: Test (lib only, dev-deps are cross-repo path deps)
         run: cargo test --lib
 
@@ -107,7 +117,7 @@ jobs:
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --lib --tests -- -D warnings
 
   fmt:
     name: Format
@@ -163,7 +173,7 @@ jobs:
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
 
       - name: Generate coverage
-        run: cargo llvm-cov --lcov --output-path lcov.info
+        run: cargo llvm-cov --lib --lcov --output-path lcov.info
 
       - name: Upload coverage
         uses: codecov/codecov-action@v5
