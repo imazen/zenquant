@@ -1,5 +1,6 @@
 extern crate alloc;
 use alloc::collections::BTreeMap;
+use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::oklab::{OKLab, OKLabA, srgb_to_oklab};

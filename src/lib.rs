@@ -29,12 +29,13 @@
 //! - **Shared palettes**: [`build_palette`] and [`build_palette_rgba`] build
 //!   a single palette from multiple frames, then [`QuantizeResult::remap`]
 //!   maps each frame against it.
-//! - **`no_std` + `alloc`**: works in WASM and embedded contexts.
+//! - **`no_std` + `alloc`**: always `no_std`; works in WASM and embedded contexts.
 
 #![deny(unsafe_code)]
-#![cfg_attr(not(feature = "std"), no_std)]
+#![no_std]
 
 extern crate alloc;
+use alloc::vec;
 
 // When _dev is enabled, expose internal modules as pub for profiling examples.
 // Otherwise keep them pub(crate).
@@ -57,84 +58,7 @@ pub mod error;
 pub(crate) mod joint;
 #[cfg(feature = "joint")]
 mod joint_predict;
-#[cfg(feature = "simd")]
 pub(crate) mod simd;
-#[cfg(not(feature = "simd"))]
-pub(crate) mod simd {
-    //! Scalar fallback when `simd` feature is disabled.
-    extern crate alloc;
-    use crate::oklab::{OKLab, srgb_to_oklab, srgb_to_oklab_fast};
-    use alloc::vec::Vec;
-
-    pub(crate) fn batch_srgb_to_oklab(pixels: &[rgb::RGB<u8>], out: &mut [[f32; 3]]) {
-        for (px, o) in pixels.iter().zip(out.iter_mut()) {
-            let lab = srgb_to_oklab(px.r, px.g, px.b);
-            *o = [lab.l, lab.a, lab.b];
-        }
-    }
-
-    /// Fast batch conversion using fast_cbrt (~3x faster, ~22 bits precision).
-    pub(crate) fn batch_srgb_to_oklab_fast(pixels: &[rgb::RGB<u8>], out: &mut [[f32; 3]]) {
-        for (px, o) in pixels.iter().zip(out.iter_mut()) {
-            let lab = srgb_to_oklab_fast(px.r, px.g, px.b);
-            *o = [lab.l, lab.a, lab.b];
-        }
-    }
-
-    pub(crate) fn batch_srgb_to_oklab_vec(pixels: &[rgb::RGB<u8>]) -> Vec<OKLab> {
-        pixels
-            .iter()
-            .map(|p| srgb_to_oklab(p.r, p.g, p.b))
-            .collect()
-    }
-
-    #[derive(Debug, Clone)]
-    pub(crate) struct PaletteSimd {
-        entries: Vec<OKLab>,
-        start: usize,
-    }
-
-    impl PaletteSimd {
-        pub(crate) fn empty() -> Self {
-            Self {
-                entries: Vec::new(),
-                start: 0,
-            }
-        }
-
-        pub(crate) fn from_palette(palette: &crate::palette::Palette) -> Self {
-            let start = if palette.transparent_index().is_some() {
-                1
-            } else {
-                0
-            };
-            Self {
-                entries: palette.entries_oklab().to_vec(),
-                start,
-            }
-        }
-
-        pub(crate) fn from_oklab_slice(entries: &[OKLab], start: usize) -> Self {
-            Self {
-                entries: entries.to_vec(),
-                start,
-            }
-        }
-
-        pub(crate) fn nearest(&self, color: OKLab) -> u8 {
-            let mut best_idx = self.start;
-            let mut best_dist = f32::MAX;
-            for i in self.start..self.entries.len() {
-                let d = color.distance_sq(self.entries[i]);
-                if d < best_dist {
-                    best_dist = d;
-                    best_idx = i;
-                }
-            }
-            best_idx as u8
-        }
-    }
-}
 
 pub use error::QuantizeError;
 pub use imgref::{Img, ImgRef, ImgVec};

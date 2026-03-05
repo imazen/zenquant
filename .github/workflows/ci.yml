@@ -67,8 +67,8 @@ jobs:
             -e '/^zenpng/d' \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
 
-      - name: Test (i686, no SIMD)
-        run: cross test --target i686-unknown-linux-gnu --lib --no-default-features --features std
+      - name: Test (i686)
+        run: cross test --target i686-unknown-linux-gnu --lib
 
   clippy:
     name: Clippy

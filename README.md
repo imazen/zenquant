@@ -217,10 +217,11 @@ zenquant is used as the default quantizer in:
 
 ## Features
 
-- `std` (default) — enables `std::error::Error` impl
+- `std` (default) — enables `std` on dependencies (linear-srgb, archmage, magetypes)
+- `joint` — joint deflate+quantization optimization for PNG
 - `_dev` — exposes internal modules for profiling (not public API)
 
-`no_std` + `alloc` compatible when `std` is disabled.
+Always `no_std` + `alloc`. Uses `core::error::Error` (stable since Rust 1.81). SIMD acceleration (AVX2+FMA, NEON) via archmage with automatic scalar fallback.
 
 ## MSRV
 
