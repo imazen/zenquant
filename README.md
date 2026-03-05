@@ -217,10 +217,11 @@ zenquant is used as the default quantizer in:
 
 ## Features
 
+- `std` (default) — enables `std` on archmage/magetypes for platform-optimized math
 - `joint` — joint deflate+quantization optimization for PNG
 - `_dev` — exposes internal modules for profiling (not public API)
 
-Always `no_std` + `alloc`. Uses `core::error::Error` (Rust 1.81+). SIMD acceleration (AVX2+FMA, NEON) via archmage with automatic scalar fallback.
+Always `no_std` + `alloc`. Uses `core::error::Error` (Rust 1.81+). SIMD acceleration (AVX2+FMA, NEON) via archmage with automatic scalar fallback. Fully functional without `std`.
 
 ## MSRV
 

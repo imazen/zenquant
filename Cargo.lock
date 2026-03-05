@@ -37,11 +37,11 @@ dependencies = [
 
 [[package]]
 name = "archmage"
-version = "0.9.2"
+version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e470ca1f169b79284cc3bcdd61da7b16a17efaa1292bc949ab8b54456f90af0"
+checksum = "c06fce4ba08fb97a48343135a4a3a1306a402137650ce7f2e2d377af19135b6f"
 dependencies = [
- "archmage-macros 0.9.2",
+ "archmage-macros 0.9.3",
  "safe_unaligned_simd",
 ]
 
@@ -58,9 +58,9 @@ dependencies = [
 
 [[package]]
 name = "archmage-macros"
-version = "0.9.2"
+version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ab8c78724345a30e13e885591bcca870bc778f47cd2bf9bf01be83e8fe55945"
+checksum = "1313d66c52ca713bb53065953e1ecaa9bf69cb8f4e190aa08232ac5790a66dc1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -477,9 +477,9 @@ dependencies = [
 name = "linear-srgb"
 version = "0.6.0"
 dependencies = [
- "archmage 0.9.2",
+ "archmage 0.9.3",
  "bytemuck",
- "magetypes 0.9.2",
+ "magetypes 0.9.3",
  "num-traits",
 ]
 
@@ -506,11 +506,11 @@ dependencies = [
 
 [[package]]
 name = "magetypes"
-version = "0.9.2"
+version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "803ee0717e254afbe023ad6cfcc5af101771ffa38d22e2a218f5ec745c5a3edc"
+checksum = "06ba39f70cdfbbaea85cf5d82bfe84c83c8c00f0cc80243bee241c6a5227c3dd"
 dependencies = [
- "archmage 0.9.2",
+ "archmage 0.9.3",
 ]
 
 [[package]]
@@ -1164,7 +1164,7 @@ dependencies = [
 name = "zenflate"
 version = "0.3.0"
 dependencies = [
- "archmage 0.9.2",
+ "archmage 0.9.3",
  "enough",
  "libm",
 ]
@@ -1208,7 +1208,7 @@ name = "zenpng"
 version = "0.1.0"
 dependencies = [
  "almost-enough",
- "archmage 0.9.2",
+ "archmage 0.9.3",
  "bytemuck",
  "enough",
  "imgref",
@@ -1225,7 +1225,7 @@ dependencies = [
 name = "zenquant"
 version = "0.1.0"
 dependencies = [
- "archmage 0.9.2",
+ "archmage 0.9.3",
  "butteraugli",
  "codec-corpus",
  "color_quant",
@@ -1238,7 +1238,7 @@ dependencies = [
  "imagequant",
  "imgref",
  "linear-srgb 0.5.5",
- "magetypes 0.9.2",
+ "magetypes 0.9.3",
  "png",
  "quantette",
  "quantizr",
@@ -1254,10 +1254,10 @@ dependencies = [
 name = "zensim"
 version = "0.1.0"
 dependencies = [
- "archmage 0.9.2",
+ "archmage 0.9.3",
  "bytemuck",
  "imgref",
- "magetypes 0.9.2",
+ "magetypes 0.9.3",
  "rayon",
  "rgb",
  "thiserror",
