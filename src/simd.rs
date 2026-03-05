@@ -3,7 +3,6 @@
 //! Uses archmage for runtime CPU dispatch (AVX2+FMA on x86_64, NEON on aarch64,
 //! scalar fallback everywhere else) and magetypes for portable SIMD abstractions.
 
-#![allow(unsafe_code)] // #[arcane] generates target_feature wrappers
 
 extern crate alloc;
 use alloc::vec;

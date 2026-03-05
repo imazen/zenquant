@@ -31,7 +31,7 @@
 //!   maps each frame against it.
 //! - **`no_std` + `alloc`**: always `no_std`; works in WASM and embedded contexts.
 
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 #![no_std]
 
 extern crate alloc;
