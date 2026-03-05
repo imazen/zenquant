@@ -33,14 +33,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Patch path deps to git refs
+      - name: Patch path deps for CI
         shell: bash
         run: |
           sed \
-            -e 's|path = "\.\./zengif"|git = "https://github.com/imazen/zengif"|g' \
-            -e 's|path = "\.\./zenwebp"|git = "https://github.com/imazen/zenwebp"|g' \
+            -e 's|path = "\.\./zengif"|version = "0.6"|g' \
+            -e 's|path = "\.\./zenwebp"|version = "0.3"|g' \
             -e 's|path = "\.\./zensim/zensim"|git = "https://github.com/imazen/zensim"|g' \
-            -e 's|path = "\.\./zenpng"|git = "https://github.com/imazen/zenpng"|g' \
+            -e '/^zenpng\s*=/d' \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
 
       - name: Test (lib only, dev-deps are cross-repo path deps)
@@ -60,14 +60,14 @@ jobs:
         with:
           key: cross-i686
 
-      - name: Patch path deps to git refs
+      - name: Patch path deps for CI
         shell: bash
         run: |
           sed \
-            -e 's|path = "\.\./zengif"|git = "https://github.com/imazen/zengif"|g' \
-            -e 's|path = "\.\./zenwebp"|git = "https://github.com/imazen/zenwebp"|g' \
+            -e 's|path = "\.\./zengif"|version = "0.6"|g' \
+            -e 's|path = "\.\./zenwebp"|version = "0.3"|g' \
             -e 's|path = "\.\./zensim/zensim"|git = "https://github.com/imazen/zensim"|g' \
-            -e 's|path = "\.\./zenpng"|git = "https://github.com/imazen/zenpng"|g' \
+            -e '/^zenpng\s*=/d' \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
 
       - name: Test (i686)
@@ -83,14 +83,14 @@ jobs:
           targets: wasm32-wasip1
       - uses: Swatinem/rust-cache@v2
 
-      - name: Patch path deps to git refs
+      - name: Patch path deps for CI
         shell: bash
         run: |
           sed \
-            -e 's|path = "\.\./zengif"|git = "https://github.com/imazen/zengif"|g' \
-            -e 's|path = "\.\./zenwebp"|git = "https://github.com/imazen/zenwebp"|g' \
+            -e 's|path = "\.\./zengif"|version = "0.6"|g' \
+            -e 's|path = "\.\./zenwebp"|version = "0.3"|g' \
             -e 's|path = "\.\./zensim/zensim"|git = "https://github.com/imazen/zensim"|g' \
-            -e 's|path = "\.\./zenpng"|git = "https://github.com/imazen/zenpng"|g' \
+            -e '/^zenpng\s*=/d' \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
 
       - name: Check (wasm32-wasip1, no default features)
@@ -106,14 +106,14 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
 
-      - name: Patch path deps to git refs
+      - name: Patch path deps for CI
         shell: bash
         run: |
           sed \
-            -e 's|path = "\.\./zengif"|git = "https://github.com/imazen/zengif"|g' \
-            -e 's|path = "\.\./zenwebp"|git = "https://github.com/imazen/zenwebp"|g' \
+            -e 's|path = "\.\./zengif"|version = "0.6"|g' \
+            -e 's|path = "\.\./zenwebp"|version = "0.3"|g' \
             -e 's|path = "\.\./zensim/zensim"|git = "https://github.com/imazen/zensim"|g' \
-            -e 's|path = "\.\./zenpng"|git = "https://github.com/imazen/zenpng"|g' \
+            -e '/^zenpng\s*=/d' \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
 
       - name: Clippy
@@ -140,14 +140,14 @@ jobs:
       - uses: taiki-e/install-action@cargo-hack
       - uses: Swatinem/rust-cache@v2
 
-      - name: Patch path deps to git refs
+      - name: Patch path deps for CI
         shell: bash
         run: |
           sed \
-            -e 's|path = "\.\./zengif"|git = "https://github.com/imazen/zengif"|g' \
-            -e 's|path = "\.\./zenwebp"|git = "https://github.com/imazen/zenwebp"|g' \
+            -e 's|path = "\.\./zengif"|version = "0.6"|g' \
+            -e 's|path = "\.\./zenwebp"|version = "0.3"|g' \
             -e 's|path = "\.\./zensim/zensim"|git = "https://github.com/imazen/zensim"|g' \
-            -e 's|path = "\.\./zenpng"|git = "https://github.com/imazen/zenpng"|g' \
+            -e '/^zenpng\s*=/d' \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
 
       - name: Check MSRV
@@ -162,14 +162,14 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: Swatinem/rust-cache@v2
 
-      - name: Patch path deps to git refs
+      - name: Patch path deps for CI
         shell: bash
         run: |
           sed \
-            -e 's|path = "\.\./zengif"|git = "https://github.com/imazen/zengif"|g' \
-            -e 's|path = "\.\./zenwebp"|git = "https://github.com/imazen/zenwebp"|g' \
+            -e 's|path = "\.\./zengif"|version = "0.6"|g' \
+            -e 's|path = "\.\./zenwebp"|version = "0.3"|g' \
             -e 's|path = "\.\./zensim/zensim"|git = "https://github.com/imazen/zensim"|g' \
-            -e 's|path = "\.\./zenpng"|git = "https://github.com/imazen/zenpng"|g' \
+            -e '/^zenpng\s*=/d' \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
 
       - name: Generate coverage
