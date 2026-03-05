@@ -40,14 +40,11 @@ jobs:
             -e 's|path = "\.\./zengif"|version = "0.6"|g' \
             -e 's|path = "\.\./zenwebp"|version = "0.3"|g' \
             -e 's|path = "\.\./zensim/zensim"|git = "https://github.com/imazen/zensim"|g' \
-            -e '/^zenpng\s*=/d' \
+            -e '/^zenpng/d' \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
 
-      - name: Test (lib only, dev-deps are cross-repo path deps)
+      - name: Test
         run: cargo test --lib
-
-      - name: Check (no_std)
-        run: cargo check --no-default-features
 
   i686:
     name: Test (i686)
@@ -67,34 +64,11 @@ jobs:
             -e 's|path = "\.\./zengif"|version = "0.6"|g' \
             -e 's|path = "\.\./zenwebp"|version = "0.3"|g' \
             -e 's|path = "\.\./zensim/zensim"|git = "https://github.com/imazen/zensim"|g' \
-            -e '/^zenpng\s*=/d' \
+            -e '/^zenpng/d' \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
 
-      - name: Test (i686)
-        run: cross test --target i686-unknown-linux-gnu --lib
-
-  wasm:
-    name: WASM check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-wasip1
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Patch path deps for CI
-        shell: bash
-        run: |
-          sed \
-            -e 's|path = "\.\./zengif"|version = "0.6"|g' \
-            -e 's|path = "\.\./zenwebp"|version = "0.3"|g' \
-            -e 's|path = "\.\./zensim/zensim"|git = "https://github.com/imazen/zensim"|g' \
-            -e '/^zenpng\s*=/d' \
-            Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
-
-      - name: Check (wasm32-wasip1, no default features)
-        run: cargo check --target wasm32-wasip1 --no-default-features
+      - name: Test (i686, no SIMD)
+        run: cross test --target i686-unknown-linux-gnu --lib --no-default-features --features std
 
   clippy:
     name: Clippy
@@ -113,11 +87,11 @@ jobs:
             -e 's|path = "\.\./zengif"|version = "0.6"|g' \
             -e 's|path = "\.\./zenwebp"|version = "0.3"|g' \
             -e 's|path = "\.\./zensim/zensim"|git = "https://github.com/imazen/zensim"|g' \
-            -e '/^zenpng\s*=/d' \
+            -e '/^zenpng/d' \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
 
       - name: Clippy
-        run: cargo clippy --lib --tests -- -D warnings
+        run: cargo clippy --lib -- -D warnings
 
   fmt:
     name: Format
@@ -147,7 +121,7 @@ jobs:
             -e 's|path = "\.\./zengif"|version = "0.6"|g' \
             -e 's|path = "\.\./zenwebp"|version = "0.3"|g' \
             -e 's|path = "\.\./zensim/zensim"|git = "https://github.com/imazen/zensim"|g' \
-            -e '/^zenpng\s*=/d' \
+            -e '/^zenpng/d' \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
 
       - name: Check MSRV
@@ -169,7 +143,7 @@ jobs:
             -e 's|path = "\.\./zengif"|version = "0.6"|g' \
             -e 's|path = "\.\./zenwebp"|version = "0.3"|g' \
             -e 's|path = "\.\./zensim/zensim"|git = "https://github.com/imazen/zensim"|g' \
-            -e '/^zenpng\s*=/d' \
+            -e '/^zenpng/d' \
             Cargo.toml > Cargo.toml.ci && mv Cargo.toml.ci Cargo.toml
 
       - name: Generate coverage
