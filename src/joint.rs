@@ -601,6 +601,7 @@ fn dp_row_optimize_subbyte(
 ///
 /// Returns optimized indices. The downstream PNG encoder handles filter
 /// selection and compression through its standard pipeline.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn optimize_rgb(
     pixels: &[rgb::RGB<u8>],
@@ -646,41 +647,6 @@ pub(crate) fn optimize_rgb_with_labs(
         palette,
         initial_indices,
         None,
-        base_tolerance,
-    )
-}
-
-/// Joint deflate+quantization optimization for RGBA images.
-///
-/// Transparent pixels (at transparent_index) are kept unchanged.
-/// Returns optimized indices.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn optimize_rgba(
-    pixels: &[rgb::RGBA<u8>],
-    width: usize,
-    height: usize,
-    weights: &[f32],
-    palette: &Palette,
-    initial_indices: &[u8],
-    _deflate_effort: u32,
-    base_tolerance: f32,
-) -> Vec<u8> {
-    let rgb_pixels: Vec<rgb::RGB<u8>> = pixels
-        .iter()
-        .map(|p| rgb::RGB::new(p.r, p.g, p.b))
-        .collect();
-    let pixel_oklab = crate::simd::batch_srgb_to_oklab_vec(&rgb_pixels);
-
-    let transparent_index = palette.transparent_index();
-
-    optimize_inner(
-        &pixel_oklab,
-        width,
-        height,
-        weights,
-        palette,
-        initial_indices,
-        transparent_index,
         base_tolerance,
     )
 }
@@ -1054,6 +1020,7 @@ fn optimize_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     #[test]
     fn paeth_predictor_basic() {

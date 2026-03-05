@@ -785,6 +785,7 @@ impl Predictor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     #[test]
     fn predictor_basic() {
