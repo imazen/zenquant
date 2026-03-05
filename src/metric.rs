@@ -10,6 +10,9 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 
+#[allow(unused_imports)]
+use num_traits::Float;
+
 use crate::masking;
 use crate::oklab::{OKLab, srgb_to_oklab};
 

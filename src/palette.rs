@@ -2,6 +2,9 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 
+#[allow(unused_imports)]
+use num_traits::Float;
+
 use crate::oklab::{OKLab, OKLabA, oklab_to_srgb};
 
 /// Strategy for ordering palette entries.

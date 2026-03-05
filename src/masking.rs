@@ -2,6 +2,9 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 
+#[allow(unused_imports)]
+use num_traits::Float;
+
 use crate::oklab::srgb_to_oklab_l_fast;
 
 /// Compute per-pixel AQ masking weights from an RGB image.

@@ -3,6 +3,9 @@ use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 
+#[allow(unused_imports)]
+use num_traits::Float;
+
 use crate::oklab::{OKLab, OKLabA, srgb_to_oklab};
 
 /// A histogram entry: accumulated color, weight, and count for a quantized bucket.

@@ -1,3 +1,6 @@
+#[allow(unused_imports)]
+use num_traits::Float;
+
 /// OKLab color representation.
 ///
 /// Bjorn Ottosson's perceptually uniform color space.

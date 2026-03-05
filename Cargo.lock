@@ -1199,6 +1199,7 @@ dependencies = [
  "imgref",
  "linear-srgb",
  "magetypes",
+ "num-traits",
  "png",
  "quantette",
  "quantizr",
