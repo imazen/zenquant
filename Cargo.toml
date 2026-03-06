@@ -30,7 +30,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 imagequant = "4"
 quantizr = "1"
 flate2 = "1"
-butteraugli = "0.4"
+butteraugli = "0.8"
 fast-ssim2 = { version = "0.6", features = ["imgref"] }
 png = "0.18"
 zengif = { path = "../zengif", features = ["quantizr"] }
