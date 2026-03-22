@@ -59,6 +59,8 @@ pub(crate) mod joint;
 #[cfg(feature = "joint")]
 mod joint_predict;
 pub(crate) mod simd;
+#[cfg(feature = "zennode")]
+pub mod zennode_defs;
 
 pub use error::QuantizeError;
 pub use imgref::{Img, ImgRef, ImgVec};

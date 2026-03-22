@@ -1116,6 +1116,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "zenode"
+version = "0.1.0"
+dependencies = [
+ "zenode-derive",
+]
+
+[[package]]
+name = "zenode-derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "zenpixels"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1187,6 +1203,7 @@ dependencies = [
  "rgb",
  "thiserror",
  "zengif",
+ "zenode",
  "zenpng",
  "zensim",
  "zenwebp",
