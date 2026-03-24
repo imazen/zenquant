@@ -46,6 +46,9 @@ jobs:
       - name: Test
         run: cargo test --lib
 
+      - name: Test (joint feature)
+        run: cargo test --lib --features joint
+
   i686:
     name: Test (i686)
     runs-on: ubuntu-latest
@@ -92,6 +95,9 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --lib -- -D warnings
+
+      - name: Clippy (joint feature)
+        run: cargo clippy --lib --features joint -- -D warnings
 
   fmt:
     name: Format
