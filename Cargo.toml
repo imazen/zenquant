@@ -20,8 +20,8 @@ imgref = "1"
 num-traits = { version = "0.2", default-features = false, features = ["libm"] }
 thiserror = { version = "2", default-features = false }
 linear-srgb = { version = "0.6.3", default-features = false }
-archmage = { version = "0.9.7", default-features = false, features = ["macros"] }
-magetypes = { version = "0.9.7", default-features = false }
+archmage = { version = "0.9.12", default-features = false, features = ["macros"] }
+magetypes = { version = "0.9.12", default-features = false }
 # zenflate is no longer needed — joint uses a vendored LZ77 predictor
 # zenflate = { path = "../zenflate", optional = true, default-features = false, features = ["alloc"] }
 
@@ -30,8 +30,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 imagequant = "4"
 quantizr = "1"
 flate2 = "1"
-butteraugli = "0.8"
-fast-ssim2 = { version = "0.6", features = ["imgref"] }
+butteraugli = "0.9"
+fast-ssim2 = { version = "0.7", features = ["imgref"] }
 png = "0.18"
 zengif = { path = "../zengif", features = ["quantizr"] }
 zenwebp = { path = "../zenwebp", default-features = false, features = ["std", "pixel-types"] }

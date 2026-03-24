@@ -28,19 +28,40 @@ dependencies = [
 
 [[package]]
 name = "archmage"
-version = "0.9.10"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3277aaadcdb806f088022607cbc1f545d93f2be875ed308a17274006126a8e4"
+checksum = "61bd463aee29794a0318115ab857c2486842b28956c3f75365b304f1047b4758"
 dependencies = [
- "archmage-macros",
+ "archmage-macros 0.7.0",
+ "safe_unaligned_simd",
+]
+
+[[package]]
+name = "archmage"
+version = "0.9.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b31252c47e70c7056709e9f98842aef4f709056c2b3a4f666c584f8cc37f7ca0"
+dependencies = [
+ "archmage-macros 0.9.12",
  "safe_unaligned_simd",
 ]
 
 [[package]]
 name = "archmage-macros"
-version = "0.9.10"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d21eb5f22a36e5509ba9ac633a6bf96ef9a2e5ef1b047a959dfcfbe975664205"
+checksum = "02b01e2d131ffadba47bdff5d5e1d5d8a3b9743dc6b3d6ce4847ae2d6d306058"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "archmage-macros"
+version = "0.9.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a97189db9dffc2e13364c6f56461085d65743ff4d17890d6b80744203aae92b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -98,13 +119,14 @@ checksum = "5d20789868f4b01b2f2caec9f5c4e0213b41e3e5702a50157d699ae31ced2fcb"
 
 [[package]]
 name = "butteraugli"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96131e7190d4a5d2433b6820ccbe26efa420a873169131eadf24e8524c03ab27"
+checksum = "9c28a6704cdf610e0dfe761e2f289a3cac568db9128db12393f9463b4bf4fc76"
 dependencies = [
- "archmage",
+ "archmage 0.9.12",
  "imgref",
- "magetypes",
+ "magetypes 0.9.12",
+ "rayon",
  "rgb",
 ]
 
@@ -290,16 +312,15 @@ checksum = "dd2e7510819d6fbf51a5545c8f922716ecfb14df168a3242f7d33e0239efe6a1"
 
 [[package]]
 name = "fast-ssim2"
-version = "0.6.5"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6e617a6909672b4d526b44ea869ec1e0188c1aa5648ac30606848fa7ff96f26"
+checksum = "699989c244d616b42dc6dd4f3dbde284c26700c280d6f39febac7f7c2471df7c"
 dependencies = [
+ "archmage 0.7.0",
  "imgref",
- "multiversion",
+ "magetypes 0.7.0",
  "num-traits",
- "safe_unaligned_simd",
  "thiserror",
- "wide 1.2.0",
  "yuvxyb",
  "yuvxyb-math",
 ]
@@ -352,7 +373,7 @@ version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b7b87fd4550db5153983b6a4ccfa6050095afe31f9fd03492556e6a82d5a235"
 dependencies = [
- "archmage",
+ "archmage 0.9.12",
  "bytemuck",
  "paste",
 ]
@@ -454,9 +475,9 @@ dependencies = [
 name = "linear-srgb"
 version = "0.6.3"
 dependencies = [
- "archmage",
+ "archmage 0.9.12",
  "bytemuck",
- "magetypes",
+ "magetypes 0.9.12",
  "num-traits",
 ]
 
@@ -466,9 +487,9 @@ version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "125a2ceb187051329f82182e8aa5ad24a988749bb58c3ab5ee64ea65c0284bc8"
 dependencies = [
- "archmage",
+ "archmage 0.9.12",
  "bytemuck",
- "magetypes",
+ "magetypes 0.9.12",
  "num-traits",
 ]
 
@@ -486,11 +507,20 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "magetypes"
-version = "0.9.10"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e687f5c9d3f0e6a06df3cbde6c271231c83b5a1b9b3dd3439014b355c770be9"
+checksum = "7d55dd4e83507ff9fe129b01669adca1e302ef346dac252ef59139c78def312a"
 dependencies = [
- "archmage",
+ "archmage 0.7.0",
+]
+
+[[package]]
+name = "magetypes"
+version = "0.9.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c805c315148e092279cd19d011ce4b22ff9d3cc593cca089364f6501d12087b1"
+dependencies = [
+ "archmage 0.9.12",
 ]
 
 [[package]]
@@ -511,28 +541,6 @@ checksum = "bb85c154ba489f01b25c0d36ae69a87e4a1c73a72631fc6c0eb6dde34a73e44b"
 dependencies = [
  "num-traits",
  "pxfm",
-]
-
-[[package]]
-name = "multiversion"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7edb7f0ff51249dfda9ab96b5823695e15a052dc15074c9dbf3d118afaf2c201"
-dependencies = [
- "multiversion-macros",
- "target-features",
-]
-
-[[package]]
-name = "multiversion-macros"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b093064383341eb3271f42e381cb8f10a01459478446953953c75d24bd339fc0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
- "target-features",
 ]
 
 [[package]]
@@ -680,7 +688,7 @@ dependencies = [
  "rand",
  "rand_xoshiro",
  "ref-cast",
- "wide 0.8.3",
+ "wide",
 ]
 
 [[package]]
@@ -817,15 +825,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "safe_arch"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f7caad094bd561859bcd467734a720c3c1f5d1f338995351fefe2190c45efed"
-dependencies = [
- "bytemuck",
-]
-
-[[package]]
 name = "safe_unaligned_simd"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -853,12 +852,6 @@ name = "tap"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
-
-[[package]]
-name = "target-features"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c1bbb9f3c5c463a01705937a24fdabc5047929ac764b2d5b9cf681c1f5041ed5"
 
 [[package]]
 name = "thiserror"
@@ -980,17 +973,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13ca908d26e4786149c48efcf6c0ea09ab0e06d1fe3c17dc1b4b0f1ca4a7e788"
 dependencies = [
  "bytemuck",
- "safe_arch 0.9.3",
-]
-
-[[package]]
-name = "wide"
-version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "198f6abc41fab83526d10880fa5c17e2b4ee44e763949b4bb34e2fd1e8ca48e4"
-dependencies = [
- "bytemuck",
- "safe_arch 1.0.0",
+ "safe_arch",
 ]
 
 [[package]]
@@ -1122,7 +1105,7 @@ dependencies = [
 name = "zenflate"
 version = "0.3.0"
 dependencies = [
- "archmage",
+ "archmage 0.9.12",
  "enough",
  "libm",
 ]
@@ -1170,7 +1153,7 @@ name = "zenpng"
 version = "0.1.0"
 dependencies = [
  "almost-enough",
- "archmage",
+ "archmage 0.9.12",
  "bytemuck",
  "enough",
  "imgref",
@@ -1189,7 +1172,7 @@ dependencies = [
 name = "zenquant"
 version = "0.1.0"
 dependencies = [
- "archmage",
+ "archmage 0.9.12",
  "butteraugli",
  "codec-corpus",
  "color_quant",
@@ -1202,7 +1185,7 @@ dependencies = [
  "imagequant",
  "imgref",
  "linear-srgb 0.6.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "magetypes",
+ "magetypes 0.9.12",
  "num-traits",
  "png",
  "quantette",
@@ -1219,11 +1202,11 @@ dependencies = [
 name = "zensim"
 version = "0.2.1"
 dependencies = [
- "archmage",
+ "archmage 0.9.12",
  "bytemuck",
  "imgref",
  "linear-srgb 0.6.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "magetypes",
+ "magetypes 0.9.12",
  "rayon",
  "rgb",
  "thiserror",
