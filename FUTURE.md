@@ -6,11 +6,11 @@ Items outside the initial scope, ordered roughly by expected impact.
 
 - **zengif integration**: Implement `QuantizerTrait` as a new backend for zengif.
 - **SIMD masking pipeline**: Profile the hot path (OKLab conversion, error diffusion, nearest-neighbor search) and port to `wide`/`archmage` where beneficial.
-- **Trellis/Viterbi remapping**: Globally optimal scanline-level run optimization, analogous to zenjpeg's trellis for DCT coefficients. Should significantly improve compression ratio for LZW-based formats.
+- ~~**Trellis/Viterbi remapping**: Globally optimal scanline-level run optimization, analogous to zenjpeg's trellis for DCT coefficients. Should significantly improve compression ratio for LZW-based formats.~~ [SHIPPED] — Viterbi DP is enabled at `Quality::Best` (default).
 
 ## Medium-term
 
-- **Animation support**: Shared palette across frames with temporal coherence. Key for GIF animation quality.
+- ~~**Animation support**: Shared palette across frames with temporal coherence. Key for GIF animation quality.~~ [SHIPPED] — `build_palette`/`build_palette_rgba` + `remap`/`remap_rgba` with optional `with_min_ssim2` quality floor per frame.
 - **PNG-specific optimization**: Scanline filter selection aware of palette ordering. Delta-sorted palettes should interact well with PNG's sub/up/average filters.
 - **VP8L kModifiedZeng sort**: Try Zeng et al.'s algorithm instead of greedy TSP for palette ordering. May produce better results for certain color distributions.
 
