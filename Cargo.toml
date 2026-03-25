@@ -19,7 +19,7 @@ rgb = "0.8.53"
 imgref = "1"
 num-traits = { version = "0.2", default-features = false, features = ["libm"] }
 thiserror = { version = "2", default-features = false }
-linear-srgb = { version = "0.6.3", default-features = false }
+linear-srgb = { version = "0.6.4", default-features = false }
 archmage = { version = "0.9.12", default-features = false, features = ["macros"] }
 magetypes = { version = "0.9.12", default-features = false }
 # zenflate is no longer needed — joint uses a vendored LZ77 predictor
