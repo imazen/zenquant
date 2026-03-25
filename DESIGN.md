@@ -81,18 +81,15 @@ At the start of `quantize`/`quantize_rgba`, images with ≤`max_colors` unique c
 ## Public API
 
 ```rust
-use zenquant::{QuantizeConfig, OutputFormat, DitherMode, RunPriority};
+use zenquant::{QuantizeConfig, OutputFormat, Quality};
 
 // Default: Generic format, 256 colors, quality 85
 let result = zenquant::quantize(pixels, width, height, &QuantizeConfig::default())?;
 
 // Format-specific optimization
-let config = QuantizeConfig::new()
-    .max_colors(256)
-    .quality(85)
-    .output_format(OutputFormat::Png)      // PNG-optimized defaults
-    .dither(DitherMode::Adaptive)          // user override
-    .run_priority(RunPriority::Balanced);
+let config = QuantizeConfig::new(OutputFormat::Png)  // PNG-optimized defaults
+    .with_max_colors(256)
+    .with_quality(Quality::Best);
 
 let result = zenquant::quantize(pixels, width, height, &config)?;
 
