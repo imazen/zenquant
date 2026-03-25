@@ -23,7 +23,10 @@ use crate::oklab::{OKLab, srgb_to_oklab};
 /// pixels fall back to scalar conversion.
 pub(crate) fn batch_srgb_to_oklab(pixels: &[rgb::RGB<u8>], out: &mut [[f32; 3]]) {
     assert_eq!(pixels.len(), out.len());
-    incant!(batch_srgb_to_oklab_dispatch(pixels, out), [v3, neon]);
+    incant!(
+        batch_srgb_to_oklab_dispatch(pixels, out),
+        [v3, neon, scalar]
+    );
 }
 
 /// Fast batch conversion — on SIMD builds this is the same as `batch_srgb_to_oklab`
@@ -269,7 +272,7 @@ impl PaletteSimd {
 
     /// Find the nearest palette index to the given OKLab color.
     pub(crate) fn nearest(&self, color: OKLab) -> u8 {
-        incant!(palette_nearest_dispatch(self, color), [v3, neon])
+        incant!(palette_nearest_dispatch(self, color), [v3, neon, scalar])
     }
 }
 
