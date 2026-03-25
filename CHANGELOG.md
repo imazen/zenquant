@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.1 (unreleased)
+## 0.1.1 (2026-03-25)
 
 ### Fixed
 - Added `scalar` fallback tier to `incant!` dispatch, fixing archmage deprecation warnings
