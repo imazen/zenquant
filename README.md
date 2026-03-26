@@ -6,7 +6,7 @@
 
 Color quantization with perceptual masking. Reduces truecolor images to 256-color indexed palettes in OKLab space, using butteraugli-inspired adaptive quantization (AQ) weights to concentrate palette entries where human vision is most sensitive.
 
-Honest comparison: quantette's k-means mode is really good — it leads on per-pixel metrics (highest SSIMULACRA2, lowest DSSIM), though it has strong error diffusion artifacts in the red channel on some images, producing bright red pixels in smooth regions. imagequant is honestly the best-looking to the human eye, even when it's sometimes slightly behind on the numbers. zenquant focuses on doing a solid visual job while prioritizing file size; the size advantage is less obvious when paired with [zenpng](https://github.com/imazen/zenpng)'s aggressive compression, but grows at faster encode speeds or with typical codecs like the `png` crate.
+quantette's k-means mode leads on per-pixel metrics (highest SSIMULACRA2, lowest DSSIM). imagequant consistently looks best to the human eye, even when slightly behind on the numbers. zenquant focuses on file size — the advantage is less obvious when paired with [zenpng](https://github.com/imazen/zenpng)'s aggressive compression, but grows at faster encode speeds or with typical codecs like the `png` crate.
 
 ## What it does
 

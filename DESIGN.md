@@ -2,7 +2,7 @@
 
 ## Core Insight
 
-Existing palette quantizers (imagequant, quantizr, color_quant) treat all pixels equally. zenjpeg's AQ algorithm proves that human vision tolerates more error in textured regions than smooth ones. zenquant applies this to palette quantization:
+Standard median-cut quantizers don't account for perceptual masking — they allocate palette entries based on color frequency, not visual sensitivity. zenjpeg's AQ algorithm proves that human vision tolerates more error in textured regions than smooth ones. zenquant applies this insight to palette quantization:
 
 - **Allocate more palette entries** to smooth gradients (where banding is visible)
 - **Suppress dithering** in smooth regions (long runs → better compression)
