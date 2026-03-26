@@ -1,7 +1,7 @@
 # zenquant
 
 [![CI](https://github.com/imazen/zenquant/actions/workflows/ci.yml/badge.svg)](https://github.com/imazen/zenquant/actions/workflows/ci.yml)
-[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg?style=for-the-badge)](LICENSE-AGPL3)
 [![MSRV: 1.92](https://img.shields.io/badge/MSRV-1.92-blue.svg)](https://blog.rust-lang.org/)
 
 Color quantization with perceptual masking. Reduces truecolor images to 256-color indexed palettes in OKLab space, using butteraugli-inspired adaptive quantization (AQ) weights to concentrate palette entries where human vision is most sensitive.
@@ -233,4 +233,25 @@ Developed with Claude (Anthropic). Not all code manually reviewed. Review critic
 
 ## License
 
-AGPL-3.0-or-later. Commercial licenses available at [imazen.io/pricing](https://www.imazen.io/pricing).
+Dual-licensed: [AGPL-3.0](LICENSE-AGPL3) or [commercial](LICENSE-COMMERCIAL).
+
+I've maintained and developed open-source image server software — and the 40+
+library ecosystem it depends on — full-time since 2011. Fifteen years of
+continual maintenance, backwards compatibility, support, and the (very rare)
+security patch. That kind of stability requires sustainable funding, and
+dual-licensing is how we make it work without venture capital or rug-pulls.
+Support sustainable and secure software; swap patch tuesday for patch leap-year.
+
+[Our open-source products](https://www.imazen.io/open-source)
+
+**Your options:**
+
+- **Startup license** — $1 if your company has under $1M revenue and fewer
+  than 5 employees. [Get a key →](https://www.imazen.io/pricing)
+- **Commercial subscription** — Governed by the Imazen Site-wide Subscription
+  License v1.1 or later. Apache 2.0-like terms, no source-sharing requirement.
+  Sliding scale by company size.
+  [Pricing & 60-day free trial →](https://www.imazen.io/pricing)
+- **AGPL v3** — Free and open. Share your source if you distribute.
+
+See [LICENSE-COMMERCIAL](LICENSE-COMMERCIAL) for details.
