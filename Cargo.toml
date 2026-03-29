@@ -20,8 +20,8 @@ imgref = "1"
 num-traits = { version = "0.2", default-features = false, features = ["libm"] }
 thiserror = { version = "2", default-features = false }
 linear-srgb = { version = "0.6.5", default-features = false }
-archmage = { version = "0.9.12", default-features = false, features = ["macros"] }
-magetypes = { version = "0.9.12", default-features = false }
+archmage = { version = "0.9.14", default-features = false, features = ["macros"] }
+magetypes = { version = "0.9.14", default-features = false }
 zennode = { path = "../zennode/zennode", default-features = false, features = ["derive"], optional = true }
 # zenflate is no longer needed — joint uses a vendored LZ77 predictor
 # zenflate = { path = "../zenflate", optional = true, default-features = false, features = ["alloc"] }
