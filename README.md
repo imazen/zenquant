@@ -1,8 +1,4 @@
-# zenquant
-
-[![CI](https://github.com/imazen/zenquant/actions/workflows/ci.yml/badge.svg)](https://github.com/imazen/zenquant/actions/workflows/ci.yml)
-[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg?style=for-the-badge)](LICENSE-AGPL3)
-[![MSRV: 1.92](https://img.shields.io/badge/MSRV-1.92-blue.svg)](https://blog.rust-lang.org/)
+# zenquant ![CI](https://img.shields.io/github/actions/workflow/status/imazen/zenquant/ci.yml?style=flat-square&label=CI) ![crates.io](https://img.shields.io/crates/v/zenquant?style=flat-square) ![docs.rs](https://img.shields.io/docsrs/zenquant?style=flat-square) ![MSRV](https://img.shields.io/badge/MSRV-1.92-blue?style=flat-square) ![license](https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square)
 
 Color quantization with perceptual masking. Reduces truecolor images to 256-color indexed palettes in OKLab space, using butteraugli-inspired adaptive quantization (AQ) weights to concentrate palette entries where human vision is most sensitive.
 
@@ -195,7 +191,7 @@ Averaged over 50 images from three corpora ([CID22](https://zenodo.org/records/1
 
 Lower butteraugli/DSSIM = better. Higher SSIMULACRA2 = better. Smaller file size = better.
 
-**[Interactive visual comparison (9 quantizers, 50 images)](https://imageflow-resources.s3.us-west-2.amazonaws.com/demos/zenquant/2026-03-04/index.html)** — slider, diff, and zoom views with per-image metrics. Keyboard shortcuts: 1 = original, 2–0 = variants.
+**[Interactive visual comparison (9 configurations of 5 quantizers, 50 images)](https://imageflow-resources.s3.us-west-2.amazonaws.com/demos/zenquant/2026-03-04/index.html)** — slider, diff, and zoom views with per-image metrics. Keyboard shortcuts: 1 = original, 2–0 = variants.
 
 zenquant's advantage is most visible on images with smooth gradients and subtle color transitions, where AQ masking prevents banding that other quantizers miss.
 
@@ -218,6 +214,7 @@ zenquant is used as the default quantizer in:
 ## Features
 
 - `std` (default) — enables `std` on archmage/magetypes for platform-optimized math
+- `zennode` — zennode graph integration (`dep:zennode`)
 - `joint` — joint deflate+quantization optimization for PNG
 - `_dev` — exposes internal modules for profiling (not public API)
 
