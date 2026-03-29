@@ -43,7 +43,7 @@ color_quant = "1"
 dssim-core = { version = "3", default-features = false }
 quantette = { version = "0.5", default-features = false, features = ["kmeans", "std"] }
 gif = { version = "0.14", default-features = false, features = ["std"] }
-zensim = { path = "../zensim/zensim", features = ["imgref"] }
+zensim = { version = "0.2.3", features = ["imgref"] }
 zenpng = { path = "../zenpng", default-features = false }
 
 [features]
