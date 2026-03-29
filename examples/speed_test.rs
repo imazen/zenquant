@@ -167,7 +167,7 @@ fn main() {
             let test_zsim = ImgVec::new(test_rgb.clone(), *width, *height);
             let zs = zsim
                 .compute(&ref_zsim.as_ref(), &test_zsim.as_ref())
-                .map(|r| r.score)
+                .map(|r| r.score())
                 .unwrap_or(f64::NAN);
 
             let deflate = deflate_compress(result.indices());
@@ -276,7 +276,7 @@ fn main() {
             let test_zsim = ImgVec::new(test_rgb.clone(), *width, *height);
             let zs = zsim
                 .compute(&ref_zsim.as_ref(), &test_zsim.as_ref())
-                .map(|r| r.score)
+                .map(|r| r.score())
                 .unwrap_or(f64::NAN);
 
             if ba.is_finite() && ss2.is_finite() {
