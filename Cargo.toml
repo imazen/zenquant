@@ -22,7 +22,7 @@ thiserror = { version = "2", default-features = false }
 linear-srgb = { version = "0.6.5", default-features = false }
 archmage = { version = "0.9.14", default-features = false, features = ["macros"] }
 magetypes = { version = "0.9.14", default-features = false }
-zennode = { path = "../zennode/zennode", default-features = false, features = ["derive"], optional = true }
+# zennode = { path = "../zennode/zennode", default-features = false, features = ["derive"], optional = true }
 # zenflate is no longer needed — joint uses a vendored LZ77 predictor
 # zenflate = { path = "../zenflate", optional = true, default-features = false, features = ["alloc"] }
 
@@ -49,7 +49,7 @@ zenpng = { path = "../zenpng", default-features = false }
 [features]
 default = ["std"]
 std = ["linear-srgb/std", "archmage/std", "magetypes/std"]
-zennode = ["dep:zennode"]
+# zennode = ["dep:zennode"]
 # Joint deflate+quantization optimization for PNG.
 # Uses a vendored LZ77 predictor — no external dependency.
 joint = []
