@@ -452,9 +452,9 @@ dependencies = [
 
 [[package]]
 name = "linear-srgb"
-version = "0.6.6"
+version = "0.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc735204d942021e5f869a7fbe13593ccd480121131b2938efe410ad80aee984"
+checksum = "89fff1763e96ac82dbe8462fb1a9eff462477a87caaf8f14d808900486d72829"
 dependencies = [
  "archmage",
  "bytemuck",
@@ -1050,9 +1050,9 @@ checksum = "00f1f60154ad4ef9871d606765c3ea037cde93bbd77536327b594de8f82df1cb"
 
 [[package]]
 name = "zencodec"
-version = "0.1.11"
+version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09ab2de1b46bc21099a7d6c7faa94131fbafe96b2314746ca08b207ee9d55a8e"
+checksum = "44b6c541d0acd8e6b58f0650c6005daab795140a4d022fa425de4052f85a9372"
 dependencies = [
  "almost-enough",
  "enough",
@@ -1073,7 +1073,7 @@ dependencies = [
 
 [[package]]
 name = "zengif"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "bytemuck",
  "enough",
@@ -1089,9 +1089,9 @@ dependencies = [
 
 [[package]]
 name = "zenpixels"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4705187b555bc476109a2113ca007282fdf327bcc9edb4c692ae1e4d489bc9b2"
+checksum = "e6671ce2ea4d3110e2aef9514cc48267291f50fab7b7eead43b36e7c887fb740"
 dependencies = [
  "bytemuck",
  "imgref",
@@ -1101,9 +1101,9 @@ dependencies = [
 
 [[package]]
 name = "zenpixels-convert"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45c79098f78c1ea6bb065f28c633f7ad42c93c0a58e1a2d1c3bcdeeac444d360"
+checksum = "e5120a1c60d6fbc2312adc1cb23373ae3c762e7c381398ef18b1fa6477e62f0f"
 dependencies = [
  "archmage",
  "bytemuck",
@@ -1116,7 +1116,7 @@ dependencies = [
 
 [[package]]
 name = "zenpng"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "almost-enough",
  "archmage",
@@ -1197,7 +1197,7 @@ dependencies = [
 
 [[package]]
 name = "zenwebp"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "archmage",
  "bytemuck",
