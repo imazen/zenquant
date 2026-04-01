@@ -19,7 +19,7 @@ rgb = "0.8.53"
 imgref = "1"
 num-traits = { version = "0.2", default-features = false, features = ["libm"] }
 thiserror = { version = "2", default-features = false }
-linear-srgb = { version = "0.6", default-features = false }
+linear-srgb = { version = "0.6.7", default-features = false }
 archmage = { version = "0.9.15", default-features = false, features = ["macros"] }
 magetypes = { version = "0.9.15", default-features = false }
 # zennode = { path = "../zennode/zennode", default-features = false, features = ["derive"], optional = true }
