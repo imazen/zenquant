@@ -272,7 +272,7 @@ impl PaletteSimd {
 
     /// Find the nearest palette index to the given OKLab color.
     pub(crate) fn nearest(&self, color: OKLab) -> u8 {
-        incant!(palette_nearest_dispatch(self, color), [v3, neon, scalar])
+        incant!(palette_nearest_dispatch(self, color), [v3, neon, wasm128, scalar])
     }
 }
 
@@ -288,6 +288,16 @@ fn palette_nearest_dispatch_v3(token: archmage::X64V3Token, pal: &PaletteSimd, c
 #[archmage::arcane]
 fn palette_nearest_dispatch_neon(
     token: archmage::NeonToken,
+    pal: &PaletteSimd,
+    color: OKLab,
+) -> u8 {
+    palette_nearest_generic(token, pal, color)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[archmage::arcane]
+fn palette_nearest_dispatch_wasm128(
+    token: archmage::Wasm128Token,
     pal: &PaletteSimd,
     color: OKLab,
 ) -> u8 {
