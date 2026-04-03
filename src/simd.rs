@@ -25,7 +25,7 @@ pub(crate) fn batch_srgb_to_oklab(pixels: &[rgb::RGB<u8>], out: &mut [[f32; 3]])
     assert_eq!(pixels.len(), out.len());
     incant!(
         batch_srgb_to_oklab_dispatch(pixels, out),
-        [v3, neon, scalar]
+        [v3, neon, wasm128, scalar]
     );
 }
 
@@ -61,6 +61,16 @@ fn batch_srgb_to_oklab_dispatch_v3(
 #[archmage::arcane]
 fn batch_srgb_to_oklab_dispatch_neon(
     token: archmage::NeonToken,
+    pixels: &[rgb::RGB<u8>],
+    out: &mut [[f32; 3]],
+) {
+    batch_srgb_to_oklab_generic(token, pixels, out);
+}
+
+#[cfg(target_arch = "wasm32")]
+#[archmage::arcane]
+fn batch_srgb_to_oklab_dispatch_wasm128(
+    token: archmage::Wasm128Token,
     pixels: &[rgb::RGB<u8>],
     out: &mut [[f32; 3]],
 ) {
@@ -272,7 +282,10 @@ impl PaletteSimd {
 
     /// Find the nearest palette index to the given OKLab color.
     pub(crate) fn nearest(&self, color: OKLab) -> u8 {
-        incant!(palette_nearest_dispatch(self, color), [v3, neon, wasm128, scalar])
+        incant!(
+            palette_nearest_dispatch(self, color),
+            [v3, neon, wasm128, scalar]
+        )
     }
 }
 
