@@ -291,9 +291,9 @@ checksum = "dd2e7510819d6fbf51a5545c8f922716ecfb14df168a3242f7d33e0239efe6a1"
 
 [[package]]
 name = "fast-ssim2"
-version = "0.7.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57b14f283599922955989d328a7f8f805e03146fe96616aa60639a16cd478b7e"
+checksum = "d0bbcfa44e1cabf11af96ece5e9273f4dc238f2a557668e70f80cfd662fae25b"
 dependencies = [
  "archmage",
  "imgref",
@@ -452,9 +452,9 @@ dependencies = [
 
 [[package]]
 name = "linear-srgb"
-version = "0.6.7"
+version = "0.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89fff1763e96ac82dbe8462fb1a9eff462477a87caaf8f14d808900486d72829"
+checksum = "aa12619f46d201397deecc6e100b6e787eb8cb0c0a94a450df887ce5b9cea0d3"
 dependencies = [
  "archmage",
  "bytemuck",
@@ -648,7 +648,7 @@ dependencies = [
  "rand",
  "rand_xoshiro",
  "ref-cast",
- "wide",
+ "wide 0.8.3",
 ]
 
 [[package]]
@@ -785,6 +785,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "safe_arch"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f7caad094bd561859bcd467734a720c3c1f5d1f338995351fefe2190c45efed"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
 name = "safe_unaligned_simd"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -850,12 +859,13 @@ checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 
 [[package]]
 name = "v_frame"
-version = "0.3.9"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "666b7727c8875d6ab5db9533418d7c764233ac9c0cff1d469aec8fa127597be2"
+checksum = "a50ca82950482a3877e88aac250a2aa8fbc6719a36d499e2200eb8ba11b6bc61"
 dependencies = [
  "aligned-vec",
  "num-traits",
+ "thiserror",
  "wasm-bindgen",
 ]
 
@@ -929,7 +939,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13ca908d26e4786149c48efcf6c0ea09ab0e06d1fe3c17dc1b4b0f1ca4a7e788"
 dependencies = [
  "bytemuck",
- "safe_arch",
+ "safe_arch 0.9.3",
+]
+
+[[package]]
+name = "wide"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "198f6abc41fab83526d10880fa5c17e2b4ee44e763949b4bb34e2fd1e8ca48e4"
+dependencies = [
+ "bytemuck",
+ "safe_arch 1.0.0",
 ]
 
 [[package]]
@@ -1031,14 +1051,15 @@ dependencies = [
 
 [[package]]
 name = "yuvxyb"
-version = "0.4.2"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b06d0d0f23a00eadd02381cf0c84472295bbcd3e7e21ffd2225300c83d557867"
+checksum = "31479712d30fd1200143579a79840ed039f0bc772017a089ea5c1bfa0bcb1c2a"
 dependencies = [
  "av-data",
  "log",
  "num-traits",
  "v_frame",
+ "wide 1.2.0",
  "yuvxyb-math",
 ]
 
@@ -1047,6 +1068,9 @@ name = "yuvxyb-math"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00f1f60154ad4ef9871d606765c3ea037cde93bbd77536327b594de8f82df1cb"
+dependencies = [
+ "wide 1.2.0",
+]
 
 [[package]]
 name = "zencodec"
@@ -1062,9 +1086,9 @@ dependencies = [
 
 [[package]]
 name = "zenflate"
-version = "0.3.4"
+version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab0a8ba1d69f2af0676750013d4c7a26a246682d6129a0be478da9f0cf1183a7"
+checksum = "8409543ad469f954834da58409f0d9c463156f01cfaf8a8a03fe277c73b1e0f5"
 dependencies = [
  "archmage",
  "enough",
@@ -1074,8 +1098,7 @@ dependencies = [
 [[package]]
 name = "zengif"
 version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4c69ebfd7062f47382bd85c1048e64689753f238d1607c191a521634ffcddba"
+source = "git+https://github.com/imazen/zengif#4083b2d0f339ffa91d0d5ed6c77ee5627b2c7f25"
 dependencies = [
  "bytemuck",
  "enough",
@@ -1086,7 +1109,7 @@ dependencies = [
  "thiserror",
  "whereat",
  "zenpixels",
- "zenquant 0.1.2",
+ "zenquant 0.1.3",
 ]
 
 [[package]]
@@ -1103,9 +1126,9 @@ dependencies = [
 
 [[package]]
 name = "zenpixels-convert"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5911551643060351e83acacedd2fd4e85f8ca5df8ee9baee5cf2f728c0412b3b"
+checksum = "4c25c281f90e40c16b02eb7329b8800db9f225891e19f62d4b9a53ec9068c1a0"
 dependencies = [
  "archmage",
  "bytemuck",
@@ -1119,8 +1142,7 @@ dependencies = [
 [[package]]
 name = "zenpng"
 version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7d65f6410c427ca743d7428e397cc1659418506fad7df5e337f5993a830dcd0"
+source = "git+https://github.com/imazen/zenpng#b9b3ea1c7f77a175ea6cd8ea6628c9a34001431b"
 dependencies = [
  "almost-enough",
  "archmage",
@@ -1141,21 +1163,6 @@ dependencies = [
 [[package]]
 name = "zenquant"
 version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "524b631d0e34ab1317a31379e27cf10cef3bb7d90234d3b52c71bc28263b6907"
-dependencies = [
- "archmage",
- "imgref",
- "linear-srgb",
- "magetypes",
- "num-traits",
- "rgb",
- "thiserror",
-]
-
-[[package]]
-name = "zenquant"
-version = "0.1.3"
 dependencies = [
  "archmage",
  "butteraugli",
@@ -1184,10 +1191,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "zensim"
-version = "0.2.4"
+name = "zenquant"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7808c21d59f7658993c961a1e84008bdf55f61cd5fb7c08c62b4cce4d475c71c"
+checksum = "440257260e03abacc233712332cd164f59afb98e8385e49ca5a0581ef0c7269d"
+dependencies = [
+ "archmage",
+ "imgref",
+ "linear-srgb",
+ "magetypes",
+ "num-traits",
+ "rgb",
+ "thiserror",
+]
+
+[[package]]
+name = "zensim"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd3fb9cea779ffee22e2045829cb126df4910f4026ca286f555cf42e9c4c295a"
 dependencies = [
  "archmage",
  "bytemuck",
@@ -1202,8 +1224,7 @@ dependencies = [
 [[package]]
 name = "zenwebp"
 version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eee7eb0836128a5d0dc77e11d8a3c16008300b97b46c7f41edf3314672acd15d"
+source = "git+https://github.com/imazen/zenwebp#baafcc37dcfbb0b38772a89c19d67c321ef121a7"
 dependencies = [
  "archmage",
  "bytemuck",

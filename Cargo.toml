@@ -1,6 +1,6 @@
 [package]
 name = "zenquant"
-version = "0.1.3"
+version = "0.1.2"
 edition = "2024"
 rust-version = "1.92"
 license = "AGPL-3.0-only OR LicenseRef-Imazen-Commercial"
@@ -20,8 +20,8 @@ imgref = "1"
 num-traits = { version = "0.2", default-features = false, features = ["libm"] }
 thiserror = { version = "2", default-features = false }
 linear-srgb = { version = "0.6.7", default-features = false }
-archmage = { version = "0.9.17", default-features = false, features = ["macros"] }
-magetypes = { version = "0.9.17", default-features = false }
+archmage = { version = "0.9.15", default-features = false, features = ["macros"] }
+magetypes = { version = "0.9.15", default-features = false }
 # zennode = { path = "../zennode/zennode", default-features = false, features = ["derive"], optional = true }
 # zenflate is no longer needed — joint uses a vendored LZ77 predictor
 # zenflate = { path = "../zenflate", optional = true, default-features = false, features = ["alloc"] }
@@ -32,10 +32,10 @@ imagequant = "4"
 quantizr = "1"
 flate2 = "1"
 butteraugli = "0.9"
-fast-ssim2 = { version = "0.7", features = ["imgref"] }
+fast-ssim2 = { version = "0.8.0", features = ["imgref"] }
 png = "0.18"
-zengif = { version = "0.7.2", features = ["quantizr"] }
-zenwebp = { version = "0.4.3", default-features = false, features = ["std", "pixel-types"] }
+zengif = { features = ["quantizr"] , version = "0.7.1" , git = "https://github.com/imazen/zengif" }
+zenwebp = { default-features = false, features = ["std", "pixel-types"] , version = "0.4.2" , git = "https://github.com/imazen/zenwebp" }
 enough = "0.4"
 imgref = "1"
 codec-corpus = "1"
@@ -44,7 +44,7 @@ dssim-core = { version = "3", default-features = false }
 quantette = { version = "0.5", default-features = false, features = ["kmeans", "std"] }
 gif = { version = "0.14", default-features = false, features = ["std"] }
 zensim = { version = "0.2.4", features = ["imgref"] }
-zenpng = { version = "0.1.3", default-features = false }
+zenpng = { default-features = false , version = "0.1.2" , git = "https://github.com/imazen/zenpng" }
 
 [features]
 default = ["std"]
