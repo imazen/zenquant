@@ -1340,12 +1340,13 @@ pub fn build_palette(
         if frame.width() == 0 || frame.height() == 0 {
             return Err(QuantizeError::ZeroDimension);
         }
-        frame.width().checked_mul(frame.height()).ok_or(
-            QuantizeError::DimensionOverflow {
+        frame
+            .width()
+            .checked_mul(frame.height())
+            .ok_or(QuantizeError::DimensionOverflow {
                 width: frame.width(),
                 height: frame.height(),
-            },
-        )?;
+            })?;
     }
     if config.max_colors < 2 || config.max_colors > 256 {
         return Err(QuantizeError::InvalidMaxColors(config.max_colors));
@@ -1461,12 +1462,13 @@ pub fn build_palette_rgba(
         if frame.width() == 0 || frame.height() == 0 {
             return Err(QuantizeError::ZeroDimension);
         }
-        frame.width().checked_mul(frame.height()).ok_or(
-            QuantizeError::DimensionOverflow {
+        frame
+            .width()
+            .checked_mul(frame.height())
+            .ok_or(QuantizeError::DimensionOverflow {
                 width: frame.width(),
                 height: frame.height(),
-            },
-        )?;
+            })?;
     }
     if config.max_colors < 2 || config.max_colors > 256 {
         return Err(QuantizeError::InvalidMaxColors(config.max_colors));
