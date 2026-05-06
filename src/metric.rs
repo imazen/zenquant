@@ -216,8 +216,25 @@ pub fn compute_mpe(
     height: usize,
     weights: Option<&[f32]>,
 ) -> MpeResult {
-    debug_assert_eq!(pixels.len(), width * height);
-    debug_assert_eq!(indices.len(), width * height);
+    // Validate input shapes — return a perfect-score result rather than panic on
+    // mismatch. Released code previously relied on `debug_assert_eq` which is a
+    // no-op in release builds; an out-of-range index would then OOB-panic when
+    // indexing `palette[idx as usize]`.
+    let expected = match width.checked_mul(height) {
+        Some(n) => n,
+        None => return MpeResult::zero(width, height),
+    };
+    if pixels.len() != expected || indices.len() != expected {
+        return MpeResult::zero(width, height);
+    }
+    if let Some(ws) = weights
+        && ws.len() != expected
+    {
+        return MpeResult::zero(width, height);
+    }
+    if palette.is_empty() {
+        return MpeResult::zero(width, height);
+    }
 
     // Auto-compute masking weights when none provided
     let auto_weights;
@@ -230,10 +247,15 @@ pub fn compute_mpe(
     };
 
     let mut acc = MpeAccumulator::new(width, height);
+    let pal_last = palette.len() - 1;
 
     for (i, (pixel, &idx)) in pixels.iter().zip(indices.iter()).enumerate() {
         let orig = srgb_to_oklab(pixel.r, pixel.g, pixel.b);
-        let p = palette[idx as usize];
+        // Clamp out-of-range indices to the last palette entry rather than
+        // panicking. Indices beyond the palette are caller-API misuse, not
+        // attacker-controlled, but we degrade gracefully.
+        let pi = (idx as usize).min(pal_last);
+        let p = palette[pi];
         let quant = srgb_to_oklab(p[0], p[1], p[2]);
         acc.accumulate(i, orig, quant, w_slice[i]);
     }
@@ -254,11 +276,25 @@ pub fn compute_mpe_rgba(
     height: usize,
     weights: Option<&[f32]>,
 ) -> MpeResult {
-    debug_assert_eq!(pixels.len(), width * height);
-    debug_assert_eq!(indices.len(), width * height);
+    let expected = match width.checked_mul(height) {
+        Some(n) => n,
+        None => return MpeResult::zero(width, height),
+    };
+    if pixels.len() != expected || indices.len() != expected {
+        return MpeResult::zero(width, height);
+    }
+    if let Some(ws) = weights
+        && ws.len() != expected
+    {
+        return MpeResult::zero(width, height);
+    }
+    if palette.is_empty() {
+        return MpeResult::zero(width, height);
+    }
 
     let default_weight = 1.0f32;
     let mut acc = MpeAccumulator::new(width, height);
+    let pal_last = palette.len() - 1;
 
     for (i, (pixel, &idx)) in pixels.iter().zip(indices.iter()).enumerate() {
         let x = i % width;
@@ -267,7 +303,8 @@ pub fn compute_mpe_rgba(
         // Composite both original and quantized against checkerboard
         let bg = checkerboard_color(x, y);
         let orig = composite_over_bg(pixel.r, pixel.g, pixel.b, pixel.a, bg);
-        let p = palette[idx as usize];
+        let pi = (idx as usize).min(pal_last);
+        let p = palette[pi];
         let quant = composite_over_bg(p[0], p[1], p[2], p[3], bg);
 
         let w = weights.map_or(default_weight, |ws| ws[i]);

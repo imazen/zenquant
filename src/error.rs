@@ -31,4 +31,22 @@ pub enum QuantizeError {
         /// The SSIM2 score actually achieved.
         achieved_ssim2: f32,
     },
+
+    /// Image dimension product (`width * height`) overflows `usize`.
+    #[error("image dimensions {width}x{height} overflow usize")]
+    DimensionOverflow {
+        /// Declared image width.
+        width: usize,
+        /// Declared image height.
+        height: usize,
+    },
+
+    /// A caller-supplied palette index is out of range for the active palette.
+    #[error("palette index {index} is out of range for palette of length {palette_len}")]
+    InvalidIndex {
+        /// The offending index value.
+        index: u32,
+        /// The current palette length.
+        palette_len: usize,
+    },
 }
