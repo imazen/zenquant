@@ -155,7 +155,7 @@ fn select_top_k_filters(packed: &[u8], prev: &[u8]) -> [u8; TOP_K_FILTERS] {
     ];
 
     // Sort descending by score (higher = better)
-    scores.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+    scores.sort_unstable_by_key(|s| core::cmp::Reverse(s.0));
 
     [scores[0].1, scores[1].1, scores[2].1]
 }
