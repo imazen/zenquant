@@ -1340,6 +1340,13 @@ pub fn build_palette(
         if frame.width() == 0 || frame.height() == 0 {
             return Err(QuantizeError::ZeroDimension);
         }
+        frame
+            .width()
+            .checked_mul(frame.height())
+            .ok_or(QuantizeError::DimensionOverflow {
+                width: frame.width(),
+                height: frame.height(),
+            })?;
     }
     if config.max_colors < 2 || config.max_colors > 256 {
         return Err(QuantizeError::InvalidMaxColors(config.max_colors));
@@ -1455,6 +1462,13 @@ pub fn build_palette_rgba(
         if frame.width() == 0 || frame.height() == 0 {
             return Err(QuantizeError::ZeroDimension);
         }
+        frame
+            .width()
+            .checked_mul(frame.height())
+            .ok_or(QuantizeError::DimensionOverflow {
+                width: frame.width(),
+                height: frame.height(),
+            })?;
     }
     if config.max_colors < 2 || config.max_colors > 256 {
         return Err(QuantizeError::InvalidMaxColors(config.max_colors));
@@ -1603,12 +1617,18 @@ fn remap_rgb_impl(
     if width == 0 || height == 0 {
         return Err(QuantizeError::ZeroDimension);
     }
-    if pixels.len() != width * height {
+    let expected = width
+        .checked_mul(height)
+        .ok_or(QuantizeError::DimensionOverflow { width, height })?;
+    if pixels.len() != expected {
         return Err(QuantizeError::DimensionMismatch {
             len: pixels.len(),
             width,
             height,
         });
+    }
+    if let Some(prev) = prev_indices {
+        validate_prev_indices(prev, expected, source_palette.len())?;
     }
 
     // When target_ssim2 or min_ssim2 is set, force metric computation
@@ -1767,12 +1787,18 @@ fn remap_rgba_impl(
     if width == 0 || height == 0 {
         return Err(QuantizeError::ZeroDimension);
     }
-    if pixels.len() != width * height {
+    let expected = width
+        .checked_mul(height)
+        .ok_or(QuantizeError::DimensionOverflow { width, height })?;
+    if pixels.len() != expected {
         return Err(QuantizeError::DimensionMismatch {
             len: pixels.len(),
             width,
             height,
         });
+    }
+    if let Some(prev) = prev_indices {
+        validate_prev_indices(prev, expected, source_palette.len())?;
     }
 
     // When target_ssim2 or min_ssim2 is set, force metric computation
@@ -1986,6 +2012,33 @@ fn detect_exact_palette_multi_rgba(
     Some((colors, has_transparent))
 }
 
+/// Validate a caller-supplied `prev_indices` buffer used by the temporal-clamping
+/// remap APIs (`remap_with_prev` / `remap_rgba_with_prev`).
+///
+/// The buffer must be exactly `expected_len` (full-frame) and every entry must
+/// be a valid index into a palette of size `palette_len`. Returning `Err` here
+/// prevents downstream slice-OOB panics in the dither path.
+fn validate_prev_indices(
+    prev: &[u8],
+    expected_len: usize,
+    palette_len: usize,
+) -> Result<(), QuantizeError> {
+    if prev.len() != expected_len {
+        return Err(QuantizeError::DimensionMismatch {
+            len: prev.len(),
+            width: expected_len,
+            height: 1,
+        });
+    }
+    if let Some(&bad) = prev.iter().find(|&&i| (i as usize) >= palette_len) {
+        return Err(QuantizeError::InvalidIndex {
+            index: bad as u32,
+            palette_len,
+        });
+    }
+    Ok(())
+}
+
 fn validate_inputs(
     pixel_count: usize,
     width: usize,
@@ -1995,7 +2048,10 @@ fn validate_inputs(
     if width == 0 || height == 0 {
         return Err(QuantizeError::ZeroDimension);
     }
-    if pixel_count != width * height {
+    let expected = width
+        .checked_mul(height)
+        .ok_or(QuantizeError::DimensionOverflow { width, height })?;
+    if pixel_count != expected {
         return Err(QuantizeError::DimensionMismatch {
             len: pixel_count,
             width,
