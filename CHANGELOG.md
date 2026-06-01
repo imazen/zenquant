@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- Fixed published package include list: LICENSE-AGPL3 and LICENSE-COMMERCIAL now correctly included; added CHANGELOG.md (bba2630f)
+
 ## 0.1.1 (2026-03-25)
 
 ### Fixed

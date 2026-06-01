@@ -45,6 +45,13 @@ Thumbs.db
 .vscode/
 *.iml
 
+# Benchmark result files (generated, not source)
+benchmarks/*.md
+benchmarks/*.log
+benchmarks/*.csv
+benchmarks/*.tsv
+benchmarks/*.meta
+
 # Tooling noise
 .superwork/
 .claude/

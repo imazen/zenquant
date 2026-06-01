@@ -12,7 +12,7 @@ keywords = ["quantize", "palette", "image", "color", "dither"]
 categories = ["multimedia::images", "graphics"]
 readme = "README.md"
 
-include = ["/src", "LICENSE", "README.md"]
+include = ["/src", "LICENSE-AGPL3", "LICENSE-COMMERCIAL", "README.md", "CHANGELOG.md"]
 
 [dependencies]
 rgb = "0.8.53"
