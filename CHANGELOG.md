@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+- Versioned public-API surface snapshot at `docs/public-api/zenquant.txt`,
+  regenerated on every `cargo test` by `tests/public_api_doc.rs`
+  (`ZEN_API_DOC=check` verifies in CI's clippy job, `=off` skips elsewhere);
+  `just api-doc` / `api-doc-check` recipes.
+
 ### Changed
 - Fixed published package include list: LICENSE-AGPL3 and LICENSE-COMMERCIAL now correctly included; added CHANGELOG.md (bba2630f)
 
