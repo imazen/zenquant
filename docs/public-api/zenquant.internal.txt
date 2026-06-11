@@ -1,0 +1,266 @@
+# zenquant public API — doc(hidden) items and excluded-feature surface
+# excluded features: _dev
+# (regenerated on every `cargo test` by zenutils-apidoc; ZEN_API_DOC=check verifies, =off skips).
+# Encodings: crate-name prefix stripped; auto traits collapse to a
+# count + exceptions; trait impls collapse to one roster line per
+# type (method signatures live at the trait definition); blanket
+# impls omitted; re-export duplicates annotated `[also: path]`.
+# DO NOT EDIT BY HAND — commit regenerated changes with the code.
+
+## summary
+#
+#   pub modules                                18
+#   pub types (struct/enum/trait/alias)        23
+#   pub consts/statics                          3
+#   free functions                             64
+#   inherent methods                           65
+#   struct fields                              56
+#   enum variants                              31
+#   trait roster entries (type × trait)        36
+#   auto-trait-complete types                  10
+#
+# per-module pub lines:
+#   (root)                           29
+#   _dev                             83
+#   _internals                       24
+#   dither                           25
+#   histogram                        12
+#   masking                           3
+#   median_cut                        9
+#   metric                           16
+#   oklab                            17
+#   palette                          28
+#   remap                            14
+
+## items (212 lines)
+
+pub const fn oklab::OKLab::new(f32, f32, f32) -> Self
+pub const fn oklab::OKLab::with_alpha(self, f32) -> oklab::OKLabA
+pub const fn oklab::OKLabA::new(f32, f32, f32, f32) -> Self
+pub enum dither::DitherMode [also: _dev::dither, _internals]
+pub enum palette::PaletteSortStrategy [also: _dev::palette]
+pub enum remap::RunPriority [also: _dev::remap, _internals]
+pub fn OutputFormat::assert_fields_are_eq(&self)
+pub fn Quality::assert_fields_are_eq(&self)
+pub fn QuantizeConfig::_with_adaptive_dither(self) -> Self
+pub fn QuantizeConfig::_with_blue_noise_dither(self) -> Self
+pub fn QuantizeConfig::_with_dither_strength(self, f32) -> Self
+pub fn QuantizeConfig::_with_joint_deflate_effort(self, u32) -> Self
+pub fn QuantizeConfig::_with_joint_tolerance(self, f32) -> Self
+pub fn QuantizeConfig::_with_linear_dither(self) -> Self
+pub fn QuantizeConfig::_with_no_dither(self) -> Self
+pub fn QuantizeConfig::_with_ordered_dither(self) -> Self
+pub fn QuantizeConfig::_with_run_priority_compression(self) -> Self
+pub fn QuantizeConfig::_with_run_priority_quality(self) -> Self
+pub fn QuantizeConfig::_with_sierra_lite_dither(self) -> Self
+pub fn QuantizeConfig::_with_viterbi_lambda(self, f32) -> Self
+pub fn QuantizeResult::remap_rgba_with_prev(&self, &[rgb::formats::rgba::Rgba<u8>], usize, usize, &QuantizeConfig, &[u8]) -> core::result::Result<QuantizeResult, error::QuantizeError>
+pub fn QuantizeResult::remap_with_prev(&self, &[rgb::formats::rgb::Rgb<u8>], usize, usize, &QuantizeConfig, &[u8]) -> core::result::Result<QuantizeResult, error::QuantizeError>
+pub fn dither::DitherMode::clone(&self) -> dither::DitherMode
+pub fn dither::DitherMode::eq(&self, &dither::DitherMode) -> bool
+pub fn dither::DitherMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn dither::DitherParams<'a>::clone(&self) -> dither::DitherParams<'a>
+pub fn dither::DitherParams<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn dither::dither_image(&[rgb::formats::rgb::Rgb<u8>], &dither::DitherParams<'_>, core::option::Option<&mut metric::MpeAccumulator>) -> alloc::vec::Vec<u8> [also: _dev::dither]
+pub fn dither::dither_image_rgba(&[rgb::formats::rgba::Rgba<u8>], &dither::DitherParams<'_>, core::option::Option<&mut metric::MpeAccumulator>) -> alloc::vec::Vec<u8> [also: _dev::dither]
+pub fn dither::dither_image_rgba_alpha(&[rgb::formats::rgba::Rgba<u8>], &dither::DitherParams<'_>, core::option::Option<&mut metric::MpeAccumulator>) -> alloc::vec::Vec<u8> [also: _dev::dither]
+pub fn histogram::HistEntry::centroid(&self) -> oklab::OKLab
+pub fn histogram::HistEntry::clone(&self) -> histogram::HistEntry
+pub fn histogram::HistEntry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn histogram::build_histogram(&[rgb::formats::rgb::Rgb<u8>], &[f32]) -> alloc::vec::Vec<(oklab::OKLab, f32)> [also: _dev::histogram]
+pub fn histogram::build_histogram_from_labs(&[oklab::OKLab], &[f32], usize) -> (alloc::vec::Vec<(oklab::OKLab, f32)>, bool) [also: _dev::histogram]
+pub fn histogram::build_histogram_rgba(&[rgb::formats::rgba::Rgba<u8>], &[f32]) -> (alloc::vec::Vec<(oklab::OKLab, f32)>, bool) [also: _dev::histogram]
+pub fn masking::compute_masking_weights(&[rgb::formats::rgb::Rgb<u8>], usize, usize) -> alloc::vec::Vec<f32> [also: _dev::masking, _internals]
+pub fn masking::compute_masking_weights_from_labs(&[oklab::OKLab], usize, usize) -> alloc::vec::Vec<f32> [also: _dev::masking]
+pub fn masking::compute_masking_weights_rgba(&[rgb::formats::rgba::Rgba<u8>], usize, usize) -> alloc::vec::Vec<f32> [also: _dev::masking]
+pub fn median_cut::farthest_point_quantize(alloc::vec::Vec<(oklab::OKLab, f32)>, usize) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
+pub fn median_cut::farthest_point_seed(&[(oklab::OKLab, f32)], usize) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
+pub fn median_cut::refine_against_pixels(alloc::vec::Vec<oklab::OKLab>, &[rgb::formats::rgb::Rgb<u8>], &[f32], usize, usize) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
+pub fn median_cut::refine_against_pixels_alpha(alloc::vec::Vec<oklab::OKLabA>, &[rgb::formats::rgba::Rgba<u8>], &[f32], usize, usize) -> alloc::vec::Vec<oklab::OKLabA> [also: _dev::median_cut]
+pub fn median_cut::refine_against_pixels_from_labs(alloc::vec::Vec<oklab::OKLab>, &[rgb::formats::rgb::Rgb<u8>], &[oklab::OKLab], &[f32], usize, usize) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
+pub fn median_cut::refine_against_pixels_rgba(alloc::vec::Vec<oklab::OKLab>, &[rgb::formats::rgba::Rgba<u8>], &[f32], usize, usize) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
+pub fn median_cut::refine_against_pixels_rgba_from_labs(alloc::vec::Vec<oklab::OKLab>, &[rgb::formats::rgba::Rgba<u8>], &[oklab::OKLab], &[f32], usize, usize) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
+pub fn median_cut::wu_quantize(alloc::vec::Vec<(oklab::OKLab, f32)>, usize, bool) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
+pub fn median_cut::wu_quantize_alpha(alloc::vec::Vec<(oklab::OKLabA, f32)>, usize, bool) -> alloc::vec::Vec<oklab::OKLabA> [also: _dev::median_cut]
+pub fn metric::MpeAccumulator::accumulate(&mut self, usize, oklab::OKLab, oklab::OKLab, f32)
+pub fn metric::MpeAccumulator::finalize(self) -> metric::MpeResult
+pub fn metric::MpeAccumulator::new(usize, usize) -> Self
+pub fn metric::MpeResult::clone(&self) -> metric::MpeResult
+pub fn metric::MpeResult::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn metric::MpeResult::zero(usize, usize) -> Self
+pub fn metric::compute_mpe(&[rgb::formats::rgb::Rgb<u8>], &[[u8; 3]], &[u8], usize, usize, core::option::Option<&[f32]>) -> metric::MpeResult [also: _dev::metric, _internals]
+pub fn metric::compute_mpe_rgba(&[rgb::formats::rgba::Rgba<u8>], &[[u8; 4]], &[u8], usize, usize, core::option::Option<&[f32]>) -> metric::MpeResult [also: _dev::metric, _internals]
+pub fn oklab::OKLab::clone(&self) -> oklab::OKLab
+pub fn oklab::OKLab::distance_sq(self, Self) -> f32
+pub fn oklab::OKLab::eq(&self, &oklab::OKLab) -> bool
+pub fn oklab::OKLab::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn oklab::OKLabA::clone(&self) -> oklab::OKLabA
+pub fn oklab::OKLabA::distance_sq(self, Self) -> f32
+pub fn oklab::OKLabA::eq(&self, &oklab::OKLabA) -> bool
+pub fn oklab::OKLabA::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn oklab::oklab_to_srgb(oklab::OKLab) -> (u8, u8, u8) [also: _dev::oklab]
+pub fn oklab::srgb_to_oklab(u8, u8, u8) -> oklab::OKLab [also: _dev::oklab, _internals]
+pub fn palette::Palette::build_nn_cache(&mut self)
+pub fn palette::Palette::clone(&self) -> palette::Palette
+pub fn palette::Palette::distance_sq(&self, oklab::OKLab, u8) -> f32
+pub fn palette::Palette::entries(&self) -> &[[u8; 3]]
+pub fn palette::Palette::entries_oklab(&self) -> &[oklab::OKLab]
+pub fn palette::Palette::entries_rgba(&self) -> &[[u8; 4]]
+pub fn palette::Palette::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn palette::Palette::from_centroids_alpha(alloc::vec::Vec<oklab::OKLabA>, bool, palette::PaletteSortStrategy) -> Self
+pub fn palette::Palette::from_centroids_sorted(alloc::vec::Vec<oklab::OKLab>, bool, palette::PaletteSortStrategy) -> Self
+pub fn palette::Palette::has_nn_cache(&self) -> bool
+pub fn palette::Palette::k_nearest_into(&self, oklab::OKLab, &mut [u8]) -> usize
+pub fn palette::Palette::k_nearest_seeded(&self, oklab::OKLab, u8, &mut [u8]) -> usize
+pub fn palette::Palette::len(&self) -> usize
+pub fn palette::Palette::nearest(&self, oklab::OKLab) -> u8
+pub fn palette::Palette::nearest_cached(&self, u8, u8, u8) -> u8
+pub fn palette::Palette::nearest_seeded(&self, oklab::OKLab, u8) -> u8
+pub fn palette::Palette::nearest_seeded_2(&self, oklab::OKLab, u8, u8) -> u8
+pub fn palette::Palette::nearest_with_alpha(&self, oklab::OKLab, f32) -> u8
+pub fn palette::Palette::transparent_index(&self) -> core::option::Option<u8>
+pub fn palette::PaletteSortStrategy::assert_fields_are_eq(&self)
+pub fn palette::PaletteSortStrategy::clone(&self) -> palette::PaletteSortStrategy
+pub fn palette::PaletteSortStrategy::eq(&self, &palette::PaletteSortStrategy) -> bool
+pub fn palette::PaletteSortStrategy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn palette::index_delta_score(&[u8]) -> u64 [also: _dev::palette, _internals]
+pub fn remap::RunPriority::bias(self) -> f32
+pub fn remap::RunPriority::clone(&self) -> remap::RunPriority
+pub fn remap::RunPriority::eq(&self, &remap::RunPriority) -> bool
+pub fn remap::RunPriority::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn remap::average_run_length(&[u8]) -> f32 [also: _dev::remap, _internals]
+pub fn remap::count_runs(&[u8]) -> usize [also: _dev::remap]
+pub fn remap::run_extend_refine_rgba_with_labs(&[rgb::formats::rgba::Rgba<u8>], &[oklab::OKLab], usize, usize, &[f32], &palette::Palette, &mut [u8], f32) [also: _dev::remap]
+pub fn remap::run_extend_refine_with_labs(&[oklab::OKLab], usize, usize, &[f32], &palette::Palette, &mut [u8], f32) [also: _dev::remap]
+pub fn remap::viterbi_refine_rgba_with_labs(&[rgb::formats::rgba::Rgba<u8>], &[oklab::OKLab], usize, usize, &[f32], &palette::Palette, &mut [u8], f32) [also: _dev::remap]
+pub fn remap::viterbi_refine_with_labs(&[rgb::formats::rgb::Rgb<u8>], &[oklab::OKLab], usize, usize, &[f32], &palette::Palette, &mut [u8], f32) [also: _dev::remap]
+pub mod _dev
+pub mod _dev::dither
+pub mod _dev::histogram
+pub mod _dev::masking
+pub mod _dev::median_cut
+pub mod _dev::metric
+pub mod _dev::oklab
+pub mod _dev::palette
+pub mod _dev::remap
+pub mod _internals
+pub mod dither
+pub mod histogram
+pub mod masking
+pub mod median_cut
+pub mod metric
+pub mod oklab
+pub mod palette
+pub mod remap
+pub struct dither::DitherParams<'a> [also: _dev::dither]
+pub struct histogram::HistEntry [also: _dev::histogram]
+pub struct metric::MpeAccumulator [also: _dev::metric]
+pub struct metric::MpeResult [also: _dev::metric, _internals]
+pub struct oklab::OKLab [also: _dev::oklab]
+pub struct oklab::OKLabA [also: _dev::oklab]
+pub struct palette::Palette [also: _dev::palette]
+pub _dev::dither::DitherMode::Adaptive
+pub _dev::dither::DitherMode::BlueNoise
+pub _dev::dither::DitherMode::Linear
+pub _dev::dither::DitherMode::None
+pub _dev::dither::DitherMode::Ordered
+pub _dev::dither::DitherMode::SierraLite
+pub _dev::dither::DitherParams::dither_strength: f32
+pub _dev::dither::DitherParams::height: usize
+pub _dev::dither::DitherParams::mode: dither::DitherMode
+pub _dev::dither::DitherParams::palette: &'a palette::Palette
+pub _dev::dither::DitherParams::precomputed_labs: core::option::Option<&'a [oklab::OKLab]>
+pub _dev::dither::DitherParams::prev_indices: core::option::Option<&'a [u8]>
+pub _dev::dither::DitherParams::run_priority: remap::RunPriority
+pub _dev::dither::DitherParams::weights: &'a [f32]
+pub _dev::dither::DitherParams::width: usize
+pub _dev::histogram::HistEntry::a_sum: f64
+pub _dev::histogram::HistEntry::b_sum: f64
+pub _dev::histogram::HistEntry::count: u32
+pub _dev::histogram::HistEntry::l_sum: f64
+pub _dev::histogram::HistEntry::weight: f64
+pub _dev::metric::MpeResult::block_cols: usize
+pub _dev::metric::MpeResult::block_rows: usize
+pub _dev::metric::MpeResult::block_scores: alloc::vec::Vec<f32>
+pub _dev::metric::MpeResult::butteraugli_estimate: f32
+pub _dev::metric::MpeResult::score: f32
+pub _dev::metric::MpeResult::ssimulacra2_estimate: f32
+pub _dev::oklab::OKLab::a: f32
+pub _dev::oklab::OKLab::b: f32
+pub _dev::oklab::OKLab::l: f32
+pub _dev::oklab::OKLabA::alpha: f32
+pub _dev::oklab::OKLabA::lab: oklab::OKLab
+pub _dev::palette::PaletteSortStrategy::DeltaMinimize
+pub _dev::palette::PaletteSortStrategy::Luminance
+pub _dev::remap::RunPriority::Balanced
+pub _dev::remap::RunPriority::Compression
+pub _dev::remap::RunPriority::Quality
+pub _internals::DitherMode::Adaptive
+pub _internals::DitherMode::BlueNoise
+pub _internals::DitherMode::Linear
+pub _internals::DitherMode::None
+pub _internals::DitherMode::Ordered
+pub _internals::DitherMode::SierraLite
+pub _internals::MpeResult::block_cols: usize
+pub _internals::MpeResult::block_rows: usize
+pub _internals::MpeResult::block_scores: alloc::vec::Vec<f32>
+pub _internals::MpeResult::butteraugli_estimate: f32
+pub _internals::MpeResult::score: f32
+pub _internals::MpeResult::ssimulacra2_estimate: f32
+pub _internals::RunPriority::Balanced
+pub _internals::RunPriority::Compression
+pub _internals::RunPriority::Quality
+pub dither::DitherMode::Adaptive
+pub dither::DitherMode::BlueNoise
+pub dither::DitherMode::Linear
+pub dither::DitherMode::None
+pub dither::DitherMode::Ordered
+pub dither::DitherMode::SierraLite
+pub dither::DitherParams::dither_strength: f32
+pub dither::DitherParams::height: usize
+pub dither::DitherParams::mode: dither::DitherMode
+pub dither::DitherParams::palette: &'a palette::Palette
+pub dither::DitherParams::precomputed_labs: core::option::Option<&'a [oklab::OKLab]>
+pub dither::DitherParams::prev_indices: core::option::Option<&'a [u8]>
+pub dither::DitherParams::run_priority: remap::RunPriority
+pub dither::DitherParams::weights: &'a [f32]
+pub dither::DitherParams::width: usize
+pub histogram::HistEntry::a_sum: f64
+pub histogram::HistEntry::b_sum: f64
+pub histogram::HistEntry::count: u32
+pub histogram::HistEntry::l_sum: f64
+pub histogram::HistEntry::weight: f64
+pub metric::MpeResult::block_cols: usize
+pub metric::MpeResult::block_rows: usize
+pub metric::MpeResult::block_scores: alloc::vec::Vec<f32>
+pub metric::MpeResult::butteraugli_estimate: f32
+pub metric::MpeResult::score: f32
+pub metric::MpeResult::ssimulacra2_estimate: f32
+pub oklab::OKLab::a: f32
+pub oklab::OKLab::b: f32
+pub oklab::OKLab::l: f32
+pub oklab::OKLabA::alpha: f32
+pub oklab::OKLabA::lab: oklab::OKLab
+pub palette::PaletteSortStrategy::DeltaMinimize
+pub palette::PaletteSortStrategy::Luminance
+pub remap::RunPriority::Balanced
+pub remap::RunPriority::Compression
+pub remap::RunPriority::Quality
+
+## trait impls (11 types)
+
+OutputFormat: TrivialClone
+Quality: TrivialClone
+dither::DitherMode: Clone, Copy, Debug, PartialEq, TrivialClone
+dither::DitherParams<'a>: Clone, Debug
+histogram::HistEntry: Clone, Debug
+metric::MpeResult: Clone, Debug
+oklab::OKLab: Clone, Copy, Debug, PartialEq, TrivialClone
+oklab::OKLabA: Clone, Copy, Debug, PartialEq, TrivialClone
+palette::Palette: Clone, Debug
+palette::PaletteSortStrategy: Clone, Copy, Debug, Eq, PartialEq, TrivialClone
+remap::RunPriority: Clone, Copy, Debug, PartialEq, TrivialClone
+
+## auto traits
+
+10 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
