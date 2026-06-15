@@ -1212,6 +1212,7 @@ dependencies = [
 name = "zenquant"
 version = "0.1.2"
 dependencies = [
+ "almost-enough",
  "archmage",
  "butteraugli",
  "codec-corpus",

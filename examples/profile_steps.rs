@@ -94,6 +94,7 @@ fn main() {
         &weights,
         2,
         131_072,
+        &enough::Unstoppable,
     );
     let kmeans_2_ms = t.elapsed().as_secs_f64() * 1000.0;
     println!("3b. K-means (2it):  {:>8.1}ms", kmeans_2_ms);
@@ -107,6 +108,7 @@ fn main() {
         &weights,
         8,
         131_072,
+        &enough::Unstoppable,
     );
     let kmeans_ms = t.elapsed().as_secs_f64() * 1000.0;
     println!("3c. K-means (8it):  {:>8.1}ms", kmeans_ms);
@@ -164,6 +166,7 @@ fn main() {
         &pal,
         &mut indices,
         0.01,
+        &enough::Unstoppable,
     );
     let viterbi_ms = t.elapsed().as_secs_f64() * 1000.0;
     println!("5b. Viterbi:        {:>8.1}ms", viterbi_ms);
@@ -204,6 +207,7 @@ fn main() {
         &pal_noref,
         &mut indices2,
         0.01,
+        &enough::Unstoppable,
     );
     let noref_ms = t.elapsed().as_secs_f64() * 1000.0;
     println!("Dither+Viterbi (no k-means): {:>8.1}ms", noref_ms);
