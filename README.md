@@ -65,6 +65,21 @@ let palette = result.palette();   // &[[u8; 3]] — one sRGB entry per palette c
 let indices = result.indices();   // &[u8] — one palette index per pixel, row-major
 ```
 
+`quantize` and `quantize_rgba` take **typed** pixel slices — `&[rgb::RGB<u8>]` and `&[rgb::RGBA<u8>]` (re-exported as `zenquant::RGB` / `zenquant::RGBA`), not a flat `&[u8]`. Build them from a decoder's byte buffer:
+
+```rust
+use zenquant::RGBA; // = rgb::RGBA<u8>
+
+// width*height*4 interleaved RGBA8 bytes from your decoder:
+let pixels: Vec<RGBA<u8>> = rgba8_bytes
+    .chunks_exact(4)
+    .map(|p| RGBA { r: p[0], g: p[1], b: p[2], a: p[3] })
+    .collect();
+let result = zenquant::quantize_rgba(&pixels, width, height, &config)?;
+```
+
+For a zero-copy view, the `rgb` crate's `FromSlice` trait gives `rgba8_bytes.as_rgba()`.
+
 ### Quantize RGBA (GIF with transparency)
 
 ```rust
