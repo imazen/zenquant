@@ -17,41 +17,91 @@ Add to your `Cargo.toml`:
 ```toml
 [dependencies]
 zenquant = "0.1"
+rgb = "0.8.53"     # input pixels are typed: &[rgb::RGB<u8>] / &[rgb::RGBA<u8>]
 ```
+
+### Input pixel types
+
+`quantize` and `quantize_rgba` take **typed** pixel slices, not a raw `&[u8]`
+byte buffer:
+
+```rust
+pub fn quantize(pixels: &[rgb::RGB<u8>], width: usize, height: usize, config: &QuantizeConfig)
+    -> Result<QuantizeResult, QuantizeError>;
+pub fn quantize_rgba(pixels: &[rgb::RGBA<u8>], width: usize, height: usize, config: &QuantizeConfig)
+    -> Result<QuantizeResult, QuantizeError>;
+```
+
+If you already hold a flat `Vec<u8>` (3 bytes per RGB pixel, 4 per RGBA),
+reinterpret it in place with the `rgb` crate's `FromSlice` adapter — no copy,
+no allocation:
+
+```rust
+use rgb::FromSlice; // brings `as_rgb` / `as_rgba` into scope
+
+// RGB: width * height * 3 bytes
+let pixels: &[rgb::RGB<u8>] = rgb_bytes.as_rgb();
+
+// RGBA: width * height * 4 bytes
+let pixels_rgba: &[rgb::RGBA<u8>] = rgba_bytes.as_rgba();
+```
+
+Add `rgb = "0.8.53"` (the same `rgb` crate zenquant depends on) as a direct
+dependency so these element types — and the `FromSlice` adapter — are in scope.
 
 ### Quantize an RGB image
 
 ```rust
 use zenquant::{QuantizeConfig, OutputFormat};
+use rgb::FromSlice;
+
+// `rgb_bytes` is a Vec<u8> of width * height * 3 bytes
+let pixels: &[rgb::RGB<u8>] = rgb_bytes.as_rgb();
 
 let config = QuantizeConfig::new(OutputFormat::Png);
-let result = zenquant::quantize(&pixels, width, height, &config).unwrap();
+let result = zenquant::quantize(pixels, width, height, &config).unwrap();
 
-let palette = result.palette();   // &[[u8; 3]] — sRGB
-let indices = result.indices();   // &[u8] — row-major
+let palette = result.palette();   // &[[u8; 3]] — one sRGB entry per palette color
+let indices = result.indices();   // &[u8] — one palette index per pixel, row-major
 ```
 
 ### Quantize RGBA (GIF with transparency)
 
 ```rust
 use zenquant::{QuantizeConfig, OutputFormat};
+use rgb::FromSlice;
+
+// `rgba_bytes` is a Vec<u8> of width * height * 4 bytes
+let pixels: &[rgb::RGBA<u8>] = rgba_bytes.as_rgba();
 
 let config = QuantizeConfig::new(OutputFormat::Gif);
-let result = zenquant::quantize_rgba(&pixels, width, height, &config).unwrap();
+let result = zenquant::quantize_rgba(pixels, width, height, &config).unwrap();
+
+// Reading the result:
+let palette: &[[u8; 3]] = result.palette();        // sRGB triples
+let palette_rgba: &[[u8; 4]] = result.palette_rgba(); // same entries, with alpha
+let indices: &[u8] = result.indices();             // one index per pixel, row-major
 
 // Binary transparency: one palette entry reserved for transparent pixels
-if let Some(idx) = result.transparent_index() {
+if let Some(idx) = result.transparent_index() {    // Option<u8>
     // pixels with alpha == 0 map to this index
 }
 ```
+
+`palette()` returns `&[[u8; 3]]` even on the RGBA path; use `palette_rgba()`
+(`&[[u8; 4]]`) when you need the per-entry alpha, or `alpha_table()`
+(`Option<Vec<u8>>`) for a PNG `tRNS` chunk.
 
 ### Write an indexed PNG
 
 ```rust
 use zenquant::{QuantizeConfig, OutputFormat};
+use rgb::FromSlice;
+
+let pixels: &[rgb::RGB<u8>] = rgb_bytes.as_rgb();
 
 let config = QuantizeConfig::new(OutputFormat::Png);
-let result = zenquant::quantize(&pixels, width, height, &config).unwrap();
+let result = zenquant::quantize(pixels, width, height, &config).unwrap();
 
 let mut encoder = png::Encoder::new(file, width as u32, height as u32);
 encoder.set_color(png::ColorType::Indexed);
@@ -75,7 +125,9 @@ use zenquant::{QuantizeConfig, QuantizeError, OutputFormat, ImgRef};
 
 let config = QuantizeConfig::new(OutputFormat::Gif);
 
-// Build shared palette from representative frames
+// `frame_data` is a slice of per-frame RGBA pixel buffers: &[&[rgb::RGBA<u8>]]
+// (use `rgb::FromSlice::as_rgba` to get each &[rgb::RGBA<u8>] from a Vec<u8>).
+// Build a shared palette from representative frames:
 let frames: Vec<ImgRef<'_, rgb::RGBA<u8>>> = frame_data.iter()
     .map(|f| ImgRef::new(f, width, height))
     .collect();
@@ -101,8 +153,8 @@ for frame_pixels in &frame_data {
             let ssim2 = result.ssimulacra2_estimate().unwrap();
             // encode as indexed
         }
-        Err(QuantizeError::QualityNotMet { achieved_ssim2, .. }) => {
-            // this frame needs truecolor
+        Err(QuantizeError::QualityNotMet { min_ssim2, achieved_ssim2 }) => {
+            // this frame needs truecolor (wanted `min_ssim2`, got `achieved_ssim2`)
         }
         Err(e) => panic!("{e}"),
     }
