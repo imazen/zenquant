@@ -41,6 +41,17 @@ pub enum QuantizeError {
         height: usize,
     },
 
+    /// Image pixel count exceeds the configured `max_pixels` cap.
+    ///
+    /// See [`QuantizeConfig::with_max_pixels`](crate::QuantizeConfig::with_max_pixels).
+    #[error("image has {pixels} pixels, exceeding the max_pixels cap of {max}")]
+    TooManyPixels {
+        /// Total pixels (`width * height`) of the input.
+        pixels: usize,
+        /// The configured maximum.
+        max: usize,
+    },
+
     /// A caller-supplied palette index is out of range for the active palette.
     #[error("palette index {index} is out of range for palette of length {palette_len}")]
     InvalidIndex {

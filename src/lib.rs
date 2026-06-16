@@ -245,6 +245,12 @@ pub struct QuantizeConfig {
     /// Maximum pixels sampled per k-means iteration. Larger images are
     /// stride-subsampled internally. Default: 131072.
     kmeans_sample_cap: usize,
+    /// Maximum total pixels (`width × height`) accepted by [`quantize`]. Bounds
+    /// the secondary full-image scratch allocations (OKLab/masking/histogram
+    /// buffers, ~12–16 B/px on top of the caller's input) when dimensions come
+    /// from untrusted input. Default: `Some(120_000_000)` (120 MP — admits
+    /// 108 MP photos); `None` disables the cap.
+    max_pixels: Option<usize>,
 }
 
 impl QuantizeConfig {
@@ -273,6 +279,7 @@ impl QuantizeConfig {
             joint_deflate_effort: 10,
             joint_tolerance: 0.01,
             kmeans_sample_cap: 131_072,
+            max_pixels: Some(120_000_000),
         }
     }
 
@@ -332,6 +339,17 @@ impl QuantizeConfig {
     #[must_use]
     pub fn with_kmeans_sample_cap(mut self, cap: usize) -> Self {
         self.kmeans_sample_cap = cap;
+        self
+    }
+
+    /// Maximum total pixels (`width × height`) accepted by [`quantize`].
+    ///
+    /// Bounds the secondary full-image scratch allocations from
+    /// attacker-controlled dimensions. Default: `Some(120_000_000)` (120 MP).
+    /// Pass `None` to disable the cap (not recommended for untrusted input).
+    #[must_use]
+    pub fn with_max_pixels(mut self, max: Option<usize>) -> Self {
+        self.max_pixels = max;
         self
     }
 
@@ -2124,5 +2142,55 @@ fn validate_inputs(
     if config.max_colors < 2 || config.max_colors > 256 {
         return Err(QuantizeError::InvalidMaxColors(config.max_colors));
     }
+    // Cap total pixels to bound the secondary full-image scratch allocations
+    // (OKLab/masking/histogram buffers) from untrusted dimensions. `expected`
+    // is the validated `width * height`.
+    if let Some(max) = config.max_pixels
+        && expected > max
+    {
+        return Err(QuantizeError::TooManyPixels {
+            pixels: expected,
+            max,
+        });
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod max_pixels_tests {
+    use super::*;
+
+    #[test]
+    fn default_max_pixels_is_120mp() {
+        assert_eq!(
+            QuantizeConfig::new(OutputFormat::Png).max_pixels,
+            Some(120_000_000)
+        );
+    }
+
+    #[test]
+    fn validate_inputs_rejects_above_pixel_cap() {
+        // 12000 x 11000 = 132 MP > 120 MP default cap. pixel_count matches the
+        // declared dims so it reaches the cap check (not DimensionMismatch).
+        let cfg = QuantizeConfig::new(OutputFormat::Png);
+        let (w, h) = (12_000usize, 11_000usize);
+        assert!(matches!(
+            validate_inputs(w * h, w, h, &cfg),
+            Err(QuantizeError::TooManyPixels { .. })
+        ));
+    }
+
+    #[test]
+    fn validate_inputs_accepts_108mp_within_cap() {
+        let cfg = QuantizeConfig::new(OutputFormat::Png);
+        let (w, h) = (12_000usize, 9_000usize); // 108 MP
+        assert!(validate_inputs(w * h, w, h, &cfg).is_ok());
+    }
+
+    #[test]
+    fn with_max_pixels_none_disables_cap() {
+        let cfg = QuantizeConfig::new(OutputFormat::Png).with_max_pixels(None);
+        let (w, h) = (12_000usize, 11_000usize); // 132 MP
+        assert!(validate_inputs(w * h, w, h, &cfg).is_ok());
+    }
 }

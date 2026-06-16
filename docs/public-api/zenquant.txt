@@ -6,25 +6,25 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: zenquant.txt 79 lines (supported surface) | zenquant.features.txt 0 added (features: joint,std) | zenquant.internal.txt 224 lines (133 hidden + 245 excluded-feature)
+# files: zenquant.txt 86 lines (supported surface) | zenquant.features.txt 0 added (features: joint,std) | zenquant.internal.txt 224 lines (133 hidden + 245 excluded-feature)
 
 ## summary
 #
 #   pub modules                                 2
 #   pub types (struct/enum/trait/alias)         6
 #   free functions                              4
-#   inherent methods                           19
-#   struct fields                              18
-#   enum variants                              20
+#   inherent methods                           20
+#   struct fields                              22
+#   enum variants                              22
 #   re-exports                                  5
 #   trait roster entries (type × trait)        20
 #   auto-trait-complete types                   5
 #
 # per-module pub lines:
-#   (root)                           58
-#   error                            16
+#   (root)                           62
+#   error                            19
 
-## items (73 lines)
+## items (80 lines)
 
 pub mod zenquant
 pub use Img
@@ -47,6 +47,9 @@ pub error::QuantizeError::InvalidMaxColors(u32)
 pub error::QuantizeError::QualityNotMet
 pub error::QuantizeError::QualityNotMet::achieved_ssim2: f32
 pub error::QuantizeError::QualityNotMet::min_ssim2: f32
+pub error::QuantizeError::TooManyPixels
+pub error::QuantizeError::TooManyPixels::max: usize
+pub error::QuantizeError::TooManyPixels::pixels: usize
 pub error::QuantizeError::ZeroDimension
 #[non_exhaustive] pub enum OutputFormat
 pub OutputFormat::Gif
@@ -73,12 +76,16 @@ pub QuantizeError::InvalidMaxColors(u32)
 pub QuantizeError::QualityNotMet
 pub QuantizeError::QualityNotMet::achieved_ssim2: f32
 pub QuantizeError::QualityNotMet::min_ssim2: f32
+pub QuantizeError::TooManyPixels
+pub QuantizeError::TooManyPixels::max: usize
+pub QuantizeError::TooManyPixels::pixels: usize
 pub QuantizeError::ZeroDimension
 pub struct QuantizeConfig
 pub fn QuantizeConfig::new(OutputFormat) -> Self
 pub fn QuantizeConfig::with_compute_quality_metric(self, bool) -> Self
 pub fn QuantizeConfig::with_kmeans_sample_cap(self, usize) -> Self
 pub fn QuantizeConfig::with_max_colors(self, u32) -> Self
+pub fn QuantizeConfig::with_max_pixels(self, core::option::Option<usize>) -> Self
 pub fn QuantizeConfig::with_min_ssim2(self, f32) -> Self
 pub fn QuantizeConfig::with_quality(self, Quality) -> Self
 pub fn QuantizeConfig::with_target_ssim2(self, f32) -> Self
