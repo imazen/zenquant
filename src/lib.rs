@@ -718,6 +718,9 @@ fn select_compression_tier(target_ssim2: f32) -> &'static CompressionTier {
 /// Returns a [`QuantizeResult`] with palette entries and per-pixel indices.
 /// Indices are in row-major order: `index = y * width + x`.
 ///
+/// This is the no-cancellation equivalent of [`quantize_with_stop`]; use that
+/// variant if you need to cooperatively cancel a long-running quantization.
+///
 /// # Example
 ///
 /// ```no_run
@@ -736,6 +739,21 @@ pub fn quantize(
     width: usize,
     height: usize,
     config: &QuantizeConfig,
+) -> Result<QuantizeResult, QuantizeError> {
+    quantize_with_stop(pixels, width, height, config, &enough::Unstoppable)
+}
+
+/// Quantize an RGB image to an indexed palette, with cooperative cancellation.
+///
+/// Same as [`quantize`] but takes a [`stop`](enough::Stop) token: when it
+/// signals cancellation at a phase boundary, this returns
+/// [`QuantizeError::Cancelled`] with the partial work discarded.
+pub fn quantize_with_stop(
+    pixels: &[rgb::RGB<u8>],
+    width: usize,
+    height: usize,
+    config: &QuantizeConfig,
+    stop: &dyn enough::Stop,
 ) -> Result<QuantizeResult, QuantizeError> {
     validate_inputs(pixels.len(), width, height, config)?;
 
@@ -836,8 +854,12 @@ pub fn quantize(
             &weights,
             kmeans_iters,
             config.kmeans_sample_cap,
+            stop,
         );
     }
+
+    // Phase boundary: decide cancellation after the k-means refine step.
+    stop.check().map_err(QuantizeError::Cancelled)?;
 
     // 4. Build palette with format-specific sort
     let mut pal = palette::Palette::from_centroids_sorted(centroids, false, tuning.sort_strategy);
@@ -895,6 +917,7 @@ pub fn quantize(
                 &pal,
                 &mut indices,
                 run_lambda,
+                stop,
             );
         } else {
             remap::run_extend_refine_with_labs(
@@ -905,9 +928,13 @@ pub fn quantize(
                 &pal,
                 &mut indices,
                 run_lambda,
+                stop,
             );
         }
     }
+
+    // Phase boundary: decide cancellation after the dither/remap step.
+    stop.check().map_err(QuantizeError::Cancelled)?;
 
     // 6. GIF frequency reorder (post-dither)
     let pal = if tuning.gif_frequency_reorder {
@@ -966,6 +993,9 @@ pub fn quantize(
 /// per-index alpha (PNG tRNS, WebP), use [`QuantizeResult::palette_rgba()`]
 /// and [`QuantizeResult::alpha_table()`].
 ///
+/// This is the no-cancellation equivalent of [`quantize_rgba_with_stop`]; use
+/// that variant if you need to cooperatively cancel a long-running quantization.
+///
 /// # Example
 ///
 /// ```no_run
@@ -985,6 +1015,21 @@ pub fn quantize_rgba(
     width: usize,
     height: usize,
     config: &QuantizeConfig,
+) -> Result<QuantizeResult, QuantizeError> {
+    quantize_rgba_with_stop(pixels, width, height, config, &enough::Unstoppable)
+}
+
+/// Quantize an RGBA image to an indexed palette, with cooperative cancellation.
+///
+/// Same as [`quantize_rgba`] but takes a [`stop`](enough::Stop) token: when it
+/// signals cancellation at a phase boundary, this returns
+/// [`QuantizeError::Cancelled`] with the partial work discarded.
+pub fn quantize_rgba_with_stop(
+    pixels: &[rgb::RGBA<u8>],
+    width: usize,
+    height: usize,
+    config: &QuantizeConfig,
+    stop: &dyn enough::Stop,
 ) -> Result<QuantizeResult, QuantizeError> {
     validate_inputs(pixels.len(), width, height, config)?;
 
@@ -1099,6 +1144,9 @@ pub fn quantize_rgba(
             );
         }
 
+        // Phase boundary: decide cancellation after the k-means refine step.
+        stop.check().map_err(QuantizeError::Cancelled)?;
+
         let pal = palette::Palette::from_centroids_alpha(
             centroids,
             has_transparent,
@@ -1141,6 +1189,7 @@ pub fn quantize_rgba(
                     &pal,
                     &mut indices,
                     viterbi_lambda,
+                    stop,
                 );
             } else {
                 remap::run_extend_refine_rgba_with_labs(
@@ -1152,6 +1201,7 @@ pub fn quantize_rgba(
                     &pal,
                     &mut indices,
                     viterbi_lambda,
+                    stop,
                 );
             }
         }
@@ -1177,6 +1227,9 @@ pub fn quantize_rgba(
                 config.kmeans_sample_cap,
             );
         }
+
+        // Phase boundary: decide cancellation after the k-means refine step.
+        stop.check().map_err(QuantizeError::Cancelled)?;
 
         let mut pal = palette::Palette::from_centroids_sorted(
             centroids,
@@ -1221,6 +1274,7 @@ pub fn quantize_rgba(
                     &pal,
                     &mut indices,
                     viterbi_lambda,
+                    stop,
                 );
             } else {
                 remap::run_extend_refine_rgba_with_labs(
@@ -1232,12 +1286,16 @@ pub fn quantize_rgba(
                     &pal,
                     &mut indices,
                     viterbi_lambda,
+                    stop,
                 );
             }
         }
 
         (pal, indices)
     };
+
+    // Phase boundary: decide cancellation after the dither/remap step.
+    stop.check().map_err(QuantizeError::Cancelled)?;
 
     // GIF frequency reorder (post-dither)
     let pal = if tuning.gif_frequency_reorder {
@@ -1412,6 +1470,7 @@ pub fn build_palette(
             &all_weights,
             kmeans_iters,
             config.kmeans_sample_cap,
+            &enough::Unstoppable,
         );
     }
 
@@ -1720,6 +1779,7 @@ fn remap_rgb_impl(
                 &pal,
                 &mut indices,
                 run_lambda,
+                &enough::Unstoppable,
             );
         } else {
             remap::run_extend_refine_with_labs(
@@ -1730,6 +1790,7 @@ fn remap_rgb_impl(
                 &pal,
                 &mut indices,
                 run_lambda,
+                &enough::Unstoppable,
             );
         }
     }
@@ -1902,6 +1963,7 @@ fn remap_rgba_impl(
                 &pal,
                 &mut indices,
                 run_lambda,
+                &enough::Unstoppable,
             );
         } else {
             remap::run_extend_refine_rgba_with_labs(
@@ -1913,6 +1975,7 @@ fn remap_rgba_impl(
                 &pal,
                 &mut indices,
                 run_lambda,
+                &enough::Unstoppable,
             );
         }
     }

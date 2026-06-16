@@ -49,4 +49,10 @@ pub enum QuantizeError {
         /// The current palette length.
         palette_len: usize,
     },
+
+    /// The quantize was cancelled via the cooperative [`enough::Stop`] token
+    /// passed to [`quantize_with_stop`](crate::quantize_with_stop) /
+    /// [`quantize_rgba_with_stop`](crate::quantize_rgba_with_stop).
+    #[error("quantize cancelled: {0:?}")]
+    Cancelled(enough::StopReason),
 }

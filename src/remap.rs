@@ -250,6 +250,7 @@ pub fn viterbi_refine_with_labs(
     palette: &Palette,
     indices: &mut [u8],
     lambda: f32,
+    stop: &dyn enough::Stop,
 ) {
     if width <= 1 || lambda <= 0.0 {
         return;
@@ -259,6 +260,11 @@ pub fn viterbi_refine_with_labs(
     let mut bufs = ViterbiBufs::new(width);
 
     for y in 0..height {
+        // Cooperative cancellation at the scanline boundary — never inside the
+        // per-pixel Viterbi DP. Leaves already-refined rows intact.
+        if stop.should_stop() {
+            break;
+        }
         let row_start = y * width;
         let row = &pixels[row_start..row_start + width];
         let row_labs = &labs[row_start..row_start + width];
@@ -280,6 +286,7 @@ pub fn viterbi_refine_rgba_with_labs(
     palette: &Palette,
     indices: &mut [u8],
     lambda: f32,
+    stop: &dyn enough::Stop,
 ) {
     if width <= 1 || lambda <= 0.0 {
         return;
@@ -290,6 +297,11 @@ pub fn viterbi_refine_rgba_with_labs(
     let mut bufs = ViterbiBufs::new(width);
 
     for y in 0..height {
+        // Cooperative cancellation at the scanline boundary — never inside the
+        // per-pixel/per-segment Viterbi DP. Leaves already-refined rows intact.
+        if stop.should_stop() {
+            break;
+        }
         let row_start = y * width;
 
         let mut seg_start = None;
@@ -331,6 +343,7 @@ pub fn viterbi_refine_rgba_with_labs(
 }
 
 /// Lightweight run-extension post-pass using pre-computed OKLab values.
+#[allow(clippy::too_many_arguments)]
 pub fn run_extend_refine_with_labs(
     labs: &[OKLab],
     width: usize,
@@ -339,12 +352,18 @@ pub fn run_extend_refine_with_labs(
     palette: &Palette,
     indices: &mut [u8],
     lambda: f32,
+    stop: &dyn enough::Stop,
 ) {
     if width <= 1 || lambda <= 0.0 {
         return;
     }
 
     for y in 0..height {
+        // Cooperative cancellation at the scanline boundary — never inside the
+        // per-pixel inner loop. Leaves already-extended rows intact.
+        if stop.should_stop() {
+            break;
+        }
         let row_start = y * width;
         for x in 1..width {
             let i = row_start + x;
@@ -376,12 +395,18 @@ pub fn run_extend_refine_rgba_with_labs(
     palette: &Palette,
     indices: &mut [u8],
     lambda: f32,
+    stop: &dyn enough::Stop,
 ) {
     if width <= 1 || lambda <= 0.0 {
         return;
     }
 
     for y in 0..height {
+        // Cooperative cancellation at the scanline boundary — never inside the
+        // per-pixel inner loop. Leaves already-extended rows intact.
+        if stop.should_stop() {
+            break;
+        }
         let row_start = y * width;
         for x in 1..width {
             let i = row_start + x;

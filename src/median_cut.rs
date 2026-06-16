@@ -872,9 +872,10 @@ pub fn refine_against_pixels(
     weights: &[f32],
     iterations: usize,
     max_samples: usize,
+    stop: &dyn enough::Stop,
 ) -> Vec<OKLab> {
     let labs = crate::simd::batch_srgb_to_oklab_vec(pixels);
-    refine_against_pixels_from_labs(centroids, pixels, &labs, weights, iterations, max_samples)
+    refine_against_pixels_from_labs(centroids, pixels, &labs, weights, iterations, max_samples, stop)
 }
 
 /// Pixel-level k-means refinement using pre-computed OKLab values.
@@ -888,6 +889,7 @@ pub fn refine_against_pixels_from_labs(
     weights: &[f32],
     iterations: usize,
     max_samples: usize,
+    stop: &dyn enough::Stop,
 ) -> Vec<OKLab> {
     let k = centroids.len();
     if k == 0 {
@@ -923,6 +925,12 @@ pub fn refine_against_pixels_from_labs(
     const OFFSET_PRIME: usize = 7;
 
     for iter in 0..iterations {
+        // Cooperative cancellation: bail at the iteration boundary, returning
+        // the best centroids refined so far. Never checked in the per-pixel
+        // inner loop below — only here at the outer k-means iteration loop.
+        if stop.should_stop() {
+            break;
+        }
         if iter > 0 {
             // Incremental rebuild: neighbors first (need current centroids),
             // then cache (needs updated neighbors for seeded search).
