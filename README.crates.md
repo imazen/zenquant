@@ -1,6 +1,6 @@
 <!-- GENERATED FROM README.md by zenutils gen-readme-crates.sh — DO NOT EDIT. -->
 
-# zenquant [![CI](https://img.shields.io/github/actions/workflow/status/imazen/zenquant/ci.yml?style=flat-square&label=CI)](https://github.com/imazen/zenquant/actions/workflows/ci.yml)
+# zenquant
 
 Color quantization with perceptual masking. Reduces truecolor images to 256-color indexed palettes in OKLab space, using butteraugli-inspired adaptive quantization (AQ) weights to concentrate palette entries where human vision is most sensitive. Pure Rust, `#![forbid(unsafe_code)]`, `no_std` + `alloc`, with runtime SIMD dispatch.
 
