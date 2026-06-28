@@ -10,9 +10,9 @@ documentation = "https://docs.rs/zenquant"
 homepage = "https://github.com/imazen/zenquant"
 keywords = ["quantize", "palette", "image", "color", "dither"]
 categories = ["multimedia::images", "graphics"]
-readme = "README.md"
+readme = "README.crates.md"
 
-include = ["/src", "LICENSE-AGPL3", "LICENSE-COMMERCIAL", "README.md", "CHANGELOG.md"]
+include = ["/src", "LICENSE-AGPL3", "LICENSE-COMMERCIAL", "README.crates.md", "CHANGELOG.md"]
 
 [dependencies]
 rgb = "0.8.53"

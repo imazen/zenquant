@@ -1,4 +1,6 @@
-# zenquant [![CI](https://img.shields.io/github/actions/workflow/status/imazen/zenquant/ci.yml?style=flat-square&label=CI)](https://github.com/imazen/zenquant/actions/workflows/ci.yml) [![crates.io](https://img.shields.io/crates/v/zenquant?style=flat-square)](https://crates.io/crates/zenquant) [![lib.rs](https://img.shields.io/crates/v/zenquant?style=flat-square&label=lib.rs&color=blue)](https://lib.rs/crates/zenquant) [![docs.rs](https://img.shields.io/docsrs/zenquant?style=flat-square)](https://docs.rs/zenquant) [![MSRV](https://img.shields.io/badge/MSRV-1.92-blue?style=flat-square)](https://doc.rust-lang.org/cargo/reference/manifest.html#the-rust-version-field) [![license](https://img.shields.io/badge/license-AGPL--3.0%20%2F%20Commercial-blue?style=flat-square)](#license)
+<!-- GENERATED FROM README.md by zenutils gen-readme-crates.sh — DO NOT EDIT. -->
+
+# zenquant [![CI](https://img.shields.io/github/actions/workflow/status/imazen/zenquant/ci.yml?style=flat-square&label=CI)](https://github.com/imazen/zenquant/actions/workflows/ci.yml)
 
 Color quantization with perceptual masking. Reduces truecolor images to 256-color indexed palettes in OKLab space, using butteraugli-inspired adaptive quantization (AQ) weights to concentrate palette entries where human vision is most sensitive. Pure Rust, `#![forbid(unsafe_code)]`, `no_std` + `alloc`, with runtime SIMD dispatch.
 
@@ -261,37 +263,6 @@ match zenquant::quantize_with_stop(&pixels, width, height, &config, stop) {
 }
 ```
 
-<!-- crates.io:skip-start -->
-## Benchmarks
-
-Averaged over 50 images from three corpora ([CID22](https://zenodo.org/records/11186568), [CLIC 2025](https://storage.googleapis.com/clic2025), screenshots). All quantizers configured for 256 colors with default dithering. PNG sizes use aggressive deflate via [zenpng](https://github.com/imazen/zenpng). Sorted by DSSIM. Methodology and reproduction: [`benchmarks/README.md`](https://github.com/imazen/zenquant/blob/main/benchmarks/README.md).
-
-| Quantizer | Butteraugli | SSIMULACRA2 | DSSIM | PNG size | GIF size | ~ms |
-|-----------|-------------|-------------|-------|----------|----------|-----|
-| quantette (k-means) | 3.86 | **83.9** | **0.00050** | 616 KB | 799 KB | 265 |
-| imagequant s1 d100 | 4.10 | 82.2 | 0.00056 | 637 KB | 848 KB | 546 |
-| imagequant s4 d100 | 4.39 | 81.9 | 0.00057 | 640 KB | 854 KB | 315 |
-| **zenquant** (Best) | **3.17** | 82.9 | 0.00058 | 586 KB | 764 KB | 542 |
-| imagequant s1 d50 | 4.15 | 82.0 | 0.00060 | 627 KB | 836 KB | 465 |
-| **zenquant** (Balanced) | 3.21 | 82.9 | 0.00064 | **579 KB** | 751 KB | 453 |
-| **zenquant** (Fast) | 3.29 | 82.6 | 0.00069 | 582 KB | **749 KB** | 321 |
-| quantizr | 4.44 | 79.7 | 0.00098 | 584 KB | 764 KB | 544 |
-| color_quant | 8.96 | 72.1 | 0.00141 | 625 KB | 841 KB | 180 |
-
-Lower butteraugli/DSSIM = better. Higher SSIMULACRA2 = better. Smaller file size = better. Numbers are from the 2026-03-04 comparison run; see the benchmarks doc for environment, competitor versions, and the exact command.
-
-**[Interactive visual comparison (9 configurations of 5 quantizers, 50 images)](https://imageflow-resources.s3.us-west-2.amazonaws.com/demos/zenquant/2026-03-04/index.html)** — slider, diff, and zoom views with per-image metrics. Keyboard shortcuts: 1 = original, 2–0 = variants.
-
-zenquant's advantage is most visible on images with smooth gradients and subtle color transitions, where AQ masking prevents banding that other quantizers miss.
-
-### Reproduce the benchmarks
-
-```bash
-cargo run --example quantizer_comparison --release -- gb82-sc,cid22,clic2025 /tmp/output 20
-```
-
-The comparison tool generates an interactive HTML report with cached results. Add `--benchmark` for rigorous timing (single-thread, warm-up + min-of-5 runs, I/O outside the timed region). See [`benchmarks/README.md`](https://github.com/imazen/zenquant/blob/main/benchmarks/README.md) for the full methodology.
-<!-- crates.io:skip-end -->
 
 ## Integration
 

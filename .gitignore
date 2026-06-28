@@ -51,6 +51,8 @@ benchmarks/*.log
 benchmarks/*.csv
 benchmarks/*.tsv
 benchmarks/*.meta
+# ...but the committed methodology doc is source, not a generated result
+!benchmarks/README.md
 
 # Tooling noise
 .superwork/
