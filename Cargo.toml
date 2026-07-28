@@ -28,6 +28,8 @@ enough = { version = "0.4.4", default-features = false }
 # zenflate = { path = "../zenflate", optional = true, default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+rgb = "0.8.53"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 imagequant = "4"
 quantizr = "1"
@@ -55,7 +57,10 @@ std = ["linear-srgb/std", "archmage/std", "magetypes/std"]
 # Uses a vendored LZ77 predictor — no external dependency.
 joint = []
 # Expose internal modules for profiling/debugging examples. Not public API.
-_dev = []
+# `archmage/testable_dispatch` lets benches/tier_isolation.rs disable the
+# baseline SIMD token (NEON on aarch64) so the scalar arm is real rather than a
+# second measurement of the SIMD path.
+_dev = ["archmage/testable_dispatch"]
 
 [[example]]
 name = "compare"
@@ -82,3 +87,8 @@ name = "calibrate_jpeg"
 
 [[example]]
 name = "calibrate_knobs"
+
+[[bench]]
+name = "tier_isolation"
+harness = false
+required-features = ["_dev"]
