@@ -84,6 +84,41 @@ pub mod _internals {
 #[doc(hidden)]
 pub mod _dev {
     pub use crate::{dither, histogram, masking, median_cut, metric, oklab, palette, remap};
+
+    /// Kernel-level access for `benches/kernel_tiers.rs`.
+    ///
+    /// NOT public API. The two SIMD kernels are `pub(crate)`; these are thin
+    /// forwarders so the bench can measure them individually without widening
+    /// their visibility. The end-to-end `tier_isolation.rs` bench cannot show
+    /// a single kernel losing to its own scalar fallback -- the faster kernel
+    /// averages it away.
+    pub mod kernels {
+        use crate::oklab::OKLab;
+        use crate::simd::PaletteSimd;
+
+        /// Wraps the `pub(crate)` SIMD palette layout.
+        pub struct Pal(PaletteSimd);
+
+        impl Pal {
+            #[must_use]
+            pub fn from_oklab(entries: &[OKLab]) -> Self {
+                Self(PaletteSimd::from_oklab_slice(entries, 0))
+            }
+
+            /// The shape every caller uses: `nearest` in a per-pixel loop
+            /// (remap.rs:55, median_cut.rs:1216, dither.rs:1816/1834,
+            /// joint.rs:1123, palette.rs:511).
+            pub fn map(&self, colors: &[OKLab], out: &mut [u8]) {
+                for (c, o) in colors.iter().zip(out.iter_mut()) {
+                    *o = self.0.nearest(*c);
+                }
+            }
+        }
+
+        pub fn batch_srgb_to_oklab(pixels: &[rgb::RGB<u8>], out: &mut [[f32; 3]]) {
+            crate::simd::batch_srgb_to_oklab(pixels, out);
+        }
+    }
 }
 
 use alloc::vec::Vec;

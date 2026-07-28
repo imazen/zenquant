@@ -206,6 +206,10 @@ pub(crate) struct PaletteSimd {
     l: Vec<[f32; 8]>,
     a: Vec<[f32; 8]>,
     b: Vec<[f32; 8]>,
+    /// Kept for the invariant it documents, not read on the hot path: unused
+    /// slots are `f32::INFINITY`-padded, so `palette_nearest_generic` cannot
+    /// select one and does not need a bounds check against this.
+    #[allow(dead_code)]
     num_entries: usize,
     start: usize, // 1 if transparent index present, else 0
 }
@@ -327,18 +331,47 @@ fn palette_nearest_dispatch_scalar(
 
 /// Generic SIMD nearest-neighbor search.
 ///
-/// Processes 8 palette entries per iteration: computes squared distances
-/// with FMA, then does a horizontal reduce to find the group minimum.
+/// Processes 8 palette entries per iteration: computes squared distances with
+/// FMA, then keeps a running per-lane minimum and its index. The horizontal
+/// reduce happens ONCE, after the loop.
+///
+/// The previous shape did a `reduce_min()` per group plus, whenever the group
+/// improved, a `to_array()` and a scalar lane scan. Both are cross-lane work
+/// inside the loop-carried dependency chain: the next group's compare could
+/// not start until this group's horizontal reduce retired, and `to_array()`
+/// spills the vector to the stack. Going vertical makes the loop body pure
+/// element-wise SIMD (sub/FMA/compare/blend) with a short dependency chain.
+/// Measured on aarch64/NEON at 1 MP: see benchmarks/palette_nearest_argmin_*.
+///
+/// BIT-IDENTICAL to the previous shape, including tie-breaking. Both return
+/// the LOWEST index among all entries achieving the minimum distance:
+///  - `simd_lt` is strict, so within a lane the earliest group wins ties, and
+///    the final scan takes the smallest packed index among tied lanes.
+///  - Unused palette slots are padded with `f32::INFINITY` by both
+///    constructors, so a padding lane's distance is `inf` and can never win.
+///    That is what made the old `idx < pal.num_entries` guard removable rather
+///    than something to reproduce.
 #[inline(always)]
 fn palette_nearest_generic<T: F32x8Convert>(token: T, pal: &PaletteSimd, color: OKLab) -> u8 {
     let ql = f32x8::splat(token, color.l);
     let qa = f32x8::splat(token, color.a);
     let qb = f32x8::splat(token, color.b);
 
-    let mut best_idx = pal.start as u8;
-    let mut best_d = f32::MAX;
+    // Per-lane running minimum and the packed index (group * 8 + lane) that
+    // produced it. Indices ride in f32: the palette is at most 256 entries, so
+    // every value is exactly representable.
+    let mut best_d = f32x8::splat(token, f32::INFINITY);
+    let mut best_i = f32x8::splat(token, f32::INFINITY);
 
-    for (gi, ((pl, pa), pb)) in pal.l.iter().zip(pal.a.iter()).zip(pal.b.iter()).enumerate() {
+    // Index vector carried as an accumulator rather than recomputed as
+    // `splat(gi * 8) + lane_ids` each group: that recompute is an integer
+    // multiply, an int->float convert and a splat per iteration, which at
+    // small palettes (pal8 is ONE group) is a large fraction of the loop body.
+    // Adding 8.0 is exact for every index a u8 palette can hold.
+    let mut idx = f32x8::from_array(token, [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
+    let eight = f32x8::splat(token, 8.0);
+
+    for ((pl, pa), pb) in pal.l.iter().zip(pal.a.iter()).zip(pal.b.iter()) {
         let pl = f32x8::load(token, pl);
         let pa = f32x8::load(token, pa);
         let pb = f32x8::load(token, pb);
@@ -349,24 +382,27 @@ fn palette_nearest_generic<T: F32x8Convert>(token: T, pal: &PaletteSimd, color: 
         let db = qb - pb;
         let dist = dl.mul_add(dl, da.mul_add(da, db * db));
 
-        let min_d = dist.reduce_min();
-        if min_d < best_d {
-            // Find which lane holds the minimum
-            let arr = dist.to_array();
-            for (lane, &d) in arr.iter().enumerate() {
-                if d == min_d {
-                    let idx = gi * 8 + lane + pal.start;
-                    if idx < pal.num_entries {
-                        best_d = d;
-                        best_idx = idx as u8;
-                    }
-                    break;
-                }
-            }
+        let improves = dist.simd_lt(best_d);
+        best_i = f32x8::blend(improves, idx, best_i);
+        best_d = f32x8::blend(improves, dist, best_d);
+        idx += eight;
+    }
+
+    // Single horizontal pass: smallest distance, and the smallest index among
+    // lanes tied at it.
+    let min_d = best_d.reduce_min();
+    let ds = best_d.to_array();
+    let is = best_i.to_array();
+    let mut best_idx = pal.start;
+    let mut best_packed = f32::INFINITY;
+    for (d, i) in ds.iter().zip(is.iter()) {
+        if *d == min_d && *i < best_packed {
+            best_packed = *i;
+            best_idx = *i as usize + pal.start;
         }
     }
 
-    best_idx
+    best_idx as u8
 }
 
 // ============================================================================

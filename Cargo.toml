@@ -29,6 +29,9 @@ enough = { version = "0.4.4", default-features = false }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+# Workspace standard for new benches (interleaved arms + paired statistics).
+# The existing criterion benches stay until ported opportunistically.
+zenbench = "0.1.7"
 rgb = "0.8.53"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 imagequant = "4"
@@ -90,5 +93,10 @@ name = "calibrate_knobs"
 
 [[bench]]
 name = "tier_isolation"
+harness = false
+required-features = ["_dev"]
+
+[[bench]]
+name = "kernel_tiers"
 harness = false
 required-features = ["_dev"]
