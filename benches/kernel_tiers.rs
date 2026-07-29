@@ -79,7 +79,7 @@ fn bench_kernels(suite: &mut Suite) {
 
     // Kernel 1: nearest-palette-entry search, over the GIF/PNG palette range.
     let colors: &'static [OKLab] = Box::leak(labs(N, 7).into_boxed_slice());
-    for &npal in &[8usize, 16, 24, 32, 48, 64, 96, 128, 192, 256] {
+    for &npal in &[8usize, 16, 24, 32, 48, 64, 96, 104, 112, 120, 128, 192, 256] {
         let pal: &'static Pal = Box::leak(Box::new(Pal::from_oklab(&labs(npal, 99))));
         suite.compare(format!("palette_nearest/1MP/pal{npal}"), |g| {
             g.throughput(Throughput::Elements(N as u64));

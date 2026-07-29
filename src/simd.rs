@@ -301,6 +301,37 @@ fn palette_nearest_dispatch_v3(token: archmage::X64V3Token, pal: &PaletteSimd, c
     palette_nearest_generic(token, pal, color)
 }
 
+/// Smallest palette at which the NEON tier is measured to BEAT the scalar tier.
+///
+/// NEON is BASELINE on aarch64, so the "scalar" tier here is autovectorized
+/// too — and for small palettes it is substantially FASTER, because this
+/// kernel's per-call setup (building the broadcast colour vectors, the running
+/// min/index state) is amortized over too few entries. Measured at 1 MP,
+/// neon vs forced scalar, `benches/kernel_tiers.rs`:
+///
+/// | entries | neon    | scalar  | ratio |
+/// |---------|---------|---------|-------|
+/// |   8     | 18.3 ms | 11.8 ms | 0.64x |
+/// |  16     | 20.8 ms | 12.0 ms | 0.58x |
+/// |  32     | 23.7 ms | 17.0 ms | 0.72x |
+/// |  64     | 29.7 ms | 26.6 ms | 0.90x |
+/// |  96     | 34.8 ms | 33.1 ms | 0.95x |
+/// | 104     | 35.8 ms | 34.8 ms | 0.97x |
+/// | 112     | 36.7 ms | 42.2 ms | 1.15x |
+/// | 128     | 39.0 ms | 50.6 ms | 1.30x |
+/// | 256     | 60.7 ms | 76.0 ms | 1.25x |
+///
+/// The crossover sits between 104 and 112, so that is where this is set. Below
+/// it the neon arm hands off to the same generic kernel with a scalar token —
+/// identical code and identical lane structure (both are `f32x8`), so the
+/// result is unchanged; only the backend differs.
+///
+/// This is aarch64-only. x86 is NOT gated, because its tier ratio has not been
+/// measured on this host and AVX2 is genuinely wider than the scalar fallback
+/// there rather than being the same baseline.
+#[cfg(target_arch = "aarch64")]
+const NEON_MIN_PALETTE_ENTRIES: usize = 112;
+
 #[cfg(target_arch = "aarch64")]
 #[archmage::arcane]
 fn palette_nearest_dispatch_neon(
@@ -308,6 +339,9 @@ fn palette_nearest_dispatch_neon(
     pal: &PaletteSimd,
     color: OKLab,
 ) -> u8 {
+    if pal.num_entries < NEON_MIN_PALETTE_ENTRIES {
+        return palette_nearest_generic(archmage::ScalarToken, pal, color);
+    }
     palette_nearest_generic(token, pal, color)
 }
 
@@ -590,6 +624,75 @@ mod tests {
                 "SIMD nearest returned transparent index for gray {v}"
             );
             assert_eq!(scalar_idx, simd_idx, "mismatch for gray {v}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tier_equality_tests {
+    use super::*;
+
+    /// The aarch64 gate hands palettes below `NEON_MIN_PALETTE_ENTRIES` to the
+    /// SAME generic kernel with a scalar token. That is only safe if the two
+    /// backends return the identical index — a different pick is a different
+    /// quantized pixel, not a rounding difference.
+    ///
+    /// Both paths are `f32x8`, so the lane structure and the order of the
+    /// distance computation are identical and only the backend differs; this
+    /// asserts that rather than assuming it, across the sizes that straddle the
+    /// gate and colours that produce near-ties (where an argmin would diverge
+    /// first if it were going to).
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn neon_and_scalar_backends_pick_the_same_palette_index() {
+        use archmage::SimdToken;
+        let Some(neon) = archmage::NeonToken::summon() else {
+            panic!("aarch64 build without a NEON token");
+        };
+
+        let mut st = 0x243F_6A88_85A3_08D3u64;
+        let mut next = move || {
+            st ^= st << 13;
+            st ^= st >> 7;
+            st ^= st << 17;
+            (st >> 40) as f32 / 16_777_216.0
+        };
+
+        for &n in &[1usize, 2, 7, 8, 9, 16, 31, 32, 64, 96, 104, 111, 112, 128, 200, 256] {
+            let entries: Vec<OKLab> = (0..n)
+                .map(|_| OKLab {
+                    l: next(),
+                    a: next() * 2.0 - 1.0,
+                    b: next() * 2.0 - 1.0,
+                })
+                .collect();
+            let pal = PaletteSimd::from_oklab_slice(&entries, 0);
+
+            for _ in 0..64 {
+                // Random probes, plus exact palette entries and midpoints —
+                // the near-tie cases where two entries are equidistant.
+                let probes = [
+                    OKLab { l: next(), a: next() * 2.0 - 1.0, b: next() * 2.0 - 1.0 },
+                    entries[(next() * n as f32) as usize % n],
+                    {
+                        let x = entries[0];
+                        let y = entries[n - 1];
+                        OKLab {
+                            l: (x.l + y.l) * 0.5,
+                            a: (x.a + y.a) * 0.5,
+                            b: (x.b + y.b) * 0.5,
+                        }
+                    },
+                ];
+                for c in probes {
+                    let via_neon = palette_nearest_generic(neon, &pal, c);
+                    let via_scalar = palette_nearest_generic(archmage::ScalarToken, &pal, c);
+                    assert_eq!(
+                        via_neon, via_scalar,
+                        "backend disagreement at n={n} for {c:?}"
+                    );
+                }
+            }
         }
     }
 }
