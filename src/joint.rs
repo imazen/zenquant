@@ -239,7 +239,6 @@ fn sym_dist(b: u8) -> u16 {
 /// Filters with left-dependency (Sub=1, Average=3, Paeth=4) use full DP:
 /// state = candidate chosen at previous pixel, cost = sym_dist of filtered byte.
 /// Filters without left-dependency (None=0, Up=2) pick per-pixel minimum.
-#[allow(clippy::too_many_arguments)]
 fn dp_row_optimize(
     width: usize,
     filter: u8,
