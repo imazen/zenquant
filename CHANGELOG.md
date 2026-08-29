@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Pushes to `main` now cancel their superseded CI runs.** `ci.yml` keyed its concurrency group on `${{ github.head_ref || github.run_id }}`. `github.head_ref` is populated only for `pull_request` events, so on a push it was empty and the group fell through to `github.run_id` — unique per run, so no two pushes ever shared a group and `cancel-in-progress` could never fire. Every push started a full matrix that ran to completion even when several commits landed seconds apart. Now keyed on `${{ github.ref }}`, which is set for both event types (`refs/heads/main` on push, `refs/pull/N/merge` on a PR), so PR cancellation is unchanged and consecutive pushes supersede each other.
+
 ### Added
 - `build_palette_with_stop`, `build_palette_rgba_with_stop`,
   `QuantizeResult::remap_with_stop` and `QuantizeResult::remap_rgba_with_stop` —
