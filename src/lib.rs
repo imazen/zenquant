@@ -1027,6 +1027,7 @@ pub fn quantize_with_stop(
             &indices,
             config.joint_deflate_effort,
             config.joint_tolerance,
+            stop,
         )
     } else {
         indices
@@ -1402,6 +1403,7 @@ pub fn quantize_rgba_with_stop(
             &indices,
             config.joint_deflate_effort,
             config.joint_tolerance,
+            stop,
         )
     } else {
         indices

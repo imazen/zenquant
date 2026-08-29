@@ -9,6 +9,13 @@
   `just api-doc` / `api-doc-check` recipes.
 
 ### Changed
+- Cooperative cancellation now reaches the `joint` feature's deflate+quantization
+  optimizer: the `stop` token passed to `quantize_with_stop` /
+  `quantize_rgba_with_stop` is polled at every scanline boundary of the row DP and
+  while building the per-pixel candidate table. Cancelling mid-pass returns valid
+  indices (already-committed rows keep their optimized values, the rest keep their
+  initial ones) rather than running to completion. No public API change — `joint`
+  is `pub(crate)`.
 - Fixed published package include list: LICENSE-AGPL3 and LICENSE-COMMERCIAL now correctly included; added CHANGELOG.md (bba2630f)
 
 ### Fixed

@@ -175,20 +175,33 @@ struct Candidates {
 /// For each pixel, finds palette entries within OKLab distance threshold.
 /// Tolerance is modulated by AQ weight: smooth areas (weight ~1.0) get tight
 /// tolerance, textured areas (weight ~0.1) get ~10x more freedom.
+///
+/// Returns `None` if `stop` fires part-way through: a partially-built candidate
+/// set is not a usable input for the DP, so the caller falls back to the
+/// unoptimized indices rather than consuming half a table.
 fn build_candidates(
     pixel_oklab: &[OKLab],
     weights: &[f32],
     palette: &Palette,
     initial_indices: &[u8],
     base_tolerance: f32,
-) -> Candidates {
+    stop: &dyn enough::Stop,
+) -> Option<Candidates> {
     let n = pixel_oklab.len();
     let mut indices = vec![[0u8; MAX_CANDIDATES]; n];
     let mut counts = vec![1u8; n];
 
     let base_tol_sq = base_tolerance * base_tolerance;
 
+    // Cooperative cancellation granularity for this single O(n) pass. Checked
+    // every CANCEL_STRIDE pixels rather than per pixel so the atomic load does
+    // not sit in the hot loop.
+    const CANCEL_STRIDE: usize = 8192;
+
     for i in 0..n {
+        if i % CANCEL_STRIDE == 0 && stop.should_stop() {
+            return None;
+        }
         let seed = initial_indices[i];
         indices[i][0] = seed;
 
@@ -221,7 +234,7 @@ fn build_candidates(
         counts[i] = count as u8;
     }
 
-    Candidates { indices, counts }
+    Some(Candidates { indices, counts })
 }
 
 // ── DP row optimization ──
@@ -611,6 +624,7 @@ pub(crate) fn optimize_rgb(
     initial_indices: &[u8],
     _deflate_effort: u32,
     base_tolerance: f32,
+    stop: &dyn enough::Stop,
 ) -> Vec<u8> {
     let pixel_oklab = crate::simd::batch_srgb_to_oklab_vec(pixels);
 
@@ -623,6 +637,7 @@ pub(crate) fn optimize_rgb(
         initial_indices,
         None,
         base_tolerance,
+        stop,
     )
 }
 
@@ -637,6 +652,7 @@ pub(crate) fn optimize_rgb_with_labs(
     initial_indices: &[u8],
     _deflate_effort: u32,
     base_tolerance: f32,
+    stop: &dyn enough::Stop,
 ) -> Vec<u8> {
     optimize_inner(
         pixel_oklab,
@@ -647,6 +663,7 @@ pub(crate) fn optimize_rgb_with_labs(
         initial_indices,
         None,
         base_tolerance,
+        stop,
     )
 }
 
@@ -661,6 +678,7 @@ pub(crate) fn optimize_rgba_with_labs(
     initial_indices: &[u8],
     _deflate_effort: u32,
     base_tolerance: f32,
+    stop: &dyn enough::Stop,
 ) -> Vec<u8> {
     let transparent_index = palette.transparent_index();
 
@@ -673,6 +691,7 @@ pub(crate) fn optimize_rgba_with_labs(
         initial_indices,
         transparent_index,
         base_tolerance,
+        stop,
     )
 }
 
@@ -694,20 +713,25 @@ fn optimize_inner(
     initial_indices: &[u8],
     transparent_index: Option<u8>,
     base_tolerance: f32,
+    stop: &dyn enough::Stop,
 ) -> Vec<u8> {
     let n_colors = palette.len();
     let bit_depth = select_bit_depth(n_colors);
     let row_bytes = packed_row_bytes(width, bit_depth);
     let filtered_row_size = row_bytes + 1;
 
-    // Build candidate sets
-    let mut candidates = build_candidates(
+    // Build candidate sets. Cancelling here yields the unoptimized indices,
+    // which are already a valid image — this pass only ever trades bytes.
+    let Some(mut candidates) = build_candidates(
         pixel_oklab,
         weights,
         palette,
         initial_indices,
         base_tolerance,
-    );
+        stop,
+    ) else {
+        return initial_indices.to_vec();
+    };
 
     // Pin transparent pixels to their index
     if let Some(ti) = transparent_index {
@@ -755,6 +779,14 @@ fn optimize_inner(
     let mut pending: Option<Pending> = None;
 
     for y in 0..height {
+        // Cooperative cancellation at the scanline boundary — never inside the
+        // per-pixel DP. Rows already committed keep their optimized indices;
+        // the rest keep their initial ones, and the pending-row resolve below
+        // still runs, so the returned indices are always a complete, valid image.
+        if stop.should_stop() {
+            break;
+        }
+
         // Compact predictor buffer to bound memory (keeps last 32KB window).
         // Skip when pending snapshots exist — they reference data that compact
         // would trim, causing restore() to produce inconsistent state.
@@ -1123,11 +1155,111 @@ mod tests {
             })
             .collect();
 
-        let opt_indices = optimize_rgb(&pixels, width, height, &weights, &pal, &indices, 7, 0.01);
+        let opt_indices = optimize_rgb(
+            &pixels,
+            width,
+            height,
+            &weights,
+            &pal,
+            &indices,
+            7,
+            0.01,
+            &enough::Unstoppable,
+        );
 
         assert_eq!(opt_indices.len(), width * height);
         for &idx in &opt_indices {
             assert!((idx as usize) < pal.len(), "invalid index {idx}");
         }
+
+        // An already-stopped token must short-circuit to the unoptimized
+        // indices — never a half-built candidate table.
+        let cancelled = optimize_rgb(
+            &pixels,
+            width,
+            height,
+            &weights,
+            &pal,
+            &indices,
+            7,
+            0.01,
+            &AlwaysStop,
+        );
+        assert_eq!(
+            cancelled, indices,
+            "a stopped joint optimize must return the unoptimized indices unchanged"
+        );
+    }
+
+    /// A [`enough::Stop`] that is already cancelled.
+    struct AlwaysStop;
+
+    impl enough::Stop for AlwaysStop {
+        fn check(&self) -> Result<(), enough::StopReason> {
+            Err(enough::StopReason::Cancelled)
+        }
+    }
+
+    /// A [`enough::Stop`] that never stops but records how often it was polled.
+    struct CountingStop(core::sync::atomic::AtomicUsize);
+
+    impl enough::Stop for CountingStop {
+        fn check(&self) -> Result<(), enough::StopReason> {
+            self.0.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    /// The joint optimizer must poll `stop` at every scanline boundary *and*
+    /// while building the per-pixel candidate table. Counting the polls pins
+    /// both check sites: dropping either one takes the count below the bound.
+    #[test]
+    fn joint_polls_stop_per_scanline_and_while_building_candidates() {
+        // 8x16 keeps the row loop long enough that a per-row poll dominates.
+        let (width, height) = (8usize, 16usize);
+        let mut pixels = Vec::with_capacity(width * height);
+        for y in 0..height {
+            for x in 0..width {
+                pixels.push(rgb::RGB::new(
+                    (x * 31) as u8,
+                    (y * 15) as u8,
+                    ((x + y) * 7) as u8,
+                ));
+            }
+        }
+        let weights = vec![1.0f32; width * height];
+
+        let centroids: Vec<OKLab> = [
+            rgb::RGB::new(255u8, 0, 0),
+            rgb::RGB::new(0, 255, 0),
+            rgb::RGB::new(0, 0, 255),
+            rgb::RGB::new(255, 255, 0),
+        ]
+        .iter()
+        .map(|c| crate::oklab::srgb_to_oklab(c.r, c.g, c.b))
+        .collect();
+        let pal = Palette::from_centroids_sorted(
+            centroids,
+            false,
+            crate::palette::PaletteSortStrategy::Luminance,
+        );
+        let indices: Vec<u8> = pixels
+            .iter()
+            .map(|p| pal.nearest(crate::oklab::srgb_to_oklab(p.r, p.g, p.b)))
+            .collect();
+
+        let stop = CountingStop(core::sync::atomic::AtomicUsize::new(0));
+        let out = optimize_rgb(
+            &pixels, width, height, &weights, &pal, &indices, 7, 0.01, &stop,
+        );
+        assert_eq!(out.len(), width * height);
+
+        // 1 poll for the (single-stride) candidate pass + 1 per scanline.
+        let polls = stop.0.load(core::sync::atomic::Ordering::Relaxed);
+        assert!(
+            polls >= height + 1,
+            "expected at least {} stop polls (1 candidate-pass + {height} scanlines), got {polls}",
+            height + 1
+        );
     }
 }
