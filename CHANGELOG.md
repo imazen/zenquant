@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Added
+- `build_palette_with_stop`, `build_palette_rgba_with_stop`,
+  `QuantizeResult::remap_with_stop` and `QuantizeResult::remap_rgba_with_stop` —
+  the remaining entry points that run k-means refinement and per-scanline
+  Viterbi/run-extension work now accept an `enough::Stop` token, matching
+  `quantize_with_stop`/`quantize_rgba_with_stop`. Purely additive; the existing
+  no-token functions delegate with `enough::Unstoppable`.
 - Versioned public-API surface snapshot at `docs/public-api/zenquant.txt`,
   regenerated on every `cargo test` by `tests/public_api_doc.rs`
   (`ZEN_API_DOC=check` verifies in CI's clippy job, `=off` skips elsewhere);

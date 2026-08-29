@@ -607,7 +607,30 @@ impl QuantizeResult {
         height: usize,
         config: &QuantizeConfig,
     ) -> Result<QuantizeResult, QuantizeError> {
-        remap_rgb_impl(&self.palette, pixels, width, height, config, None)
+        remap_rgb_impl(
+            &self.palette,
+            pixels,
+            width,
+            height,
+            config,
+            None,
+            &enough::Unstoppable,
+        )
+    }
+
+    /// Same as [`remap`](Self::remap) but takes a [`stop`](enough::Stop) token,
+    /// polled at each scanline boundary of the Viterbi / run-extension refine.
+    /// Cancelling leaves the rows already refined in place and returns the
+    /// remaining ones as dithered — always a complete, valid index buffer.
+    pub fn remap_with_stop(
+        &self,
+        pixels: &[rgb::RGB<u8>],
+        width: usize,
+        height: usize,
+        config: &QuantizeConfig,
+        stop: &dyn enough::Stop,
+    ) -> Result<QuantizeResult, QuantizeError> {
+        remap_rgb_impl(&self.palette, pixels, width, height, config, None, stop)
     }
 
     /// Remap an RGBA image against this result's palette.
@@ -642,7 +665,29 @@ impl QuantizeResult {
         height: usize,
         config: &QuantizeConfig,
     ) -> Result<QuantizeResult, QuantizeError> {
-        remap_rgba_impl(&self.palette, pixels, width, height, config, None)
+        remap_rgba_impl(
+            &self.palette,
+            pixels,
+            width,
+            height,
+            config,
+            None,
+            &enough::Unstoppable,
+        )
+    }
+
+    /// Same as [`remap_rgba`](Self::remap_rgba) but takes a
+    /// [`stop`](enough::Stop) token. See [`remap_with_stop`](Self::remap_with_stop)
+    /// for the cancellation semantics.
+    pub fn remap_rgba_with_stop(
+        &self,
+        pixels: &[rgb::RGBA<u8>],
+        width: usize,
+        height: usize,
+        config: &QuantizeConfig,
+        stop: &dyn enough::Stop,
+    ) -> Result<QuantizeResult, QuantizeError> {
+        remap_rgba_impl(&self.palette, pixels, width, height, config, None, stop)
     }
 
     /// Remap with temporal clamping. Pixels whose undithered nearest palette
@@ -671,6 +716,7 @@ impl QuantizeResult {
             height,
             config,
             Some(prev_indices),
+            &enough::Unstoppable,
         )
     }
 
@@ -692,6 +738,7 @@ impl QuantizeResult {
             height,
             config,
             Some(prev_indices),
+            &enough::Unstoppable,
         )
     }
 }
@@ -1448,6 +1495,18 @@ pub fn build_palette(
     frames: &[ImgRef<'_, rgb::RGB<u8>>],
     config: &QuantizeConfig,
 ) -> Result<QuantizeResult, QuantizeError> {
+    build_palette_with_stop(frames, config, &enough::Unstoppable)
+}
+
+/// Same as [`build_palette`] but takes a [`stop`](enough::Stop) token: when it
+/// fires, the k-means refinement returns the centroids it has converged so far
+/// and palette construction finishes on those, so the call still yields a usable
+/// shared palette instead of running every iteration to completion.
+pub fn build_palette_with_stop(
+    frames: &[ImgRef<'_, rgb::RGB<u8>>],
+    config: &QuantizeConfig,
+    stop: &dyn enough::Stop,
+) -> Result<QuantizeResult, QuantizeError> {
     if frames.is_empty() {
         return Err(QuantizeError::ZeroDimension);
     }
@@ -1540,7 +1599,7 @@ pub fn build_palette(
             &all_weights,
             kmeans_iters,
             config.kmeans_sample_cap,
-            &enough::Unstoppable,
+            stop,
         );
     }
 
@@ -1583,6 +1642,16 @@ pub fn build_palette(
 pub fn build_palette_rgba(
     frames: &[ImgRef<'_, rgb::RGBA<u8>>],
     config: &QuantizeConfig,
+) -> Result<QuantizeResult, QuantizeError> {
+    build_palette_rgba_with_stop(frames, config, &enough::Unstoppable)
+}
+
+/// Same as [`build_palette_rgba`] but takes a [`stop`](enough::Stop) token. See
+/// [`build_palette_with_stop`] for the cancellation semantics.
+pub fn build_palette_rgba_with_stop(
+    frames: &[ImgRef<'_, rgb::RGBA<u8>>],
+    config: &QuantizeConfig,
+    stop: &dyn enough::Stop,
 ) -> Result<QuantizeResult, QuantizeError> {
     if frames.is_empty() {
         return Err(QuantizeError::ZeroDimension);
@@ -1702,7 +1771,7 @@ pub fn build_palette_rgba(
                 &all_weights,
                 kmeans_iters,
                 config.kmeans_sample_cap,
-                &enough::Unstoppable,
+                stop,
             );
         }
 
@@ -1729,7 +1798,7 @@ pub fn build_palette_rgba(
                 &all_weights,
                 kmeans_iters,
                 config.kmeans_sample_cap,
-                &enough::Unstoppable,
+                stop,
             );
         }
 
@@ -1757,6 +1826,7 @@ fn remap_rgb_impl(
     height: usize,
     config: &QuantizeConfig,
     prev_indices: Option<&[u8]>,
+    stop: &dyn enough::Stop,
 ) -> Result<QuantizeResult, QuantizeError> {
     if width == 0 || height == 0 {
         return Err(QuantizeError::ZeroDimension);
@@ -1868,7 +1938,7 @@ fn remap_rgb_impl(
                 &pal,
                 &mut indices,
                 run_lambda,
-                &enough::Unstoppable,
+                stop,
             );
         } else {
             remap::run_extend_refine_with_labs(
@@ -1879,7 +1949,7 @@ fn remap_rgb_impl(
                 &pal,
                 &mut indices,
                 run_lambda,
-                &enough::Unstoppable,
+                stop,
             );
         }
     }
@@ -1933,6 +2003,7 @@ fn remap_rgba_impl(
     height: usize,
     config: &QuantizeConfig,
     prev_indices: Option<&[u8]>,
+    stop: &dyn enough::Stop,
 ) -> Result<QuantizeResult, QuantizeError> {
     if width == 0 || height == 0 {
         return Err(QuantizeError::ZeroDimension);
@@ -2056,7 +2127,7 @@ fn remap_rgba_impl(
                 &pal,
                 &mut indices,
                 run_lambda,
-                &enough::Unstoppable,
+                stop,
             );
         } else {
             remap::run_extend_refine_rgba_with_labs(
@@ -2068,7 +2139,7 @@ fn remap_rgba_impl(
                 &pal,
                 &mut indices,
                 run_lambda,
-                &enough::Unstoppable,
+                stop,
             );
         }
     }
@@ -2238,6 +2309,129 @@ fn check_pixel_cap(pixels: usize, config: &QuantizeConfig) -> Result<(), Quantiz
         return Err(QuantizeError::TooManyPixels { pixels, max });
     }
     Ok(())
+}
+
+/// Each `*_with_stop` entry point must actually hand its token to the long loops
+/// underneath. Counting polls is what pins that: if the entry point forwards
+/// `Unstoppable` instead of the caller's token, the count stays zero.
+#[cfg(test)]
+mod with_stop_entry_point_tests {
+    use super::*;
+
+    struct CountingStop(core::sync::atomic::AtomicUsize);
+
+    impl CountingStop {
+        fn new() -> Self {
+            Self(core::sync::atomic::AtomicUsize::new(0))
+        }
+        fn polls(&self) -> usize {
+            self.0.load(core::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    impl enough::Stop for CountingStop {
+        fn check(&self) -> Result<(), enough::StopReason> {
+            self.0.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    /// A gradient with far more unique colors than the palette, so the
+    /// exact-palette fast path (which skips k-means entirely) cannot trigger.
+    fn gradient_rgb(width: usize, height: usize) -> Vec<rgb::RGB<u8>> {
+        let mut px = Vec::with_capacity(width * height);
+        for y in 0..height {
+            for x in 0..width {
+                px.push(rgb::RGB::new(
+                    (x * 255 / width) as u8,
+                    (y * 255 / height) as u8,
+                    ((x + y) * 255 / (width + height)) as u8,
+                ));
+            }
+        }
+        px
+    }
+
+    fn gradient_rgba(width: usize, height: usize) -> Vec<rgb::RGBA<u8>> {
+        gradient_rgb(width, height)
+            .into_iter()
+            .map(|p| rgb::RGBA::new(p.r, p.g, p.b, 255))
+            .collect()
+    }
+
+    fn refine_config(format: OutputFormat) -> QuantizeConfig {
+        QuantizeConfig::new(format)
+            .with_quality(Quality::Best)
+            .with_max_colors(8)
+    }
+
+    #[test]
+    fn build_palette_with_stop_forwards_the_token() {
+        let (w, h) = (32usize, 32usize);
+        let px = gradient_rgb(w, h);
+        let frame = ImgRef::new(&px, w, h);
+        let cfg = refine_config(OutputFormat::Png);
+
+        let stop = CountingStop::new();
+        build_palette_with_stop(&[frame], &cfg, &stop).expect("build_palette must succeed");
+        assert!(
+            stop.polls() > 0,
+            "build_palette_with_stop must hand its token to the k-means refine"
+        );
+    }
+
+    #[test]
+    fn build_palette_rgba_with_stop_forwards_the_token() {
+        let (w, h) = (32usize, 32usize);
+        let px = gradient_rgba(w, h);
+        let frame = ImgRef::new(&px, w, h);
+        let cfg = refine_config(OutputFormat::Gif);
+
+        let stop = CountingStop::new();
+        build_palette_rgba_with_stop(&[frame], &cfg, &stop)
+            .expect("build_palette_rgba must succeed");
+        assert!(
+            stop.polls() > 0,
+            "build_palette_rgba_with_stop must hand its token to the k-means refine"
+        );
+    }
+
+    #[test]
+    fn remap_with_stop_forwards_the_token() {
+        let (w, h) = (32usize, 32usize);
+        let px = gradient_rgb(w, h);
+        // Compression run-priority gives a non-zero Viterbi lambda; with the
+        // default Quality priority lambda is 0 and the scanline refine is
+        // skipped entirely, so there would be nothing to poll.
+        let cfg = refine_config(OutputFormat::Png)._with_run_priority_compression();
+        let shared = quantize(&px, w, h, &cfg).expect("quantize must succeed");
+
+        let stop = CountingStop::new();
+        shared
+            .remap_with_stop(&px, w, h, &cfg, &stop)
+            .expect("remap must succeed");
+        assert!(
+            stop.polls() > 0,
+            "remap_with_stop must hand its token to the scanline refine"
+        );
+    }
+
+    #[test]
+    fn remap_rgba_with_stop_forwards_the_token() {
+        let (w, h) = (32usize, 32usize);
+        let px = gradient_rgba(w, h);
+        let cfg = refine_config(OutputFormat::Gif)._with_run_priority_compression();
+        let shared = quantize_rgba(&px, w, h, &cfg).expect("quantize_rgba must succeed");
+
+        let stop = CountingStop::new();
+        shared
+            .remap_rgba_with_stop(&px, w, h, &cfg, &stop)
+            .expect("remap_rgba must succeed");
+        assert!(
+            stop.polls() > 0,
+            "remap_rgba_with_stop must hand its token to the scanline refine"
+        );
+    }
 }
 
 #[cfg(test)]

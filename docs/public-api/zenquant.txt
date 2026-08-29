@@ -6,25 +6,25 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: zenquant.txt 86 lines (supported surface) | zenquant.features.txt 0 added (features: joint,std) | zenquant.internal.txt 224 lines (133 hidden + 245 excluded-feature)
+# files: zenquant.txt 94 lines (supported surface) | zenquant.features.txt 0 added (features: joint,std) | zenquant.internal.txt 229 lines (146 hidden + 245 excluded-feature)
 
 ## summary
 #
 #   pub modules                                 2
 #   pub types (struct/enum/trait/alias)         6
-#   free functions                              4
-#   inherent methods                           20
+#   free functions                              8
+#   inherent methods                           22
 #   struct fields                              22
-#   enum variants                              22
+#   enum variants                              24
 #   re-exports                                  5
 #   trait roster entries (type × trait)        20
 #   auto-trait-complete types                   5
 #
 # per-module pub lines:
-#   (root)                           62
-#   error                            19
+#   (root)                           69
+#   error                            20
 
-## items (80 lines)
+## items (88 lines)
 
 pub mod zenquant
 pub use Img
@@ -33,6 +33,7 @@ pub use ImgVec
 pub use RGB
 pub use RGBA
 pub mod error
+pub error::QuantizeError::Cancelled(enough::reason::StopReason)
 pub error::QuantizeError::DimensionMismatch
 pub error::QuantizeError::DimensionMismatch::height: usize
 pub error::QuantizeError::DimensionMismatch::len: usize
@@ -62,6 +63,7 @@ pub Quality::Balanced
 pub Quality::Best
 pub Quality::Fast
 #[non_exhaustive] pub enum QuantizeError [also: error]
+pub QuantizeError::Cancelled(enough::reason::StopReason)
 pub QuantizeError::DimensionMismatch
 pub QuantizeError::DimensionMismatch::height: usize
 pub QuantizeError::DimensionMismatch::len: usize
@@ -100,12 +102,18 @@ pub fn QuantizeResult::palette_len(&self) -> usize
 pub fn QuantizeResult::palette_rgba(&self) -> &[[u8; 4]]
 pub fn QuantizeResult::remap(&self, &[rgb::formats::rgb::Rgb<u8>], usize, usize, &QuantizeConfig) -> core::result::Result<QuantizeResult, error::QuantizeError>
 pub fn QuantizeResult::remap_rgba(&self, &[rgb::formats::rgba::Rgba<u8>], usize, usize, &QuantizeConfig) -> core::result::Result<QuantizeResult, error::QuantizeError>
+pub fn QuantizeResult::remap_rgba_with_stop(&self, &[rgb::formats::rgba::Rgba<u8>], usize, usize, &QuantizeConfig, &dyn enough::Stop) -> core::result::Result<QuantizeResult, error::QuantizeError>
+pub fn QuantizeResult::remap_with_stop(&self, &[rgb::formats::rgb::Rgb<u8>], usize, usize, &QuantizeConfig, &dyn enough::Stop) -> core::result::Result<QuantizeResult, error::QuantizeError>
 pub fn QuantizeResult::ssimulacra2_estimate(&self) -> core::option::Option<f32>
 pub fn QuantizeResult::transparent_index(&self) -> core::option::Option<u8>
 pub fn build_palette(&[imgref::ImgRef<'_, rgb::formats::rgb::Rgb<u8>>], &QuantizeConfig) -> core::result::Result<QuantizeResult, error::QuantizeError>
 pub fn build_palette_rgba(&[imgref::ImgRef<'_, rgb::formats::rgba::Rgba<u8>>], &QuantizeConfig) -> core::result::Result<QuantizeResult, error::QuantizeError>
+pub fn build_palette_rgba_with_stop(&[imgref::ImgRef<'_, rgb::formats::rgba::Rgba<u8>>], &QuantizeConfig, &dyn enough::Stop) -> core::result::Result<QuantizeResult, error::QuantizeError>
+pub fn build_palette_with_stop(&[imgref::ImgRef<'_, rgb::formats::rgb::Rgb<u8>>], &QuantizeConfig, &dyn enough::Stop) -> core::result::Result<QuantizeResult, error::QuantizeError>
 pub fn quantize(&[rgb::formats::rgb::Rgb<u8>], usize, usize, &QuantizeConfig) -> core::result::Result<QuantizeResult, error::QuantizeError>
 pub fn quantize_rgba(&[rgb::formats::rgba::Rgba<u8>], usize, usize, &QuantizeConfig) -> core::result::Result<QuantizeResult, error::QuantizeError>
+pub fn quantize_rgba_with_stop(&[rgb::formats::rgba::Rgba<u8>], usize, usize, &QuantizeConfig, &dyn enough::Stop) -> core::result::Result<QuantizeResult, error::QuantizeError>
+pub fn quantize_with_stop(&[rgb::formats::rgb::Rgb<u8>], usize, usize, &QuantizeConfig, &dyn enough::Stop) -> core::result::Result<QuantizeResult, error::QuantizeError>
 
 ## trait impls (5 types)
 

@@ -9,19 +9,19 @@
 
 ## summary
 #
-#   pub modules                                18
-#   pub types (struct/enum/trait/alias)        23
+#   pub modules                                19
+#   pub types (struct/enum/trait/alias)        24
 #   pub consts/statics                          3
-#   free functions                             64
-#   inherent methods                           65
+#   free functions                             65
+#   inherent methods                           67
 #   struct fields                              56
 #   enum variants                              31
 #   trait roster entries (type × trait)        36
-#   auto-trait-complete types                  10
+#   auto-trait-complete types                  11
 #
 # per-module pub lines:
 #   (root)                           29
-#   _dev                             83
+#   _dev                             88
 #   _internals                       24
 #   dither                           25
 #   histogram                        12
@@ -32,7 +32,7 @@
 #   palette                          28
 #   remap                            14
 
-## items (212 lines)
+## items (217 lines)
 
 pub const fn oklab::OKLab::new(f32, f32, f32) -> Self
 pub const fn oklab::OKLab::with_alpha(self, f32) -> oklab::OKLabA
@@ -56,6 +56,9 @@ pub fn QuantizeConfig::_with_sierra_lite_dither(self) -> Self
 pub fn QuantizeConfig::_with_viterbi_lambda(self, f32) -> Self
 pub fn QuantizeResult::remap_rgba_with_prev(&self, &[rgb::formats::rgba::Rgba<u8>], usize, usize, &QuantizeConfig, &[u8]) -> core::result::Result<QuantizeResult, error::QuantizeError>
 pub fn QuantizeResult::remap_with_prev(&self, &[rgb::formats::rgb::Rgb<u8>], usize, usize, &QuantizeConfig, &[u8]) -> core::result::Result<QuantizeResult, error::QuantizeError>
+pub fn _dev::kernels::Pal::from_oklab(&[oklab::OKLab]) -> Self
+pub fn _dev::kernels::Pal::map(&self, &[oklab::OKLab], &mut [u8])
+pub fn _dev::kernels::batch_srgb_to_oklab(&[rgb::formats::rgb::Rgb<u8>], &mut [[f32; 3]])
 pub fn dither::DitherMode::clone(&self) -> dither::DitherMode
 pub fn dither::DitherMode::eq(&self, &dither::DitherMode) -> bool
 pub fn dither::DitherMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -75,11 +78,11 @@ pub fn masking::compute_masking_weights_from_labs(&[oklab::OKLab], usize, usize)
 pub fn masking::compute_masking_weights_rgba(&[rgb::formats::rgba::Rgba<u8>], usize, usize) -> alloc::vec::Vec<f32> [also: _dev::masking]
 pub fn median_cut::farthest_point_quantize(alloc::vec::Vec<(oklab::OKLab, f32)>, usize) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
 pub fn median_cut::farthest_point_seed(&[(oklab::OKLab, f32)], usize) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
-pub fn median_cut::refine_against_pixels(alloc::vec::Vec<oklab::OKLab>, &[rgb::formats::rgb::Rgb<u8>], &[f32], usize, usize) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
-pub fn median_cut::refine_against_pixels_alpha(alloc::vec::Vec<oklab::OKLabA>, &[rgb::formats::rgba::Rgba<u8>], &[f32], usize, usize) -> alloc::vec::Vec<oklab::OKLabA> [also: _dev::median_cut]
-pub fn median_cut::refine_against_pixels_from_labs(alloc::vec::Vec<oklab::OKLab>, &[rgb::formats::rgb::Rgb<u8>], &[oklab::OKLab], &[f32], usize, usize) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
-pub fn median_cut::refine_against_pixels_rgba(alloc::vec::Vec<oklab::OKLab>, &[rgb::formats::rgba::Rgba<u8>], &[f32], usize, usize) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
-pub fn median_cut::refine_against_pixels_rgba_from_labs(alloc::vec::Vec<oklab::OKLab>, &[rgb::formats::rgba::Rgba<u8>], &[oklab::OKLab], &[f32], usize, usize) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
+pub fn median_cut::refine_against_pixels(alloc::vec::Vec<oklab::OKLab>, &[rgb::formats::rgb::Rgb<u8>], &[f32], usize, usize, &dyn enough::Stop) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
+pub fn median_cut::refine_against_pixels_alpha(alloc::vec::Vec<oklab::OKLabA>, &[rgb::formats::rgba::Rgba<u8>], &[f32], usize, usize, &dyn enough::Stop) -> alloc::vec::Vec<oklab::OKLabA> [also: _dev::median_cut]
+pub fn median_cut::refine_against_pixels_from_labs(alloc::vec::Vec<oklab::OKLab>, &[rgb::formats::rgb::Rgb<u8>], &[oklab::OKLab], &[f32], usize, usize, &dyn enough::Stop) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
+pub fn median_cut::refine_against_pixels_rgba(alloc::vec::Vec<oklab::OKLab>, &[rgb::formats::rgba::Rgba<u8>], &[f32], usize, usize, &dyn enough::Stop) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
+pub fn median_cut::refine_against_pixels_rgba_from_labs(alloc::vec::Vec<oklab::OKLab>, &[rgb::formats::rgba::Rgba<u8>], &[oklab::OKLab], &[f32], usize, usize, &dyn enough::Stop) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
 pub fn median_cut::wu_quantize(alloc::vec::Vec<(oklab::OKLab, f32)>, usize, bool) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
 pub fn median_cut::wu_quantize_alpha(alloc::vec::Vec<(oklab::OKLabA, f32)>, usize, bool) -> alloc::vec::Vec<oklab::OKLabA> [also: _dev::median_cut]
 pub fn metric::MpeAccumulator::accumulate(&mut self, usize, oklab::OKLab, oklab::OKLab, f32)
@@ -130,13 +133,14 @@ pub fn remap::RunPriority::eq(&self, &remap::RunPriority) -> bool
 pub fn remap::RunPriority::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub fn remap::average_run_length(&[u8]) -> f32 [also: _dev::remap, _internals]
 pub fn remap::count_runs(&[u8]) -> usize [also: _dev::remap]
-pub fn remap::run_extend_refine_rgba_with_labs(&[rgb::formats::rgba::Rgba<u8>], &[oklab::OKLab], usize, usize, &[f32], &palette::Palette, &mut [u8], f32) [also: _dev::remap]
-pub fn remap::run_extend_refine_with_labs(&[oklab::OKLab], usize, usize, &[f32], &palette::Palette, &mut [u8], f32) [also: _dev::remap]
-pub fn remap::viterbi_refine_rgba_with_labs(&[rgb::formats::rgba::Rgba<u8>], &[oklab::OKLab], usize, usize, &[f32], &palette::Palette, &mut [u8], f32) [also: _dev::remap]
-pub fn remap::viterbi_refine_with_labs(&[rgb::formats::rgb::Rgb<u8>], &[oklab::OKLab], usize, usize, &[f32], &palette::Palette, &mut [u8], f32) [also: _dev::remap]
+pub fn remap::run_extend_refine_rgba_with_labs(&[rgb::formats::rgba::Rgba<u8>], &[oklab::OKLab], usize, usize, &[f32], &palette::Palette, &mut [u8], f32, &dyn enough::Stop) [also: _dev::remap]
+pub fn remap::run_extend_refine_with_labs(&[oklab::OKLab], usize, usize, &[f32], &palette::Palette, &mut [u8], f32, &dyn enough::Stop) [also: _dev::remap]
+pub fn remap::viterbi_refine_rgba_with_labs(&[rgb::formats::rgba::Rgba<u8>], &[oklab::OKLab], usize, usize, &[f32], &palette::Palette, &mut [u8], f32, &dyn enough::Stop) [also: _dev::remap]
+pub fn remap::viterbi_refine_with_labs(&[rgb::formats::rgb::Rgb<u8>], &[oklab::OKLab], usize, usize, &[f32], &palette::Palette, &mut [u8], f32, &dyn enough::Stop) [also: _dev::remap]
 pub mod _dev
 pub mod _dev::dither
 pub mod _dev::histogram
+pub mod _dev::kernels
 pub mod _dev::masking
 pub mod _dev::median_cut
 pub mod _dev::metric
@@ -152,6 +156,7 @@ pub mod metric
 pub mod oklab
 pub mod palette
 pub mod remap
+pub struct _dev::kernels::Pal(_)
 pub struct dither::DitherParams<'a> [also: _dev::dither]
 pub struct histogram::HistEntry [also: _dev::histogram]
 pub struct metric::MpeAccumulator [also: _dev::metric]
@@ -263,4 +268,4 @@ remap::RunPriority: Clone, Copy, Debug, PartialEq, TrivialClone
 
 ## auto traits
 
-10 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+11 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
