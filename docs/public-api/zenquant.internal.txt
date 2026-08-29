@@ -76,15 +76,15 @@ pub fn histogram::build_histogram_rgba(&[rgb::formats::rgba::Rgba<u8>], &[f32]) 
 pub fn masking::compute_masking_weights(&[rgb::formats::rgb::Rgb<u8>], usize, usize) -> alloc::vec::Vec<f32> [also: _dev::masking, _internals]
 pub fn masking::compute_masking_weights_from_labs(&[oklab::OKLab], usize, usize) -> alloc::vec::Vec<f32> [also: _dev::masking]
 pub fn masking::compute_masking_weights_rgba(&[rgb::formats::rgba::Rgba<u8>], usize, usize) -> alloc::vec::Vec<f32> [also: _dev::masking]
-pub fn median_cut::farthest_point_quantize(alloc::vec::Vec<(oklab::OKLab, f32)>, usize) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
-pub fn median_cut::farthest_point_seed(&[(oklab::OKLab, f32)], usize) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
+pub fn median_cut::farthest_point_quantize(alloc::vec::Vec<(oklab::OKLab, f32)>, usize, &dyn enough::Stop) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
+pub fn median_cut::farthest_point_seed(&[(oklab::OKLab, f32)], usize, &dyn enough::Stop) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
 pub fn median_cut::refine_against_pixels(alloc::vec::Vec<oklab::OKLab>, &[rgb::formats::rgb::Rgb<u8>], &[f32], usize, usize, &dyn enough::Stop) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
 pub fn median_cut::refine_against_pixels_alpha(alloc::vec::Vec<oklab::OKLabA>, &[rgb::formats::rgba::Rgba<u8>], &[f32], usize, usize, &dyn enough::Stop) -> alloc::vec::Vec<oklab::OKLabA> [also: _dev::median_cut]
 pub fn median_cut::refine_against_pixels_from_labs(alloc::vec::Vec<oklab::OKLab>, &[rgb::formats::rgb::Rgb<u8>], &[oklab::OKLab], &[f32], usize, usize, &dyn enough::Stop) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
 pub fn median_cut::refine_against_pixels_rgba(alloc::vec::Vec<oklab::OKLab>, &[rgb::formats::rgba::Rgba<u8>], &[f32], usize, usize, &dyn enough::Stop) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
 pub fn median_cut::refine_against_pixels_rgba_from_labs(alloc::vec::Vec<oklab::OKLab>, &[rgb::formats::rgba::Rgba<u8>], &[oklab::OKLab], &[f32], usize, usize, &dyn enough::Stop) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
 pub fn median_cut::wu_quantize(alloc::vec::Vec<(oklab::OKLab, f32)>, usize, bool) -> alloc::vec::Vec<oklab::OKLab> [also: _dev::median_cut]
-pub fn median_cut::wu_quantize_alpha(alloc::vec::Vec<(oklab::OKLabA, f32)>, usize, bool) -> alloc::vec::Vec<oklab::OKLabA> [also: _dev::median_cut]
+pub fn median_cut::wu_quantize_alpha(alloc::vec::Vec<(oklab::OKLabA, f32)>, usize, bool, &dyn enough::Stop) -> alloc::vec::Vec<oklab::OKLabA> [also: _dev::median_cut]
 pub fn metric::MpeAccumulator::accumulate(&mut self, usize, oklab::OKLab, oklab::OKLab, f32)
 pub fn metric::MpeAccumulator::finalize(self) -> metric::MpeResult
 pub fn metric::MpeAccumulator::new(usize, usize) -> Self

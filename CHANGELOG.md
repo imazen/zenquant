@@ -23,6 +23,12 @@
   concatenated into one buffer. The cap is now checked from the declared
   dimensions before the buffer-length check, so an over-cap request reports
   `TooManyPixels` rather than `DimensionMismatch`.
+- Cooperative cancellation now also reaches the palette *seeding* and
+  histogram-level k-means: the farthest-point seed loop, `kmeans_refine`,
+  `wu_quantize_alpha`'s box-split loop and `kmeans_refine_alpha`. These run up to
+  32 iterations over the whole histogram with an O(k) nearest search per entry,
+  and previously ignored the `stop` token entirely. Cancelling yields the
+  centroids seeded/converged so far — a short palette is still a valid palette.
 - Cooperative cancellation now reaches the RGBA and full-alpha k-means refine
   loops (`refine_against_pixels_rgba`, `refine_against_pixels_rgba_from_labs`,
   `refine_against_pixels_alpha`), which previously ran all their iterations

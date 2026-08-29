@@ -174,7 +174,7 @@ pub fn median_cut(histogram: Vec<(OKLab, f32)>, max_colors: usize, refine: bool)
     if refine {
         // Collect all histogram entries for refinement
         let all_entries: Vec<(OKLab, f32)> = boxes.into_iter().flat_map(|b| b.entries).collect();
-        palette = kmeans_refine(palette, &all_entries);
+        palette = kmeans_refine(palette, &all_entries, &enough::Unstoppable);
     }
 
     palette
@@ -182,13 +182,22 @@ pub fn median_cut(histogram: Vec<(OKLab, f32)>, max_colors: usize, refine: bool)
 
 /// Weighted k-means refinement with convergence checking.
 /// Runs up to 32 iterations, stops early if centroids stabilize.
-fn kmeans_refine(mut centroids: Vec<OKLab>, entries: &[(OKLab, f32)]) -> Vec<OKLab> {
+fn kmeans_refine(
+    mut centroids: Vec<OKLab>,
+    entries: &[(OKLab, f32)],
+    stop: &dyn enough::Stop,
+) -> Vec<OKLab> {
     const MAX_ITERS: usize = 32;
     const CONVERGENCE_THRESHOLD: f32 = 1e-6; // max centroid movement² to stop
 
     let k = centroids.len();
 
     for _ in 0..MAX_ITERS {
+        // Cooperative cancellation at the iteration boundary — never in the
+        // per-entry inner loop. Returns the centroids converged so far.
+        if stop.should_stop() {
+            break;
+        }
         let mut sums_l = vec![0.0f32; k];
         let mut sums_a = vec![0.0f32; k];
         let mut sums_b = vec![0.0f32; k];
@@ -460,7 +469,9 @@ pub fn wu_quantize(histogram: Vec<(OKLab, f32)>, max_colors: usize, refine: bool
         .collect();
 
     if refine {
-        palette = kmeans_refine(palette, &histogram);
+        // wu_quantize is test-only (production uses farthest_point_quantize),
+        // so there is no caller token to thread here.
+        palette = kmeans_refine(palette, &histogram, &enough::Unstoppable);
     }
 
     palette
@@ -475,7 +486,11 @@ pub fn wu_quantize(histogram: Vec<(OKLab, f32)>, max_colors: usize, refine: bool
 /// 1. First centroid = highest-weight entry
 /// 2. Each subsequent = entry with max `sqrt(weight) * min_dist_sq` to existing centroids
 /// 3. O(K*N) — trivial for 256 × 600-4000 histogram entries
-pub fn farthest_point_seed(histogram: &[(OKLab, f32)], k: usize) -> Vec<OKLab> {
+pub fn farthest_point_seed(
+    histogram: &[(OKLab, f32)],
+    k: usize,
+    stop: &dyn enough::Stop,
+) -> Vec<OKLab> {
     if histogram.is_empty() || k == 0 {
         return Vec::new();
     }
@@ -504,6 +519,11 @@ pub fn farthest_point_seed(histogram: &[(OKLab, f32)], k: usize) -> Vec<OKLab> {
     }
 
     for _ in 1..k {
+        // Cooperative cancellation at the seed boundary: return the centroids
+        // seeded so far. A short palette is still a valid palette.
+        if stop.should_stop() {
+            break;
+        }
         // Pick entry with max weighted min-distance: sqrt(weight) * min_dist
         let mut best_idx = 0;
         let mut best_score = -1.0f32;
@@ -537,6 +557,7 @@ pub fn farthest_point_seed(histogram: &[(OKLab, f32)], k: usize) -> Vec<OKLab> {
 pub fn farthest_point_quantize(
     histogram: Vec<(OKLab, f32)>,
     max_colors: usize,
+    stop: &dyn enough::Stop,
 ) -> Vec<OKLab> {
     if histogram.is_empty() {
         return Vec::new();
@@ -545,11 +566,11 @@ pub fn farthest_point_quantize(
         // Few histogram entries — use them all as seeds but still run k-means
         // refinement so centroids snap to weighted means of their Voronoi cells.
         let seeds: Vec<OKLab> = histogram.iter().map(|(lab, _)| *lab).collect();
-        return kmeans_refine(seeds, &histogram);
+        return kmeans_refine(seeds, &histogram, stop);
     }
 
-    let centroids = farthest_point_seed(&histogram, max_colors);
-    kmeans_refine(centroids, &histogram)
+    let centroids = farthest_point_seed(&histogram, max_colors, stop);
+    kmeans_refine(centroids, &histogram, stop)
 }
 
 // =====================================================================
@@ -597,6 +618,7 @@ pub fn wu_quantize_alpha(
     histogram: Vec<(OKLabA, f32)>,
     max_colors: usize,
     refine: bool,
+    stop: &dyn enough::Stop,
 ) -> Vec<OKLabA> {
     if histogram.is_empty() {
         return Vec::new();
@@ -644,6 +666,11 @@ pub fn wu_quantize_alpha(
     let mut best_sorted: Vec<usize> = Vec::with_capacity(n);
 
     while boxes.len() < max_colors {
+        // Cooperative cancellation at the split boundary: stop subdividing and
+        // build the palette from the boxes produced so far.
+        if stop.should_stop() {
+            break;
+        }
         let best = boxes
             .iter()
             .enumerate()
@@ -843,7 +870,7 @@ pub fn wu_quantize_alpha(
         .collect();
 
     if refine {
-        palette = kmeans_refine_alpha(palette, &histogram);
+        palette = kmeans_refine_alpha(palette, &histogram, stop);
     }
 
     palette
@@ -1356,13 +1383,22 @@ fn centroid_cache_lookup(cache: &[u8], r: u8, g: u8, b: u8) -> usize {
 // Old median_cut_alpha removed — replaced by wu_quantize_alpha above.
 
 /// K-means refinement in 4D OKLabA space.
-fn kmeans_refine_alpha(mut centroids: Vec<OKLabA>, entries: &[(OKLabA, f32)]) -> Vec<OKLabA> {
+fn kmeans_refine_alpha(
+    mut centroids: Vec<OKLabA>,
+    entries: &[(OKLabA, f32)],
+    stop: &dyn enough::Stop,
+) -> Vec<OKLabA> {
     const MAX_ITERS: usize = 32;
     const CONVERGENCE_THRESHOLD: f32 = 1e-6;
 
     let k = centroids.len();
 
     for _ in 0..MAX_ITERS {
+        // Cooperative cancellation at the iteration boundary — never in the
+        // per-entry inner loop. Returns the centroids converged so far.
+        if stop.should_stop() {
+            break;
+        }
         let mut sums_l = vec![0.0f32; k];
         let mut sums_a = vec![0.0f32; k];
         let mut sums_b = vec![0.0f32; k];
@@ -1561,6 +1597,112 @@ mod cancellation_tests {
     /// iteration is guaranteed to move them.
     fn offset_centroids() -> Vec<OKLab> {
         vec![OKLab::new(0.5, 0.0, 0.0), OKLab::new(0.55, 0.01, 0.01)]
+    }
+
+    /// A [`enough::Stop`] that never stops but records how often it was polled.
+    struct CountingStop(core::sync::atomic::AtomicUsize);
+
+    impl CountingStop {
+        fn new() -> Self {
+            Self(core::sync::atomic::AtomicUsize::new(0))
+        }
+        fn polls(&self) -> usize {
+            self.0.load(core::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    impl enough::Stop for CountingStop {
+        fn check(&self) -> Result<(), enough::StopReason> {
+            self.0.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    /// 64 distinct histogram entries spread across OKLab.
+    fn spread_histogram() -> Vec<(OKLab, f32)> {
+        (0..64)
+            .map(|i| {
+                let t = i as f32 / 64.0;
+                (OKLab::new(t, t * 0.4 - 0.2, 0.2 - t * 0.4), 1.0 + t)
+            })
+            .collect()
+    }
+
+    fn spread_histogram_alpha() -> Vec<(OKLabA, f32)> {
+        (0..64)
+            .map(|i| {
+                let t = i as f32 / 64.0;
+                (
+                    OKLabA::new(t, t * 0.4 - 0.2, 0.2 - t * 0.4, 0.5 + t * 0.5),
+                    1.0 + t,
+                )
+            })
+            .collect()
+    }
+
+    /// `farthest_point_quantize` runs two long loops over the histogram — the
+    /// farthest-point seed loop and the k-means refine. Both must poll.
+    #[test]
+    fn farthest_point_quantize_honors_stop() {
+        const K: usize = 8;
+
+        // Cancelled: the seed loop breaks after the first centroid (picked
+        // before the loop), so only one centroid comes back instead of K.
+        let stopped = farthest_point_quantize(spread_histogram(), K, &AlwaysStop);
+        assert_eq!(
+            stopped.len(),
+            1,
+            "a cancelled farthest-point seed must stop after the first centroid"
+        );
+
+        let full = farthest_point_quantize(spread_histogram(), K, &enough::Unstoppable);
+        assert_eq!(full.len(), K, "an uncancelled run must produce K centroids");
+
+        // K-1 polls from the seed loop plus at least one from the refine loop.
+        // Dropping the refine poll leaves exactly K-1 and fails this bound.
+        let counting = CountingStop::new();
+        farthest_point_quantize(spread_histogram(), K, &counting);
+        assert!(
+            counting.polls() >= K,
+            "expected at least {K} polls ({} seed + >=1 refine), got {}",
+            K - 1,
+            counting.polls()
+        );
+    }
+
+    /// `wu_quantize_alpha` runs the box-split loop and then the 4D k-means
+    /// refine. Both must poll.
+    #[test]
+    fn wu_quantize_alpha_honors_stop() {
+        const K: usize = 8;
+
+        let stopped = wu_quantize_alpha(spread_histogram_alpha(), K, true, &AlwaysStop);
+        assert_eq!(
+            stopped.len(),
+            1,
+            "a cancelled split loop must leave a single box"
+        );
+
+        let full = wu_quantize_alpha(spread_histogram_alpha(), K, true, &enough::Unstoppable);
+        assert_eq!(full.len(), K, "an uncancelled run must produce K centroids");
+
+        // Same histogram and max_colors both times, so the split loop polls the
+        // same number of times; the extra polls can only come from the refine.
+        let with_refine = CountingStop::new();
+        wu_quantize_alpha(spread_histogram_alpha(), K, true, &with_refine);
+        let without_refine = CountingStop::new();
+        wu_quantize_alpha(spread_histogram_alpha(), K, false, &without_refine);
+        assert!(
+            without_refine.polls() >= 2,
+            "the split loop must poll per split, got {}",
+            without_refine.polls()
+        );
+        assert!(
+            with_refine.polls() > without_refine.polls(),
+            "the 4D k-means refine must poll too: {} with refine vs {} without",
+            with_refine.polls(),
+            without_refine.polls()
+        );
     }
 
     #[test]

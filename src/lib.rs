@@ -943,7 +943,7 @@ pub fn quantize_with_stop(
     let (hist, _hist_bumped) = histogram::build_histogram_from_labs(&labs, &weights, max_colors);
 
     // 3. Farthest-point seeding with histogram-level k-means refinement
-    let mut centroids = median_cut::farthest_point_quantize(hist, max_colors);
+    let mut centroids = median_cut::farthest_point_quantize(hist, max_colors, stop);
 
     // 3b. Pixel-level k-means refinement (skip for Fast — histogram refinement suffices).
     if kmeans_iters > 0 {
@@ -1233,7 +1233,7 @@ pub fn quantize_rgba_with_stop(
         } else {
             max_colors
         };
-        let mut centroids = median_cut::wu_quantize_alpha(hist, opaque_colors, true);
+        let mut centroids = median_cut::wu_quantize_alpha(hist, opaque_colors, true, stop);
 
         if kmeans_iters > 0 {
             centroids = median_cut::refine_against_pixels_alpha(
@@ -1317,7 +1317,7 @@ pub fn quantize_rgba_with_stop(
         } else {
             max_colors
         };
-        let mut centroids = median_cut::farthest_point_quantize(hist, opaque_colors);
+        let mut centroids = median_cut::farthest_point_quantize(hist, opaque_colors, stop);
 
         if kmeans_iters > 0 {
             centroids = median_cut::refine_against_pixels_rgba_from_labs(
@@ -1589,7 +1589,7 @@ pub fn build_palette_with_stop(
     }
 
     // Farthest-point seeding on merged histogram
-    let mut centroids = median_cut::farthest_point_quantize(merged_hist, max_colors);
+    let mut centroids = median_cut::farthest_point_quantize(merged_hist, max_colors, stop);
 
     // K-means refinement against all pixels (internally subsampled)
     if kmeans_iters > 0 {
@@ -1762,7 +1762,7 @@ pub fn build_palette_rgba_with_stop(
             histogram::build_histogram_alpha(&all_pixels, &all_weights);
         let _ = has_transparent; // transparency handled by alpha channel in palette entries
 
-        let mut centroids = median_cut::wu_quantize_alpha(merged_hist, max_colors, true);
+        let mut centroids = median_cut::wu_quantize_alpha(merged_hist, max_colors, true, stop);
 
         if kmeans_iters > 0 {
             centroids = median_cut::refine_against_pixels_alpha(
@@ -1789,7 +1789,7 @@ pub fn build_palette_rgba_with_stop(
             max_colors
         };
 
-        let mut centroids = median_cut::farthest_point_quantize(merged_hist, opaque_colors);
+        let mut centroids = median_cut::farthest_point_quantize(merged_hist, opaque_colors, stop);
 
         if kmeans_iters > 0 {
             centroids = median_cut::refine_against_pixels_rgba(
