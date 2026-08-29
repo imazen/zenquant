@@ -1,6 +1,6 @@
 //! Deterministic fingerprint of quantizer output, for before/after byte
 //! comparison across a code change. Prints one hash per (image, palette size).
-use zenquant::{OutputFormat, QuantizeConfig, Quality};
+use zenquant::{OutputFormat, Quality, QuantizeConfig};
 
 fn img(w: usize, h: usize, seed: u32, kind: u32) -> Vec<rgb::RGB<u8>> {
     let mut s = seed | 1;
@@ -44,7 +44,7 @@ fn main() {
     // squared distances and pick different palette entries near ties.
     #[cfg(feature = "_dev")]
     if std::env::args().any(|a| a == "scalar") {
-            #[cfg(target_arch = "aarch64")]
+        #[cfg(target_arch = "aarch64")]
         archmage::NeonToken::dangerously_disable_token_process_wide(true)
             .expect("tier must be toggleable; drop -C target-cpu=native");
         #[cfg(target_arch = "x86_64")]

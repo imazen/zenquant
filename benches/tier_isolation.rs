@@ -75,9 +75,7 @@ fn bench_tiers(c: &mut Criterion) {
         for (arm, simd) in [(TIER_NAME, true), ("scalar", false)] {
             group.bench_function(arm, |b| {
                 set_simd(simd);
-                b.iter(|| {
-                    zenquant::quantize(std::hint::black_box(&px), w, h, &config).unwrap()
-                })
+                b.iter(|| zenquant::quantize(std::hint::black_box(&px), w, h, &config).unwrap())
             });
         }
         set_simd(true);

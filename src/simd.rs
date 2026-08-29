@@ -658,7 +658,9 @@ mod tier_equality_tests {
             (st >> 40) as f32 / 16_777_216.0
         };
 
-        for &n in &[1usize, 2, 7, 8, 9, 16, 31, 32, 64, 96, 104, 111, 112, 128, 200, 256] {
+        for &n in &[
+            1usize, 2, 7, 8, 9, 16, 31, 32, 64, 96, 104, 111, 112, 128, 200, 256,
+        ] {
             let entries: Vec<OKLab> = (0..n)
                 .map(|_| OKLab {
                     l: next(),
@@ -672,7 +674,11 @@ mod tier_equality_tests {
                 // Random probes, plus exact palette entries and midpoints —
                 // the near-tie cases where two entries are equidistant.
                 let probes = [
-                    OKLab { l: next(), a: next() * 2.0 - 1.0, b: next() * 2.0 - 1.0 },
+                    OKLab {
+                        l: next(),
+                        a: next() * 2.0 - 1.0,
+                        b: next() * 2.0 - 1.0,
+                    },
                     entries[(next() * n as f32) as usize % n],
                     {
                         let x = entries[0];
