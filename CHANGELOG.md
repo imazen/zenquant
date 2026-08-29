@@ -9,6 +9,11 @@
   `just api-doc` / `api-doc-check` recipes.
 
 ### Changed
+- Cooperative cancellation now reaches the RGBA and full-alpha k-means refine
+  loops (`refine_against_pixels_rgba`, `refine_against_pixels_rgba_from_labs`,
+  `refine_against_pixels_alpha`), which previously ran all their iterations
+  regardless of the `stop` token that `quantize_rgba_with_stop` carries. The RGB
+  path already polled. Cancelling returns the centroids refined so far.
 - Cooperative cancellation now reaches the `joint` feature's deflate+quantization
   optimizer: the `stop` token passed to `quantize_with_stop` /
   `quantize_rgba_with_stop` is polled at every scanline boundary of the row DP and

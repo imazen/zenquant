@@ -1028,6 +1028,7 @@ pub fn refine_against_pixels_rgba(
     weights: &[f32],
     iterations: usize,
     max_samples: usize,
+    stop: &dyn enough::Stop,
 ) -> Vec<OKLab> {
     // Batch-convert RGB channels, then zero out transparent pixels
     let rgb_pixels: Vec<rgb::RGB<u8>> = pixels
@@ -1040,13 +1041,22 @@ pub fn refine_against_pixels_rgba(
             *lab = OKLab::new(0.0, 0.0, 0.0);
         }
     }
-    refine_against_pixels_rgba_from_labs(centroids, pixels, &labs, weights, iterations, max_samples)
+    refine_against_pixels_rgba_from_labs(
+        centroids,
+        pixels,
+        &labs,
+        weights,
+        iterations,
+        max_samples,
+        stop,
+    )
 }
 
 /// Pixel-level k-means refinement for RGBA using pre-computed OKLab values.
 ///
 /// Same as [`refine_against_pixels_rgba`] but skips the sRGB→OKLab batch conversion.
 /// Transparent pixels in `labs` should already be zeroed by the caller.
+#[allow(clippy::too_many_arguments)]
 pub fn refine_against_pixels_rgba_from_labs(
     mut centroids: Vec<OKLab>,
     pixels: &[rgb::RGBA<u8>],
@@ -1054,6 +1064,7 @@ pub fn refine_against_pixels_rgba_from_labs(
     weights: &[f32],
     iterations: usize,
     max_samples: usize,
+    stop: &dyn enough::Stop,
 ) -> Vec<OKLab> {
     let k = centroids.len();
     if k == 0 {
@@ -1081,6 +1092,12 @@ pub fn refine_against_pixels_rgba_from_labs(
     const OFFSET_PRIME: usize = 7;
 
     for iter in 0..iterations {
+        // Cooperative cancellation: bail at the iteration boundary, returning
+        // the best centroids refined so far. Never checked in the per-pixel
+        // inner loop below — only here at the outer k-means iteration loop.
+        if stop.should_stop() {
+            break;
+        }
         if iter > 0 {
             rebuild_neighbors_incremental(&centroids, &old_centroids, &mut neighbors);
             rebuild_nn_cache_seeded(&centroids, &grid_labs, &mut nn_cache, &neighbors);
@@ -1391,6 +1408,7 @@ pub fn refine_against_pixels_alpha(
     weights: &[f32],
     iterations: usize,
     max_samples: usize,
+    stop: &dyn enough::Stop,
 ) -> Vec<OKLabA> {
     let k = centroids.len();
     if k == 0 {
@@ -1429,6 +1447,12 @@ pub fn refine_against_pixels_alpha(
     let mut assignments = vec![0u8; n];
 
     for iter in 0..iterations {
+        // Cooperative cancellation: bail at the iteration boundary, returning
+        // the best centroids refined so far. Never checked in the per-pixel
+        // inner loop below — only here at the outer k-means iteration loop.
+        if stop.should_stop() {
+            break;
+        }
         let mut sums_l = vec![0.0f64; k];
         let mut sums_a = vec![0.0f64; k];
         let mut sums_b = vec![0.0f64; k];
@@ -1508,6 +1532,123 @@ fn find_nearest_alpha(centroids: &[OKLabA], color: OKLabA) -> usize {
         }
     }
     best_idx
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    /// A [`enough::Stop`] that is already cancelled.
+    struct AlwaysStop;
+
+    impl enough::Stop for AlwaysStop {
+        fn check(&self) -> Result<(), enough::StopReason> {
+            Err(enough::StopReason::Cancelled)
+        }
+    }
+
+    /// Two well-separated color clusters, fully opaque.
+    fn two_cluster_rgba() -> Vec<rgb::RGBA<u8>> {
+        let mut px = Vec::with_capacity(256);
+        for i in 0..128 {
+            px.push(rgb::RGBA::new(200 + (i % 16) as u8, 20, 20, 255));
+            px.push(rgb::RGBA::new(20, 20, 200 + (i % 16) as u8, 255));
+        }
+        px
+    }
+
+    /// Centroids deliberately parked away from either cluster, so one k-means
+    /// iteration is guaranteed to move them.
+    fn offset_centroids() -> Vec<OKLab> {
+        vec![OKLab::new(0.5, 0.0, 0.0), OKLab::new(0.55, 0.01, 0.01)]
+    }
+
+    #[test]
+    fn refine_against_pixels_honors_stop() {
+        let px: Vec<rgb::RGB<u8>> = two_cluster_rgba()
+            .iter()
+            .map(|p| rgb::RGB::new(p.r, p.g, p.b))
+            .collect();
+        let weights = vec![1.0f32; px.len()];
+        let start = offset_centroids();
+
+        let stopped =
+            refine_against_pixels(start.clone(), &px, &weights, 8, usize::MAX, &AlwaysStop);
+        assert_eq!(
+            stopped, start,
+            "a cancelled refine must return the input centroids untouched"
+        );
+
+        let ran = refine_against_pixels(
+            start.clone(),
+            &px,
+            &weights,
+            8,
+            usize::MAX,
+            &enough::Unstoppable,
+        );
+        assert_ne!(
+            ran, start,
+            "test setup is only meaningful if an uncancelled refine moves the centroids"
+        );
+    }
+
+    #[test]
+    fn refine_against_pixels_rgba_honors_stop() {
+        let px = two_cluster_rgba();
+        let weights = vec![1.0f32; px.len()];
+        let start = offset_centroids();
+
+        let stopped =
+            refine_against_pixels_rgba(start.clone(), &px, &weights, 8, usize::MAX, &AlwaysStop);
+        assert_eq!(
+            stopped, start,
+            "a cancelled RGBA refine must return the input centroids untouched"
+        );
+
+        let ran = refine_against_pixels_rgba(
+            start.clone(),
+            &px,
+            &weights,
+            8,
+            usize::MAX,
+            &enough::Unstoppable,
+        );
+        assert_ne!(
+            ran, start,
+            "test setup is only meaningful if an uncancelled refine moves the centroids"
+        );
+    }
+
+    #[test]
+    fn refine_against_pixels_alpha_honors_stop() {
+        let px = two_cluster_rgba();
+        let weights = vec![1.0f32; px.len()];
+        let start = vec![
+            OKLabA::new(0.5, 0.0, 0.0, 1.0),
+            OKLabA::new(0.55, 0.01, 0.01, 1.0),
+        ];
+
+        let stopped =
+            refine_against_pixels_alpha(start.clone(), &px, &weights, 8, usize::MAX, &AlwaysStop);
+        assert_eq!(
+            stopped, start,
+            "a cancelled alpha refine must return the input centroids untouched"
+        );
+
+        let ran = refine_against_pixels_alpha(
+            start.clone(),
+            &px,
+            &weights,
+            8,
+            usize::MAX,
+            &enough::Unstoppable,
+        );
+        assert_ne!(
+            ran, start,
+            "test setup is only meaningful if an uncancelled refine moves the centroids"
+        );
+    }
 }
 
 #[cfg(test)]

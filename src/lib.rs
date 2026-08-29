@@ -1195,6 +1195,7 @@ pub fn quantize_rgba_with_stop(
                 &weights,
                 kmeans_iters,
                 config.kmeans_sample_cap,
+                stop,
             );
         }
 
@@ -1279,6 +1280,7 @@ pub fn quantize_rgba_with_stop(
                 &weights,
                 kmeans_iters,
                 config.kmeans_sample_cap,
+                stop,
             );
         }
 
@@ -1674,6 +1676,7 @@ pub fn build_palette_rgba(
                 &all_weights,
                 kmeans_iters,
                 config.kmeans_sample_cap,
+                &enough::Unstoppable,
             );
         }
 
@@ -1700,6 +1703,7 @@ pub fn build_palette_rgba(
                 &all_weights,
                 kmeans_iters,
                 config.kmeans_sample_cap,
+                &enough::Unstoppable,
             );
         }
 
