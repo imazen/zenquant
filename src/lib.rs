@@ -1451,21 +1451,34 @@ pub fn build_palette(
     if frames.is_empty() {
         return Err(QuantizeError::ZeroDimension);
     }
+    // The per-frame pixels are concatenated into one `all_pixels` buffer, so the
+    // scratch allocations scale with the *total* across frames, not the largest
+    // frame — cap the sum.
+    let mut total_pixels = 0usize;
     for frame in frames {
         if frame.width() == 0 || frame.height() == 0 {
             return Err(QuantizeError::ZeroDimension);
         }
-        frame
-            .width()
-            .checked_mul(frame.height())
-            .ok_or(QuantizeError::DimensionOverflow {
-                width: frame.width(),
-                height: frame.height(),
-            })?;
+        let frame_pixels =
+            frame
+                .width()
+                .checked_mul(frame.height())
+                .ok_or(QuantizeError::DimensionOverflow {
+                    width: frame.width(),
+                    height: frame.height(),
+                })?;
+        total_pixels =
+            total_pixels
+                .checked_add(frame_pixels)
+                .ok_or(QuantizeError::DimensionOverflow {
+                    width: frame.width(),
+                    height: frame.height(),
+                })?;
     }
     if config.max_colors < 2 || config.max_colors > 256 {
         return Err(QuantizeError::InvalidMaxColors(config.max_colors));
     }
+    check_pixel_cap(total_pixels, config)?;
 
     let tuning = QuantizeTuning::from_config(config);
     let max_colors = config.max_colors as usize;
@@ -1574,21 +1587,34 @@ pub fn build_palette_rgba(
     if frames.is_empty() {
         return Err(QuantizeError::ZeroDimension);
     }
+    // The per-frame pixels are concatenated into one `all_pixels` buffer, so the
+    // scratch allocations scale with the *total* across frames, not the largest
+    // frame — cap the sum.
+    let mut total_pixels = 0usize;
     for frame in frames {
         if frame.width() == 0 || frame.height() == 0 {
             return Err(QuantizeError::ZeroDimension);
         }
-        frame
-            .width()
-            .checked_mul(frame.height())
-            .ok_or(QuantizeError::DimensionOverflow {
-                width: frame.width(),
-                height: frame.height(),
-            })?;
+        let frame_pixels =
+            frame
+                .width()
+                .checked_mul(frame.height())
+                .ok_or(QuantizeError::DimensionOverflow {
+                    width: frame.width(),
+                    height: frame.height(),
+                })?;
+        total_pixels =
+            total_pixels
+                .checked_add(frame_pixels)
+                .ok_or(QuantizeError::DimensionOverflow {
+                    width: frame.width(),
+                    height: frame.height(),
+                })?;
     }
     if config.max_colors < 2 || config.max_colors > 256 {
         return Err(QuantizeError::InvalidMaxColors(config.max_colors));
     }
+    check_pixel_cap(total_pixels, config)?;
 
     let tuning = QuantizeTuning::from_config(config);
     let max_colors = config.max_colors as usize;
@@ -1738,6 +1764,10 @@ fn remap_rgb_impl(
     let expected = width
         .checked_mul(height)
         .ok_or(QuantizeError::DimensionOverflow { width, height })?;
+    // Checked on the declared dimensions, before the buffer-length check: an
+    // out-of-policy frame size is rejected without reasoning about a buffer
+    // that large in the first place.
+    check_pixel_cap(expected, config)?;
     if pixels.len() != expected {
         return Err(QuantizeError::DimensionMismatch {
             len: pixels.len(),
@@ -1910,6 +1940,10 @@ fn remap_rgba_impl(
     let expected = width
         .checked_mul(height)
         .ok_or(QuantizeError::DimensionOverflow { width, height })?;
+    // Checked on the declared dimensions, before the buffer-length check: an
+    // out-of-policy frame size is rejected without reasoning about a buffer
+    // that large in the first place.
+    check_pixel_cap(expected, config)?;
     if pixels.len() != expected {
         return Err(QuantizeError::DimensionMismatch {
             len: pixels.len(),
@@ -2173,6 +2207,9 @@ fn validate_inputs(
     let expected = width
         .checked_mul(height)
         .ok_or(QuantizeError::DimensionOverflow { width, height })?;
+    // See the note in `remap_rgb_impl`: the cap is a policy check on the
+    // declared dimensions, so it runs before the buffer-length check.
+    check_pixel_cap(expected, config)?;
     if pixel_count != expected {
         return Err(QuantizeError::DimensionMismatch {
             len: pixel_count,
@@ -2183,16 +2220,22 @@ fn validate_inputs(
     if config.max_colors < 2 || config.max_colors > 256 {
         return Err(QuantizeError::InvalidMaxColors(config.max_colors));
     }
-    // Cap total pixels to bound the secondary full-image scratch allocations
-    // (OKLab/masking/histogram buffers) from untrusted dimensions. `expected`
-    // is the validated `width * height`.
+    Ok(())
+}
+
+/// Cap total pixels to bound the secondary full-image scratch allocations
+/// (OKLab, masking-weight, histogram and dither buffers — 12-16 B/px on top of
+/// the caller's own buffer) that every entry point sizes straight from the
+/// input dimensions.
+///
+/// Applies to `quantize`, `remap` and `build_palette` alike: each one allocates
+/// that scratch, so capping only `quantize` would leave the other two open to
+/// the same untrusted-dimension pressure.
+fn check_pixel_cap(pixels: usize, config: &QuantizeConfig) -> Result<(), QuantizeError> {
     if let Some(max) = config.max_pixels
-        && expected > max
+        && pixels > max
     {
-        return Err(QuantizeError::TooManyPixels {
-            pixels: expected,
-            max,
-        });
+        return Err(QuantizeError::TooManyPixels { pixels, max });
     }
     Ok(())
 }
@@ -2226,6 +2269,97 @@ mod max_pixels_tests {
         let cfg = QuantizeConfig::new(OutputFormat::Png);
         let (w, h) = (12_000usize, 9_000usize); // 108 MP
         assert!(validate_inputs(w * h, w, h, &cfg).is_ok());
+    }
+
+    /// A one-pixel palette, enough to drive `remap_*` past palette construction.
+    fn tiny_palette() -> QuantizeResult {
+        let px = vec![
+            rgb::RGB::new(0u8, 0, 0),
+            rgb::RGB::new(255, 255, 255),
+            rgb::RGB::new(255, 0, 0),
+            rgb::RGB::new(0, 0, 255),
+        ];
+        let cfg = QuantizeConfig::new(OutputFormat::Png).with_max_colors(4);
+        quantize(&px, 2, 2, &cfg).expect("2x2 quantize must succeed")
+    }
+
+    // 12000 x 11000 = 132 MP > the 120 MP default cap. The cap is a policy check
+    // on the declared dimensions, so it fires before the buffer-length check and
+    // these tests never have to allocate 132 M pixels.
+    const OVER_CAP: (usize, usize) = (12_000, 11_000);
+
+    #[test]
+    fn remap_rejects_above_pixel_cap() {
+        let result = tiny_palette();
+        let cfg = QuantizeConfig::new(OutputFormat::Png);
+        let (w, h) = OVER_CAP;
+        assert!(matches!(
+            result.remap(&[], w, h, &cfg),
+            Err(QuantizeError::TooManyPixels { .. })
+        ));
+    }
+
+    #[test]
+    fn remap_rgba_rejects_above_pixel_cap() {
+        let result = tiny_palette();
+        let cfg = QuantizeConfig::new(OutputFormat::Gif);
+        let (w, h) = OVER_CAP;
+        assert!(matches!(
+            result.remap_rgba(&[], w, h, &cfg),
+            Err(QuantizeError::TooManyPixels { .. })
+        ));
+    }
+
+    // `build_palette*` concatenates every frame into one buffer, so its scratch
+    // allocations scale with the *sum*, not the largest frame. These use a small
+    // explicit cap rather than 100-MP dimensions so the frames stay real buffers
+    // whose length matches their declared size.
+    #[test]
+    fn build_palette_caps_the_sum_across_frames() {
+        let buf = [rgb::RGB::new(0u8, 0, 0), rgb::RGB::new(255, 255, 255)];
+        let frame = ImgRef::new(&buf, 2, 1);
+
+        let uncapped = QuantizeConfig::new(OutputFormat::Png);
+        assert!(
+            build_palette(&[frame, frame], &uncapped).is_ok(),
+            "two 2x1 frames are far under the 120 MP default cap"
+        );
+
+        // Cap 3: one 2-pixel frame fits, two (4 pixels total) do not.
+        let capped = QuantizeConfig::new(OutputFormat::Png).with_max_pixels(Some(3));
+        assert!(
+            build_palette(&[frame], &capped).is_ok(),
+            "a single 2-pixel frame is under a 3-pixel cap"
+        );
+        assert!(
+            matches!(
+                build_palette(&[frame, frame], &capped),
+                Err(QuantizeError::TooManyPixels { pixels: 4, max: 3 })
+            ),
+            "two 2-pixel frames total 4 and must be rejected by a 3-pixel cap"
+        );
+    }
+
+    #[test]
+    fn build_palette_rgba_caps_the_sum_across_frames() {
+        let buf = [
+            rgb::RGBA::new(0u8, 0, 0, 255),
+            rgb::RGBA::new(255, 255, 255, 255),
+        ];
+        let frame = ImgRef::new(&buf, 2, 1);
+
+        let capped = QuantizeConfig::new(OutputFormat::Gif).with_max_pixels(Some(3));
+        assert!(
+            build_palette_rgba(&[frame], &capped).is_ok(),
+            "a single 2-pixel frame is under a 3-pixel cap"
+        );
+        assert!(
+            matches!(
+                build_palette_rgba(&[frame, frame], &capped),
+                Err(QuantizeError::TooManyPixels { pixels: 4, max: 3 })
+            ),
+            "two 2-pixel frames total 4 and must be rejected by a 3-pixel cap"
+        );
     }
 
     #[test]

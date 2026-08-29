@@ -9,6 +9,14 @@
   `just api-doc` / `api-doc-check` recipes.
 
 ### Changed
+- The `max_pixels` cap (default 120 MP, `QuantizeConfig::with_max_pixels`) now
+  covers `QuantizeResult::remap`/`remap_rgba`/`remap_with_prev`/`remap_rgba_with_prev`
+  and `build_palette`/`build_palette_rgba`, not just `quantize`/`quantize_rgba` —
+  all of them size the same 12-16 B/px scratch buffers from the input dimensions.
+  `build_palette*` caps the **sum** across frames, since the frames are
+  concatenated into one buffer. The cap is now checked from the declared
+  dimensions before the buffer-length check, so an over-cap request reports
+  `TooManyPixels` rather than `DimensionMismatch`.
 - Cooperative cancellation now reaches the RGBA and full-alpha k-means refine
   loops (`refine_against_pixels_rgba`, `refine_against_pixels_rgba_from_labs`,
   `refine_against_pixels_alpha`), which previously ran all their iterations
