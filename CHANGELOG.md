@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+### Notes
+- **The failed `Dependabot Updates` run from 2026-04-22 is stale, and nothing here
+  is broken.** Investigated 2026-08-29 as part of a workspace-wide sweep of six
+  repos showing the same red workflow. The finding for this repo is "no action":
+  - The single failed run (`24804292125`, `event: dynamic` — a GitHub-side job;
+    there is no workflow file and no `.github/dependabot.yml` here) was triggered
+    by one advisory, **GHSA-cq8v-f236-94qc** on `rand`, opened
+    `2026-04-22T21:39Z` against `Cargo.lock` (vulnerable `>= 0.9.0, < 0.9.3`,
+    fixed in `0.9.3`). That alert reached **`state: fixed` on 2026-05-08**, and
+    this repo has **zero open Dependabot alerts** today.
+  - Its log is past GitHub's 90-day retention (`/actions/runs/24804292125/logs` →
+    HTTP 410), so the exact error text is unrecoverable. What *is* checkable is
+    whether the condition still exists, and it does not: `cargo metadata` in a
+    **fresh standalone clone** of `main` exits 0. That is the environment
+    Dependabot runs in — a lone checkout with no sibling repositories — so a run
+    today would resolve fine.
+  - Neither of the two mechanisms found in the sibling repos applies here: no path
+    dependency escapes the repository root (the two `../` entries in `Cargo.toml`
+    are commented out), and the only other tracked lockfile, `apidoc/Cargo.lock`,
+    belongs to a directory that declares its own `[workspace]`, so cargo genuinely
+    owns it rather than resolving it against the root.
+  - **Decision: leave Dependabot enabled and change nothing.** The red mark is the
+    residue of one advisory resolved in May, not a broken integration. Adding a
+    `.github/dependabot.yml` would not have prevented it (security updates need no
+    config file) and would only stand up a second version-update bot.
+
 ### Fixed
 - **Pushes to `main` now cancel their superseded CI runs.** `ci.yml` keyed its concurrency group on `${{ github.head_ref || github.run_id }}`. `github.head_ref` is populated only for `pull_request` events, so on a push it was empty and the group fell through to `github.run_id` — unique per run, so no two pushes ever shared a group and `cancel-in-progress` could never fire. Every push started a full matrix that ran to completion even when several commits landed seconds apart. Now keyed on `${{ github.ref }}`, which is set for both event types (`refs/heads/main` on push, `refs/pull/N/merge` on a PR), so PR cancellation is unchanged and consecutive pushes supersede each other.
 
