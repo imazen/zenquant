@@ -1606,6 +1606,11 @@ pub fn build_palette_with_stop(
     let mut pal = palette::Palette::from_centroids_sorted(centroids, false, tuning.sort_strategy);
     pal.build_nn_cache();
 
+    // A cancelled run breaks out of the loops above with whatever it had, which
+    // would silently hand back a degraded palette. Report it instead — same
+    // contract as `quantize_with_stop`.
+    stop.check().map_err(QuantizeError::Cancelled)?;
+
     Ok(QuantizeResult {
         palette: pal,
         indices: Vec::new(),
@@ -1811,6 +1816,11 @@ pub fn build_palette_rgba_with_stop(
         p
     };
 
+    // A cancelled run breaks out of the loops above with whatever it had, which
+    // would silently hand back a degraded palette. Report it instead — same
+    // contract as `quantize_with_stop`.
+    stop.check().map_err(QuantizeError::Cancelled)?;
+
     Ok(QuantizeResult {
         palette: pal,
         indices: Vec::new(),
@@ -1986,6 +1996,11 @@ fn remap_rgb_impl(
             });
         }
     }
+
+    // A cancelled run breaks out of the scanline refine with the rows it had,
+    // which would silently hand back a degraded image. Report it instead — same
+    // contract as `quantize_with_stop`.
+    stop.check().map_err(QuantizeError::Cancelled)?;
 
     // No frequency reorder — palette order must be stable for shared-palette use.
     Ok(QuantizeResult {
@@ -2171,6 +2186,11 @@ fn remap_rgba_impl(
             });
         }
     }
+
+    // A cancelled run breaks out of the scanline refine with the rows it had,
+    // which would silently hand back a degraded image. Report it instead — same
+    // contract as `quantize_with_stop`.
+    stop.check().map_err(QuantizeError::Cancelled)?;
 
     // No frequency reorder — palette order must be stable for shared-palette use.
     Ok(QuantizeResult {
@@ -2363,6 +2383,63 @@ mod with_stop_entry_point_tests {
         QuantizeConfig::new(format)
             .with_quality(Quality::Best)
             .with_max_colors(8)
+    }
+
+    /// A [`enough::Stop`] that is already cancelled.
+    struct AlwaysStop;
+
+    impl enough::Stop for AlwaysStop {
+        fn check(&self) -> Result<(), enough::StopReason> {
+            Err(enough::StopReason::Cancelled)
+        }
+    }
+
+    /// Cancelling must be *reported*, not absorbed. The inner loops break early
+    /// with partial work, so without an explicit check at the end these entry
+    /// points would hand back a quietly degraded palette or image — which a
+    /// caller cannot distinguish from a good one.
+    #[test]
+    fn cancelled_entry_points_report_cancelled_instead_of_degrading() {
+        let (w, h) = (32usize, 32usize);
+        let px = gradient_rgb(w, h);
+        let px_rgba = gradient_rgba(w, h);
+        let frame = ImgRef::new(&px, w, h);
+        let frame_rgba = ImgRef::new(&px_rgba, w, h);
+        let cfg = refine_config(OutputFormat::Png);
+        let cfg_rgba = refine_config(OutputFormat::Gif);
+
+        assert!(
+            matches!(
+                build_palette_with_stop(&[frame], &cfg, &AlwaysStop),
+                Err(QuantizeError::Cancelled(_))
+            ),
+            "build_palette_with_stop must report cancellation"
+        );
+        assert!(
+            matches!(
+                build_palette_rgba_with_stop(&[frame_rgba], &cfg_rgba, &AlwaysStop),
+                Err(QuantizeError::Cancelled(_))
+            ),
+            "build_palette_rgba_with_stop must report cancellation"
+        );
+
+        let shared = quantize(&px, w, h, &cfg).expect("quantize must succeed");
+        assert!(
+            matches!(
+                shared.remap_with_stop(&px, w, h, &cfg, &AlwaysStop),
+                Err(QuantizeError::Cancelled(_))
+            ),
+            "remap_with_stop must report cancellation"
+        );
+
+        let shared_rgba = quantize_rgba(&px_rgba, w, h, &cfg_rgba).expect("quantize_rgba");
+        assert!(
+            matches!(
+                shared_rgba.remap_rgba_with_stop(&px_rgba, w, h, &cfg_rgba, &AlwaysStop),
+                Err(QuantizeError::Cancelled(_))
+            ),
+            "remap_rgba_with_stop must report cancellation"
+        );
     }
 
     #[test]
