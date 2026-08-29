@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **`Cargo.lock` refreshed within the existing requirements — third-party crates only.** 57 registry packages moved (`palette 0.7.6 -> 0.7.7`, `imgref 1.12.2 -> 1.12.3`, `flate2 1.1.9 -> 1.1.10`, `libc 0.2.186 -> 0.2.189`, `bytemuck 1.25.0 -> 1.25.2`, `serde 1.0.228 -> 1.0.229`, `wasm-bindgen 0.2.123 -> 0.2.127` among them). No manifest requirement changed, and no zen-family dependency moved: `archmage`, `magetypes`, `zencodec`, `zenpixels`, `zenpixels-convert`, `zengif`, `zenpng`, `zenwebp` all had newer versions available and were deliberately held at their locked revisions, so the lock diff contains no zen-family line. Verified with the full local suite, which is wider than CI's `--lib`: 215 tests across `--lib`, `--lib --features joint`, and every integration target (`basic`, `cancellation`, `integration`, `quality`, `regress`, `security_regression`) — all counts identical to the pre-update baseline, including `simd::tier_equality_tests::neon_and_scalar_backends_pick_the_same_palette_index`. `clippy --lib` (plain and `--features joint`) and `fmt --check` are clean.
+
 ### Notes
 - **The failed `Dependabot Updates` run from 2026-04-22 is stale, and nothing here
   is broken.** Investigated 2026-08-29 as part of a workspace-wide sweep of six
