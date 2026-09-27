@@ -2599,6 +2599,7 @@ mod with_stop_entry_point_tests {
         let stop = CountingStop::new();
         let hist = histogram::build_histogram_with_stop(&px, &weights, &stop)
             .expect("histogram must succeed");
+        assert_eq!(hist, histogram::build_histogram(&px, &weights));
         assert!(
             stop.polls() >= 4,
             "histogram over 64K px must poll inside its loops, got {}",

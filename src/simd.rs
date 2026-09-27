@@ -630,6 +630,7 @@ mod tests {
 
 #[cfg(test)]
 mod tier_equality_tests {
+    #[cfg(target_arch = "aarch64")]
     use super::*;
 
     /// The aarch64 gate hands palettes below `NEON_MIN_PALETTE_ENTRIES` to the

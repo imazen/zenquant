@@ -20,7 +20,7 @@ fn batch_oklab_with_stop(
     stop: &dyn enough::Stop,
 ) -> Option<Vec<OKLab>> {
     const CHUNK: usize = 1 << 20;
-    if pixels.len() <= CHUNK {
+    if !stop.may_stop() || pixels.len() <= CHUNK {
         return Some(crate::simd::batch_srgb_to_oklab_vec(pixels));
     }
     let mut labs = Vec::with_capacity(pixels.len());
@@ -233,7 +233,7 @@ fn kmeans_refine(
         // Assign each entry to nearest centroid
         for (i, &(lab, w)) in entries.iter().enumerate() {
             if i.is_multiple_of(CANCEL_STRIDE) && stop.should_stop() {
-                break;
+                return centroids;
             }
             let nearest = find_nearest(&centroids, lab);
             sums_l[nearest] += lab.l * w;
@@ -1023,10 +1023,10 @@ pub fn refine_against_pixels_from_labs(
             let weight = weights[i];
             let lab = labs[i];
             // Poll inside the assignment pass — one iteration over millions of
-            // pixels is tens of ms of NN lookups. A partial pass still leaves
-            // usable centroids; the iteration-boundary check exits cleanly.
+            // pixels is tens of ms of NN lookups. Keep the last complete
+            // iteration: a prefix-only update biases the palette spatially.
             if sampled_count.is_multiple_of(CANCEL_STRIDE) && stop.should_stop() {
-                break;
+                return centroids;
             }
             sampled_count += 1;
 
@@ -1212,7 +1212,7 @@ pub fn refine_against_pixels_rgba_from_labs(
             let weight = weights[i];
             let lab = labs[i];
             if sampled_count.is_multiple_of(CANCEL_STRIDE) && stop.should_stop() {
-                break;
+                return centroids;
             }
             sampled_count += 1;
 
@@ -1469,7 +1469,7 @@ fn kmeans_refine_alpha(
 
         for (i, &(laba, w)) in entries.iter().enumerate() {
             if i.is_multiple_of(CANCEL_STRIDE) && stop.should_stop() {
-                break;
+                return centroids;
             }
             let nearest = find_nearest_alpha(&centroids, laba);
             sums_l[nearest] += laba.lab.l * w;
@@ -1583,7 +1583,7 @@ pub fn refine_against_pixels_alpha(
             }
             let weight = weights[i];
             if sampled_count.is_multiple_of(CANCEL_STRIDE) && stop.should_stop() {
-                break;
+                return centroids;
             }
             sampled_count += 1;
 
@@ -2048,5 +2048,32 @@ mod tests {
             err_wu <= err_mc * 1.05,
             "Wu should not be much worse than median cut: mc={err_mc}, wu={err_wu}"
         );
+    }
+}
+
+#[cfg(test)]
+mod interrupted_refinement_tests {
+    use super::*;
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    struct StopAfter(AtomicUsize);
+    impl enough::Stop for StopAfter {
+        fn check(&self) -> Result<(), enough::StopReason> {
+            if self.0.fetch_sub(1, Ordering::Relaxed) == 0 {
+                Err(enough::StopReason::TimedOut)
+            } else { Ok(()) }
+        }
+    }
+
+    #[test]
+    fn incomplete_histogram_assignment_keeps_previous_centroids() {
+        let seed = vec![OKLab::new(0.5, 0.0, 0.0)];
+        let entries: Vec<_> = (0..16384).map(|i| (OKLab::new(if i < 8192 { 0.1 } else { 0.9 }, 0.0, 0.0), 1.0)).collect();
+        let got = kmeans_refine(seed.clone(), &entries, &StopAfter(AtomicUsize::new(2)));
+        assert_eq!(got, seed);
+        let seed_alpha = vec![OKLabA { lab: seed[0], alpha: 1.0 }];
+        let entries_alpha: Vec<_> = entries.iter().map(|&(lab, w)| (OKLabA { lab, alpha: 1.0 }, w)).collect();
+        let got = kmeans_refine_alpha(seed_alpha.clone(), &entries_alpha, &StopAfter(AtomicUsize::new(2)));
+        assert_eq!(got, seed_alpha);
     }
 }
