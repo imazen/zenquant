@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Pre-refinement phases of `*_with_stop` entry points now poll the token.** The
+  exact-palette scan, AQ masking-weight computation, histogram aggregation, and
+  the k-means per-pixel assignment passes were O(pixels) loops that ran to
+  completion without ever consulting `stop` — a multi-frame
+  `build_palette_rgba_with_stop` call could go >1s between polls. All such loops
+  now check at 8K-pixel stride (`CANCEL_STRIDE`, same cadence as `joint.rs`) and
+  propagate `StopReason`, which surfaces as `QuantizeError::Cancelled`; mid-pass
+  breaks inside k-means still return converged-so-far centroids per the existing
+  contract. Measured on a 64-frame 512² GIF palette build via the
+  almost-enough `PollMeter` harness: worst inter-poll gap 2.78s → 29ms.
+- **sRGB→OKLab batch conversion in `refine_against_pixels_*` is chunked** at
+  ~1M pixels per chunk so multi-megapixel inputs can't skip polling for a whole
+  SIMD pass.
+- Public non-stop signatures unchanged; the new `*_with_stop` variants in
+  `masking`/`histogram` are reachable under the existing `_dev` module.
+
 ### Changed
 - **`Cargo.lock` refreshed within the existing requirements — third-party crates only.** 57 registry packages moved (`palette 0.7.6 -> 0.7.7`, `imgref 1.12.2 -> 1.12.3`, `flate2 1.1.9 -> 1.1.10`, `libc 0.2.186 -> 0.2.189`, `bytemuck 1.25.0 -> 1.25.2`, `serde 1.0.228 -> 1.0.229`, `wasm-bindgen 0.2.123 -> 0.2.127` among them). No manifest requirement changed, and no zen-family dependency moved: `archmage`, `magetypes`, `zencodec`, `zenpixels`, `zenpixels-convert`, `zengif`, `zenpng`, `zenwebp` all had newer versions available and were deliberately held at their locked revisions, so the lock diff contains no zen-family line. Verified with the full local suite, which is wider than CI's `--lib`: 215 tests across `--lib`, `--lib --features joint`, and every integration target (`basic`, `cancellation`, `integration`, `quality`, `regress`, `security_regression`) — all counts identical to the pre-update baseline, including `simd::tier_equality_tests::neon_and_scalar_backends_pick_the_same_palette_index`. `clippy --lib` (plain and `--features joint`) and `fmt --check` are clean.
 

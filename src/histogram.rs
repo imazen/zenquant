@@ -8,6 +8,16 @@ use num_traits::Float;
 
 use crate::oklab::{OKLab, OKLabA, srgb_to_oklab};
 
+/// Pixel-iteration stride between cancellation checks inside histogram
+/// building — same cadence as `CANCEL_STRIDE` in `joint.rs`.
+const CANCEL_STRIDE: usize = 8192;
+
+/// Alpha-quantized histogram entries plus the "has fully-transparent pixels" flag.
+type AlphaHistogram = (Vec<(OKLabA, f32)>, bool);
+
+/// Exact-palette probe result: opaque-color entries plus the transparent flag.
+pub(crate) type RgbaExactPalette = (Vec<rgb::RGBA<u8>>, bool);
+
 /// A histogram entry: accumulated color, weight, and count for a quantized bucket.
 #[derive(Debug, Clone)]
 pub struct HistEntry {
@@ -55,20 +65,33 @@ fn quantize_key(lab: OKLab, bits: u32) -> u32 {
 ///
 /// For images with many duplicate colors (unique < total/4), deduplicates pixels
 /// first to reduce the number of sRGB→OKLab conversions.
+#[allow(dead_code)] // reachable via the feature-gated `_dev` module
 pub fn build_histogram(pixels: &[rgb::RGB<u8>], weights: &[f32]) -> Vec<(OKLab, f32)> {
+    build_histogram_with_stop(pixels, weights, &enough::Unstoppable)
+        .expect("Unstoppable::check never fails")
+}
+
+/// [`build_histogram`] with a [`stop`](enough::Stop) token: checked every
+/// [`CANCEL_STRIDE`] pixels inside the aggregation loops; a stopped build is
+/// discarded rather than returned partially accumulated.
+pub fn build_histogram_with_stop(
+    pixels: &[rgb::RGB<u8>],
+    weights: &[f32],
+    stop: &dyn enough::Stop,
+) -> Result<Vec<(OKLab, f32)>, enough::StopReason> {
     assert_eq!(pixels.len(), weights.len());
 
     // Try pixel deduplication for large images with many duplicates
     if pixels.len() >= 65_536
-        && let Some(result) = build_histogram_dedup_rgb(pixels, weights)
+        && let Some(result) = build_histogram_dedup_rgb(pixels, weights, stop)?
     {
-        return result;
+        return Ok(result);
     }
 
     let labs: Vec<OKLab> = crate::simd::batch_srgb_to_oklab_vec(pixels);
 
     let bits = if pixels.len() <= 500_000 { 6 } else { 5 };
-    build_hist_at_depth(&labs, weights, bits)
+    build_hist_at_depth(&labs, weights, bits, stop)
 }
 
 /// Build histogram from pre-computed OKLab values.
@@ -86,43 +109,60 @@ pub fn build_histogram(pixels: &[rgb::RGB<u8>], weights: &[f32]) -> Vec<(OKLab, 
 /// Only bumps when the coarse histogram is at least 75% of `min_entries`,
 /// indicating genuine color diversity lost to bucketing precision. Below that,
 /// the image simply doesn't need that many palette entries.
+#[allow(dead_code)] // reachable via the feature-gated `_dev` module
 pub fn build_histogram_from_labs(labs: &[crate::oklab::OKLab], weights: &[f32], min_entries: usize) -> (Vec<(crate::oklab::OKLab, f32)>, bool) {
+    build_histogram_from_labs_with_stop(labs, weights, min_entries, &enough::Unstoppable)
+        .expect("Unstoppable::check never fails")
+}
+
+/// [`build_histogram_from_labs`] with a [`stop`](enough::Stop) token. See
+/// [`build_histogram_with_stop`].
+pub fn build_histogram_from_labs_with_stop(
+    labs: &[crate::oklab::OKLab],
+    weights: &[f32],
+    min_entries: usize,
+    stop: &dyn enough::Stop,
+) -> Result<(Vec<(crate::oklab::OKLab, f32)>, bool), enough::StopReason> {
     assert_eq!(labs.len(), weights.len());
     let start_bits = if labs.len() <= 500_000 { 6 } else { 5 };
-    let hist = build_hist_at_depth(labs, weights, start_bits);
+    let hist = build_hist_at_depth(labs, weights, start_bits, stop)?;
 
     if min_entries == 0 || hist.len() >= min_entries || start_bits >= 7 {
-        return (hist, false);
+        return Ok((hist, false));
     }
 
     // Only bump if the coarse histogram is at least 75% full — below that,
     // the image genuinely has fewer meaningful color clusters than max_colors.
     if hist.len() * 4 < min_entries * 3 {
-        return (hist, false);
+        return Ok((hist, false));
     }
 
     // Try finer bucketing to get at least min_entries
     for bits in (start_bits + 1)..=7 {
-        let finer = build_hist_at_depth(labs, weights, bits);
+        let finer = build_hist_at_depth(labs, weights, bits, stop)?;
         if finer.len() >= min_entries || bits == 7 {
-            return (finer, true);
+            return Ok((finer, true));
         }
     }
 
-    (hist, false)
+    Ok((hist, false))
 }
 
 /// Attempt RGB pixel deduplication. Returns Some if unique < total/4.
 fn build_histogram_dedup_rgb(
     pixels: &[rgb::RGB<u8>],
     weights: &[f32],
-) -> Option<Vec<(OKLab, f32)>> {
+    stop: &dyn enough::Stop,
+) -> Result<Option<Vec<(OKLab, f32)>>, enough::StopReason> {
     // 2MB bitvec: one bit per RGB triplet (2^24 = 16M possible RGB values)
     const BITVEC_SIZE: usize = 1 << 24; // 16,777,216 bits
     let mut seen = vec![0u8; BITVEC_SIZE / 8]; // 2MB
     let mut unique_count = 0usize;
 
-    for p in pixels {
+    for (i, p) in pixels.iter().enumerate() {
+        if i.is_multiple_of(CANCEL_STRIDE) {
+            stop.check()?;
+        }
         let key = ((p.r as usize) << 16) | ((p.g as usize) << 8) | p.b as usize;
         let byte_idx = key >> 3;
         let bit_idx = key & 7;
@@ -134,12 +174,15 @@ fn build_histogram_dedup_rgb(
 
     // Only deduplicate if unique colors are < 1/4 of total pixels
     if unique_count >= pixels.len() / 4 {
-        return None;
+        return Ok(None);
     }
 
     // Aggregate weights by exact RGB value
     let mut weight_map: BTreeMap<u32, f32> = BTreeMap::new();
-    for (p, &w) in pixels.iter().zip(weights.iter()) {
+    for (i, (p, &w)) in pixels.iter().zip(weights.iter()).enumerate() {
+        if i.is_multiple_of(CANCEL_STRIDE) {
+            stop.check()?;
+        }
         let key = ((p.r as u32) << 16) | ((p.g as u32) << 8) | p.b as u32;
         *weight_map.entry(key).or_default() += w;
     }
@@ -157,13 +200,21 @@ fn build_histogram_dedup_rgb(
 
     let labs = crate::simd::batch_srgb_to_oklab_vec(&unique_pixels);
     let bits = if pixels.len() <= 500_000 { 6 } else { 5 };
-    Some(build_hist_at_depth(&labs, &unique_weights, bits))
+    build_hist_at_depth(&labs, &unique_weights, bits, stop).map(Some)
 }
 
-pub(crate) fn build_hist_at_depth(labs: &[OKLab], weights: &[f32], bits: u32) -> Vec<(OKLab, f32)> {
+pub(crate) fn build_hist_at_depth(
+    labs: &[OKLab],
+    weights: &[f32],
+    bits: u32,
+    stop: &dyn enough::Stop,
+) -> Result<Vec<(OKLab, f32)>, enough::StopReason> {
     let mut buckets: BTreeMap<u32, HistEntry> = BTreeMap::new();
 
-    for (lab, &weight) in labs.iter().zip(weights.iter()) {
+    for (i, (lab, &weight)) in labs.iter().zip(weights.iter()).enumerate() {
+        if i.is_multiple_of(CANCEL_STRIDE) {
+            stop.check()?;
+        }
         let key = quantize_key(*lab, bits);
         let w64 = weight as f64;
 
@@ -185,18 +236,30 @@ pub(crate) fn build_hist_at_depth(labs: &[OKLab], weights: &[f32], bits: u32) ->
             });
     }
 
-    buckets
+    Ok(buckets
         .into_values()
         .map(|e| (e.centroid(), e.weight as f32))
-        .collect()
+        .collect())
 }
 
 /// Build a weighted color histogram from RGBA pixels and per-pixel AQ weights.
 /// Fully transparent pixels (alpha == 0) are skipped.
+#[allow(dead_code)] // reachable via the feature-gated `_dev` module
 pub fn build_histogram_rgba(
     pixels: &[rgb::RGBA<u8>],
     weights: &[f32],
 ) -> (Vec<(OKLab, f32)>, bool) {
+    build_histogram_rgba_with_stop(pixels, weights, &enough::Unstoppable)
+        .expect("Unstoppable::check never fails")
+}
+
+/// [`build_histogram_rgba`] with a [`stop`](enough::Stop) token. See
+/// [`build_histogram_with_stop`].
+pub fn build_histogram_rgba_with_stop(
+    pixels: &[rgb::RGBA<u8>],
+    weights: &[f32],
+    stop: &dyn enough::Stop,
+) -> Result<(Vec<(OKLab, f32)>, bool), enough::StopReason> {
     assert_eq!(pixels.len(), weights.len());
 
     let mut has_transparent = false;
@@ -205,7 +268,10 @@ pub fn build_histogram_rgba(
     let mut opaque_pixels: Vec<rgb::RGB<u8>> = Vec::with_capacity(pixels.len());
     let mut opaque_weights: Vec<f32> = Vec::with_capacity(pixels.len());
 
-    for (pixel, &weight) in pixels.iter().zip(weights.iter()) {
+    for (i, (pixel, &weight)) in pixels.iter().zip(weights.iter()).enumerate() {
+        if i.is_multiple_of(CANCEL_STRIDE) {
+            stop.check()?;
+        }
         if pixel.a == 0 {
             has_transparent = true;
             continue;
@@ -219,8 +285,8 @@ pub fn build_histogram_rgba(
     }
 
     // Delegate to the RGB build (which handles dedup internally)
-    let entries = build_histogram(&opaque_pixels, &opaque_weights);
-    (entries, has_transparent)
+    let entries = build_histogram_with_stop(&opaque_pixels, &opaque_weights, stop)?;
+    Ok((entries, has_transparent))
 }
 
 /// Build a weighted histogram from RGBA pixels with alpha as a quantizable dimension.
@@ -234,23 +300,25 @@ pub fn build_histogram_rgba(
 pub(crate) fn build_histogram_alpha(
     pixels: &[rgb::RGBA<u8>],
     weights: &[f32],
-) -> (Vec<(OKLabA, f32)>, bool) {
+    stop: &dyn enough::Stop,
+) -> Result<AlphaHistogram, enough::StopReason> {
     assert_eq!(pixels.len(), weights.len());
 
     // Try RGBA dedup for large images
     if pixels.len() >= 65_536
-        && let Some(result) = build_histogram_alpha_dedup(pixels, weights)
+        && let Some(result) = build_histogram_alpha_dedup(pixels, weights, stop)?
     {
-        return result;
+        return Ok(result);
     }
 
-    build_histogram_alpha_direct(pixels, weights)
+    build_histogram_alpha_direct(pixels, weights, stop)
 }
 
 fn build_histogram_alpha_direct(
     pixels: &[rgb::RGBA<u8>],
     weights: &[f32],
-) -> (Vec<(OKLabA, f32)>, bool) {
+    stop: &dyn enough::Stop,
+) -> Result<AlphaHistogram, enough::StopReason> {
     let bits: u32 = 5;
     let alpha_bits: u32 = 6; // 64 alpha levels
     let alpha_max = (1u32 << alpha_bits) - 1;
@@ -259,7 +327,10 @@ fn build_histogram_alpha_direct(
     let mut has_transparent = false;
     let mut buckets: BTreeMap<u64, AlphaHistEntry> = BTreeMap::new();
 
-    for (pixel, &weight) in pixels.iter().zip(weights.iter()) {
+    for (i, (pixel, &weight)) in pixels.iter().zip(weights.iter()).enumerate() {
+        if i.is_multiple_of(CANCEL_STRIDE) {
+            stop.check()?;
+        }
         if pixel.a == 0 {
             has_transparent = true;
             continue;
@@ -307,19 +378,23 @@ fn build_histogram_alpha_direct(
         })
         .collect();
 
-    (entries, has_transparent)
+    Ok((entries, has_transparent))
 }
 
 /// RGBA dedup: aggregate weights by exact RGBA value using BTreeMap.
 fn build_histogram_alpha_dedup(
     pixels: &[rgb::RGBA<u8>],
     weights: &[f32],
-) -> Option<(Vec<(OKLabA, f32)>, bool)> {
+    stop: &dyn enough::Stop,
+) -> Result<Option<AlphaHistogram>, enough::StopReason> {
     let mut has_transparent = false;
 
     // Count unique RGBA values and aggregate weights in one pass
     let mut weight_map: BTreeMap<u32, f32> = BTreeMap::new();
-    for (p, &w) in pixels.iter().zip(weights.iter()) {
+    for (i, (p, &w)) in pixels.iter().zip(weights.iter()).enumerate() {
+        if i.is_multiple_of(CANCEL_STRIDE) {
+            stop.check()?;
+        }
         if p.a == 0 {
             has_transparent = true;
             continue;
@@ -331,7 +406,7 @@ fn build_histogram_alpha_dedup(
     // Only proceed with dedup if unique colors are < 1/4 of total opaque pixels
     let opaque_count = pixels.len() - if has_transparent { 1 } else { 0 };
     if weight_map.len() >= opaque_count / 4 {
-        return None;
+        return Ok(None);
     }
 
     // Build histogram from deduplicated entries
@@ -390,7 +465,7 @@ fn build_histogram_alpha_dedup(
         })
         .collect();
 
-    Some((entries, has_transparent))
+    Ok(Some((entries, has_transparent)))
 }
 
 /// Histogram entry with alpha accumulation.
@@ -409,16 +484,20 @@ struct AlphaHistEntry {
 pub(crate) fn detect_exact_palette(
     pixels: &[rgb::RGB<u8>],
     max_colors: usize,
-) -> Option<Vec<rgb::RGB<u8>>> {
+    stop: &dyn enough::Stop,
+) -> Result<Option<Vec<rgb::RGB<u8>>>, enough::StopReason> {
     let mut seen = alloc::collections::BTreeSet::new();
-    for p in pixels {
+    for (i, p) in pixels.iter().enumerate() {
+        if i.is_multiple_of(CANCEL_STRIDE) {
+            stop.check()?;
+        }
         let key = (p.r as u32) << 16 | (p.g as u32) << 8 | p.b as u32;
         seen.insert(key);
         if seen.len() > max_colors {
-            return None;
+            return Ok(None);
         }
     }
-    Some(
+    Ok(Some(
         seen.into_iter()
             .map(|k| rgb::RGB {
                 r: (k >> 16) as u8,
@@ -426,7 +505,7 @@ pub(crate) fn detect_exact_palette(
                 b: k as u8,
             })
             .collect(),
-    )
+    ))
 }
 
 /// Detect if an RGBA image uses at most `max_colors` unique colors (including alpha).
@@ -434,10 +513,14 @@ pub(crate) fn detect_exact_palette(
 pub(crate) fn detect_exact_palette_rgba(
     pixels: &[rgb::RGBA<u8>],
     max_colors: usize,
-) -> Option<(Vec<rgb::RGBA<u8>>, bool)> {
+    stop: &dyn enough::Stop,
+) -> Result<Option<RgbaExactPalette>, enough::StopReason> {
     let mut seen = alloc::collections::BTreeSet::new();
     let mut has_transparent = false;
-    for p in pixels {
+    for (i, p) in pixels.iter().enumerate() {
+        if i.is_multiple_of(CANCEL_STRIDE) {
+            stop.check()?;
+        }
         if p.a == 0 {
             has_transparent = true;
             continue; // transparent pixels don't count toward palette
@@ -445,7 +528,7 @@ pub(crate) fn detect_exact_palette_rgba(
         let key = (p.r as u32) << 24 | (p.g as u32) << 16 | (p.b as u32) << 8 | p.a as u32;
         seen.insert(key);
         if seen.len() > max_colors {
-            return None;
+            return Ok(None);
         }
     }
     let colors = seen
@@ -457,7 +540,7 @@ pub(crate) fn detect_exact_palette_rgba(
             a: k as u8,
         })
         .collect();
-    Some((colors, has_transparent))
+    Ok(Some((colors, has_transparent)))
 }
 
 #[cfg(test)]

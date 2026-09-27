@@ -12,46 +12,86 @@ use crate::oklab::srgb_to_oklab_l_fast;
 /// Returns weights in [0.1, 1.0] where:
 /// - High weight (≈1.0) = smooth region → protect quality, allocate palette entries
 /// - Low weight (≈0.1) = textured region → error is masked, allow more quantization
+#[allow(dead_code)] // reachable via the feature-gated `_dev` module
 pub fn compute_masking_weights(pixels: &[rgb::RGB<u8>], width: usize, height: usize) -> Vec<f32> {
+    compute_masking_weights_with_stop(pixels, width, height, &enough::Unstoppable)
+        .expect("Unstoppable::check never fails")
+}
+
+/// [`compute_masking_weights`] with a [`stop`](enough::Stop) token: checked at
+/// row stride inside each O(pixels) phase; on stop the partial weights are
+/// discarded and the [`StopReason`](enough::StopReason) is returned.
+pub fn compute_masking_weights_with_stop(
+    pixels: &[rgb::RGB<u8>],
+    width: usize,
+    height: usize,
+    stop: &dyn enough::Stop,
+) -> Result<Vec<f32>, enough::StopReason> {
     let luminance = extract_luminance(pixels);
-    let contrast = compute_local_contrast(&luminance, width, height);
+    let contrast = compute_local_contrast(&luminance, width, height, stop)?;
     let block_w = width.div_ceil(4);
     let block_h = height.div_ceil(4);
-    let block_masking = erode_to_blocks(&contrast, width, height, block_w, block_h);
-    let per_pixel = upscale_bilinear(&block_masking, block_w, block_h, width, height);
-    masking_to_weights(&per_pixel)
+    let block_masking = erode_to_blocks(&contrast, width, height, block_w, block_h, stop)?;
+    let per_pixel = upscale_bilinear(&block_masking, block_w, block_h, width, height, stop)?;
+    Ok(masking_to_weights(&per_pixel))
 }
 
 /// Compute masking weights from pre-computed OKLab values.
 ///
 /// Extracts L from `labs[i].l` instead of converting sRGB per pixel.
+#[allow(dead_code)] // reachable via the feature-gated `_dev` module
 pub fn compute_masking_weights_from_labs(
     labs: &[crate::oklab::OKLab],
     width: usize,
     height: usize,
 ) -> Vec<f32> {
+    compute_masking_weights_from_labs_with_stop(labs, width, height, &enough::Unstoppable)
+        .expect("Unstoppable::check never fails")
+}
+
+/// [`compute_masking_weights_from_labs`] with a [`stop`](enough::Stop) token.
+/// See [`compute_masking_weights_with_stop`].
+pub fn compute_masking_weights_from_labs_with_stop(
+    labs: &[crate::oklab::OKLab],
+    width: usize,
+    height: usize,
+    stop: &dyn enough::Stop,
+) -> Result<Vec<f32>, enough::StopReason> {
     let luminance: Vec<f32> = labs.iter().map(|lab| lab.l).collect();
-    let contrast = compute_local_contrast(&luminance, width, height);
+    let contrast = compute_local_contrast(&luminance, width, height, stop)?;
     let block_w = width.div_ceil(4);
     let block_h = height.div_ceil(4);
-    let block_masking = erode_to_blocks(&contrast, width, height, block_w, block_h);
-    let per_pixel = upscale_bilinear(&block_masking, block_w, block_h, width, height);
-    masking_to_weights(&per_pixel)
+    let block_masking = erode_to_blocks(&contrast, width, height, block_w, block_h, stop)?;
+    let per_pixel = upscale_bilinear(&block_masking, block_w, block_h, width, height, stop)?;
+    Ok(masking_to_weights(&per_pixel))
 }
 
 /// Same as above but for RGBA input.
+#[allow(dead_code)] // reachable via the feature-gated `_dev` module
 pub fn compute_masking_weights_rgba(
     pixels: &[rgb::RGBA<u8>],
     width: usize,
     height: usize,
 ) -> Vec<f32> {
+    compute_masking_weights_rgba_with_stop(pixels, width, height, &enough::Unstoppable)
+        .expect("Unstoppable::check never fails")
+}
+
+/// [`compute_masking_weights_rgba`] with a [`stop`](enough::Stop) token. See
+/// [`compute_masking_weights_with_stop`].
+pub fn compute_masking_weights_rgba_with_stop(
+    pixels: &[rgb::RGBA<u8>],
+    width: usize,
+    height: usize,
+    stop: &dyn enough::Stop,
+) -> Result<Vec<f32>, enough::StopReason> {
     let luminance = extract_luminance_rgba(pixels);
-    let contrast = compute_local_contrast(&luminance, width, height);
+    let contrast = compute_local_contrast(&luminance, width, height, stop)?;
     let block_w = width.div_ceil(4);
     let block_h = height.div_ceil(4);
-    let block_masking = erode_to_blocks(&contrast, width, height, block_w, block_h);
-    let per_pixel = upscale_bilinear(&block_masking, block_w, block_h, width, height);
-    masking_to_weights(&per_pixel)
+    let block_masking = erode_to_blocks(&contrast, width, height, block_w, block_h, stop)?;
+    let per_pixel = upscale_bilinear(&block_masking, block_w, block_h, width, height, stop)?;
+    Ok(masking_to_weights(&per_pixel))
 }
 
 /// Extract OKLab L (lightness) channel from RGB pixels.
@@ -70,11 +110,23 @@ fn extract_luminance_rgba(pixels: &[rgb::RGBA<u8>]) -> Vec<f32> {
         .collect()
 }
 
+/// Rows between cancellation checks inside the O(pixels) masking phases.
+/// 64 rows ≈ 32K pixels of work — well under any useful stop granularity.
+const ROW_CANCEL_STRIDE: usize = 64;
+
 /// Compute local contrast: (L - avg_4_neighbors)², clamped to [0, 0.2].
-fn compute_local_contrast(luminance: &[f32], width: usize, height: usize) -> Vec<f32> {
+fn compute_local_contrast(
+    luminance: &[f32],
+    width: usize,
+    height: usize,
+    stop: &dyn enough::Stop,
+) -> Result<Vec<f32>, enough::StopReason> {
     let mut contrast = vec![0.0f32; luminance.len()];
 
     for y in 0..height {
+        if y % ROW_CANCEL_STRIDE == 0 {
+            stop.check()?;
+        }
         for x in 0..width {
             let idx = y * width + x;
             let center = luminance[idx];
@@ -109,7 +161,7 @@ fn compute_local_contrast(luminance: &[f32], width: usize, height: usize) -> Vec
         }
     }
 
-    contrast
+    Ok(contrast)
 }
 
 /// Min-biased erosion: for each block, take the weighted average of the 4 smallest contrast values.
@@ -120,12 +172,17 @@ fn erode_to_blocks(
     height: usize,
     block_w: usize,
     block_h: usize,
-) -> Vec<f32> {
+    stop: &dyn enough::Stop,
+) -> Result<Vec<f32>, enough::StopReason> {
     const WEIGHTS: [f32; 4] = [0.40, 0.25, 0.20, 0.15];
 
     let mut blocks = vec![0.0f32; block_w * block_h];
 
     for by in 0..block_h {
+        // One block row covers 4 pixel rows — quarter the pixel-row stride.
+        if by % (ROW_CANCEL_STRIDE / 4) == 0 {
+            stop.check()?;
+        }
         for bx in 0..block_w {
             // Gather all contrast values in this 4x4 block (max 16 values)
             let mut values = [0.0f32; 16];
@@ -163,7 +220,7 @@ fn erode_to_blocks(
         }
     }
 
-    blocks
+    Ok(blocks)
 }
 
 /// Bilinear upscale from block grid to per-pixel resolution.
@@ -173,10 +230,14 @@ fn upscale_bilinear(
     block_h: usize,
     width: usize,
     height: usize,
-) -> Vec<f32> {
+    stop: &dyn enough::Stop,
+) -> Result<Vec<f32>, enough::StopReason> {
     let mut output = vec![0.0f32; width * height];
 
     for y in 0..height {
+        if y % ROW_CANCEL_STRIDE == 0 {
+            stop.check()?;
+        }
         for x in 0..width {
             // Map pixel center to block grid coordinates
             // Block centers are at (bx * 4 + 2, by * 4 + 2)
@@ -202,7 +263,7 @@ fn upscale_bilinear(
         }
     }
 
-    output
+    Ok(output)
 }
 
 /// Convert masking values to weights.

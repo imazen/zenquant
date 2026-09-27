@@ -123,6 +123,10 @@ pub mod _dev {
 
 use alloc::vec::Vec;
 
+/// Pixel-iteration stride between `stop.check()` calls inside lib.rs's own
+/// O(pixels) scans — same cadence as `CANCEL_STRIDE` in `joint.rs`.
+const CANCEL_STRIDE: usize = 8192;
+
 /// Quality preset — controls k-means iterations, AQ masking, and Viterbi optimization.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -897,7 +901,9 @@ pub fn quantize_with_stop(
     let max_colors = config.max_colors as usize;
 
     // Fast path: image already has ≤max_colors unique colors
-    if let Some(exact_colors) = histogram::detect_exact_palette(pixels, max_colors) {
+    if let Some(exact_colors) = histogram::detect_exact_palette(pixels, max_colors, stop)
+        .map_err(QuantizeError::Cancelled)?
+    {
         let centroids = simd::batch_srgb_to_oklab_vec(&exact_colors);
         let pal = palette::Palette::from_centroids_sorted(centroids, false, tuning.sort_strategy);
         let mut indices = dither::simple_remap(pixels, &pal);
@@ -934,13 +940,16 @@ pub fn quantize_with_stop(
 
     // 1. Compute AQ masking weights (skip for fast mode — uniform weights)
     let weights = if use_masking {
-        masking::compute_masking_weights_from_labs(&labs, width, height)
+        masking::compute_masking_weights_from_labs_with_stop(&labs, width, height, stop)
+            .map_err(QuantizeError::Cancelled)?
     } else {
         vec![1.0f32; pixels.len()]
     };
 
     // 2. Build weighted histogram (adaptive depth: bumps bit resolution if too few entries)
-    let (hist, _hist_bumped) = histogram::build_histogram_from_labs(&labs, &weights, max_colors);
+    let (hist, _hist_bumped) =
+        histogram::build_histogram_from_labs_with_stop(&labs, &weights, max_colors, stop)
+            .map_err(QuantizeError::Cancelled)?;
 
     // 3. Farthest-point seeding with histogram-level k-means refinement
     let mut centroids = median_cut::farthest_point_quantize(hist, max_colors, stop);
@@ -1173,7 +1182,8 @@ pub fn quantize_rgba_with_stop(
 
     // Fast path: image already has ≤max_colors unique colors
     if let Some((exact_colors, has_transparent)) =
-        histogram::detect_exact_palette_rgba(pixels, max_colors)
+        histogram::detect_exact_palette_rgba(pixels, max_colors, stop)
+            .map_err(QuantizeError::Cancelled)?
     {
         let rgb_colors: Vec<rgb::RGB<u8>> = exact_colors
             .iter()
@@ -1220,14 +1230,16 @@ pub fn quantize_rgba_with_stop(
     let labs = simd::batch_srgb_to_oklab_vec(&rgb_pixels);
 
     let weights = if use_masking {
-        masking::compute_masking_weights_rgba(pixels, width, height)
+        masking::compute_masking_weights_rgba_with_stop(pixels, width, height, stop)
+            .map_err(QuantizeError::Cancelled)?
     } else {
         vec![1.0f32; pixels.len()]
     };
 
     let (pal, mut indices) = if tuning.alpha_mode == AlphaMode::Full {
         // Full alpha quantization: 4D OKLabA pipeline
-        let (hist, has_transparent) = histogram::build_histogram_alpha(pixels, &weights);
+        let (hist, has_transparent) = histogram::build_histogram_alpha(pixels, &weights, stop)
+            .map_err(QuantizeError::Cancelled)?;
         let opaque_colors = if has_transparent {
             max_colors.saturating_sub(1)
         } else {
@@ -1311,7 +1323,9 @@ pub fn quantize_rgba_with_stop(
         (pal, indices)
     } else {
         // Binary transparency: opaque pipeline with transparent index
-        let (hist, has_transparent) = histogram::build_histogram_rgba(pixels, &weights);
+        let (hist, has_transparent) =
+            histogram::build_histogram_rgba_with_stop(pixels, &weights, stop)
+                .map_err(QuantizeError::Cancelled)?;
         let opaque_colors = if has_transparent {
             max_colors.saturating_sub(1)
         } else {
@@ -1543,7 +1557,8 @@ pub fn build_palette_with_stop(
     let max_colors = config.max_colors as usize;
 
     // Fast path: all frames combined have ≤max_colors unique colors
-    let all_exact = detect_exact_palette_multi_rgb(frames, max_colors);
+    let all_exact = detect_exact_palette_multi_rgb(frames, max_colors, stop)
+        .map_err(QuantizeError::Cancelled)?;
     if let Some(exact_colors) = all_exact {
         let centroids = simd::batch_srgb_to_oklab_vec(&exact_colors);
         let mut pal =
@@ -1569,17 +1584,20 @@ pub fn build_palette_with_stop(
     let mut all_weights: Vec<f32> = Vec::new();
 
     for frame in frames {
+        stop.check().map_err(QuantizeError::Cancelled)?;
         let pixels: Vec<rgb::RGB<u8>> = frame.pixels().collect();
         let w = frame.width();
         let h = frame.height();
 
         let weights = if use_masking {
-            masking::compute_masking_weights(&pixels, w, h)
+            masking::compute_masking_weights_with_stop(&pixels, w, h, stop)
+                .map_err(QuantizeError::Cancelled)?
         } else {
             vec![1.0f32; pixels.len()]
         };
 
-        let hist = histogram::build_histogram(&pixels, &weights);
+        let hist = histogram::build_histogram_with_stop(&pixels, &weights, stop)
+            .map_err(QuantizeError::Cancelled)?;
         merged_hist.extend_from_slice(&hist);
 
         if kmeans_iters > 0 {
@@ -1694,7 +1712,8 @@ pub fn build_palette_rgba_with_stop(
     let max_colors = config.max_colors as usize;
 
     // Fast path: all frames combined have ≤max_colors unique colors
-    let all_exact = detect_exact_palette_multi_rgba(frames, max_colors);
+    let all_exact = detect_exact_palette_multi_rgba(frames, max_colors, stop)
+        .map_err(QuantizeError::Cancelled)?;
     if let Some((exact_colors, has_transparent)) = all_exact {
         if tuning.alpha_mode == AlphaMode::Full {
             let rgb_colors: Vec<rgb::RGB<u8>> = exact_colors
@@ -1747,12 +1766,14 @@ pub fn build_palette_rgba_with_stop(
 
     // Collect pixels and weights from all frames (masking is per-frame/spatial)
     for frame in frames {
+        stop.check().map_err(QuantizeError::Cancelled)?;
         let pixels: Vec<rgb::RGBA<u8>> = frame.pixels().collect();
         let w = frame.width();
         let h = frame.height();
 
         let weights = if use_masking {
-            masking::compute_masking_weights_rgba(&pixels, w, h)
+            masking::compute_masking_weights_rgba_with_stop(&pixels, w, h, stop)
+                .map_err(QuantizeError::Cancelled)?
         } else {
             vec![1.0f32; pixels.len()]
         };
@@ -1764,7 +1785,8 @@ pub fn build_palette_rgba_with_stop(
     let pal = if tuning.alpha_mode == AlphaMode::Full {
         // Full alpha: 4D OKLabA histogram and median cut
         let (merged_hist, has_transparent) =
-            histogram::build_histogram_alpha(&all_pixels, &all_weights);
+            histogram::build_histogram_alpha(&all_pixels, &all_weights, stop)
+                .map_err(QuantizeError::Cancelled)?;
         let _ = has_transparent; // transparency handled by alpha channel in palette entries
 
         let mut centroids = median_cut::wu_quantize_alpha(merged_hist, max_colors, true, stop);
@@ -1786,7 +1808,8 @@ pub fn build_palette_rgba_with_stop(
     } else {
         // Binary alpha: 3D OKLab histogram, transparent pixels excluded
         let (merged_hist, has_transparent) =
-            histogram::build_histogram_rgba(&all_pixels, &all_weights);
+            histogram::build_histogram_rgba_with_stop(&all_pixels, &all_weights, stop)
+                .map_err(QuantizeError::Cancelled)?;
 
         let opaque_colors = if has_transparent {
             max_colors.saturating_sub(1)
@@ -1907,7 +1930,8 @@ fn remap_rgb_impl(
     let labs = simd::batch_srgb_to_oklab_vec(pixels);
 
     let weights = if use_masking {
-        masking::compute_masking_weights_from_labs(&labs, width, height)
+        masking::compute_masking_weights_from_labs_with_stop(&labs, width, height, stop)
+            .map_err(QuantizeError::Cancelled)?
     } else {
         vec![1.0f32; pixels.len()]
     };
@@ -2093,7 +2117,8 @@ fn remap_rgba_impl(
     let labs = simd::batch_srgb_to_oklab_vec(&rgb_pixels);
 
     let weights = if use_masking {
-        masking::compute_masking_weights_rgba(pixels, width, height)
+        masking::compute_masking_weights_rgba_with_stop(pixels, width, height, stop)
+            .map_err(QuantizeError::Cancelled)?
     } else {
         vec![1.0f32; pixels.len()]
     };
@@ -2204,18 +2229,22 @@ fn remap_rgba_impl(
 fn detect_exact_palette_multi_rgb(
     frames: &[ImgRef<'_, rgb::RGB<u8>>],
     max_colors: usize,
-) -> Option<Vec<rgb::RGB<u8>>> {
+    stop: &dyn enough::Stop,
+) -> Result<Option<Vec<rgb::RGB<u8>>>, enough::StopReason> {
     let mut seen = alloc::collections::BTreeSet::new();
     for frame in frames {
-        for p in frame.pixels() {
+        for (i, p) in frame.pixels().enumerate() {
+            if i.is_multiple_of(CANCEL_STRIDE) {
+                stop.check()?;
+            }
             let key = (p.r as u32) << 16 | (p.g as u32) << 8 | p.b as u32;
             seen.insert(key);
             if seen.len() > max_colors {
-                return None;
+                return Ok(None);
             }
         }
     }
-    Some(
+    Ok(Some(
         seen.into_iter()
             .map(|k| rgb::RGB {
                 r: (k >> 16) as u8,
@@ -2223,7 +2252,7 @@ fn detect_exact_palette_multi_rgb(
                 b: k as u8,
             })
             .collect(),
-    )
+    ))
 }
 
 /// Detect if all RGBA frames combined have ≤max_colors unique opaque colors.
@@ -2231,11 +2260,15 @@ fn detect_exact_palette_multi_rgb(
 fn detect_exact_palette_multi_rgba(
     frames: &[ImgRef<'_, rgb::RGBA<u8>>],
     max_colors: usize,
-) -> Option<(Vec<rgb::RGBA<u8>>, bool)> {
+    stop: &dyn enough::Stop,
+) -> Result<Option<histogram::RgbaExactPalette>, enough::StopReason> {
     let mut seen = alloc::collections::BTreeSet::new();
     let mut has_transparent = false;
     for frame in frames {
-        for p in frame.pixels() {
+        for (i, p) in frame.pixels().enumerate() {
+            if i.is_multiple_of(CANCEL_STRIDE) {
+                stop.check()?;
+            }
             if p.a == 0 {
                 has_transparent = true;
                 continue;
@@ -2243,7 +2276,7 @@ fn detect_exact_palette_multi_rgba(
             let key = (p.r as u32) << 24 | (p.g as u32) << 16 | (p.b as u32) << 8 | p.a as u32;
             seen.insert(key);
             if seen.len() > max_colors {
-                return None;
+                return Ok(None);
             }
         }
     }
@@ -2256,7 +2289,7 @@ fn detect_exact_palette_multi_rgba(
             a: k as u8,
         })
         .collect();
-    Some((colors, has_transparent))
+    Ok(Some((colors, has_transparent)))
 }
 
 /// Validate a caller-supplied `prev_indices` buffer used by the temporal-clamping
@@ -2507,6 +2540,82 @@ mod with_stop_entry_point_tests {
         assert!(
             stop.polls() > 0,
             "remap_rgba_with_stop must hand its token to the scanline refine"
+        );
+    }
+
+    /// The pre-k-means phases (exact-palette scan, masking weights, histogram
+    /// aggregation) are O(pixels) loops that used to run to completion with no
+    /// token at all — on multi-frame palette builds that showed up as >1s
+    /// unpolled stretches under the PollMeter harness. They must propagate a
+    /// stop instead of silently finishing.
+    #[test]
+    fn pre_kmeans_phases_propagate_stop() {
+        // 256×256 = 65536 px reaches the dedup histogram path (>= 65_536).
+        let (w, h) = (256usize, 256usize);
+        let px = gradient_rgb(w, h);
+        let weights = vec![1.0f32; px.len()];
+        let px_rgba = gradient_rgba(w, h);
+        let weights_rgba = vec![1.0f32; px_rgba.len()];
+
+        assert!(
+            matches!(
+                histogram::build_histogram_with_stop(&px, &weights, &AlwaysStop),
+                Err(enough::StopReason::Cancelled)
+            ),
+            "RGB histogram build must propagate stop"
+        );
+        assert!(
+            matches!(
+                histogram::build_histogram_rgba_with_stop(&px_rgba, &weights_rgba, &AlwaysStop),
+                Err(enough::StopReason::Cancelled)
+            ),
+            "RGBA histogram build must propagate stop"
+        );
+        assert!(
+            matches!(
+                masking::compute_masking_weights_with_stop(&px, w, h, &AlwaysStop),
+                Err(enough::StopReason::Cancelled)
+            ),
+            "RGB masking pass must propagate stop"
+        );
+        assert!(
+            matches!(
+                masking::compute_masking_weights_rgba_with_stop(&px_rgba, w, h, &AlwaysStop),
+                Err(enough::StopReason::Cancelled)
+            ),
+            "RGBA masking pass must propagate stop"
+        );
+    }
+
+    /// Same phases, healthy token: internal polling must fire (the stride
+    /// checks are inside the loops, not just at fn boundaries) and the result
+    /// must be identical to the non-stop entry points.
+    #[test]
+    fn pre_kmeans_phases_poll_without_changing_results() {
+        let (w, h) = (256usize, 256usize);
+        let px = gradient_rgb(w, h);
+        let weights = vec![1.0f32; px.len()];
+
+        let stop = CountingStop::new();
+        let hist = histogram::build_histogram_with_stop(&px, &weights, &stop)
+            .expect("histogram must succeed");
+        assert!(
+            stop.polls() >= 4,
+            "histogram over 64K px must poll inside its loops, got {}",
+            stop.polls()
+        );
+
+        let stop = CountingStop::new();
+        let w_stop =
+            masking::compute_masking_weights_with_stop(&px, w, h, &stop).expect("masking ok");
+        let w_plain = masking::compute_masking_weights(&px, w, h);
+        assert!(
+            stop.polls() > 0,
+            "masking over 64K px must poll inside its loops"
+        );
+        assert_eq!(
+            w_stop, w_plain,
+            "stop-token path must produce identical weights"
         );
     }
 }

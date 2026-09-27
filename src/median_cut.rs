@@ -7,6 +7,32 @@ use num_traits::Float;
 
 use crate::oklab::{OKLab, OKLabA};
 
+/// Sampled-pixel stride between `should_stop()` checks inside the per-pixel
+/// k-means assignment passes — same cadence as `CANCEL_STRIDE` in `joint.rs`.
+const CANCEL_STRIDE: usize = 8192;
+
+/// Batch sRGB→OKLab conversion split into ~1M-pixel chunks so `stop` is
+/// consulted between them — a single-shot SIMD pass over multi-megapixel
+/// inputs otherwise goes ~50ms+ without a poll. Elementwise, so chunking is
+/// exact. Returns `None` when stopped.
+fn batch_oklab_with_stop(
+    pixels: &[rgb::RGB<u8>],
+    stop: &dyn enough::Stop,
+) -> Option<Vec<OKLab>> {
+    const CHUNK: usize = 1 << 20;
+    if pixels.len() <= CHUNK {
+        return Some(crate::simd::batch_srgb_to_oklab_vec(pixels));
+    }
+    let mut labs = Vec::with_capacity(pixels.len());
+    for chunk in pixels.chunks(CHUNK) {
+        labs.extend_from_slice(&crate::simd::batch_srgb_to_oklab_vec(chunk));
+        if stop.should_stop() {
+            return None;
+        }
+    }
+    Some(labs)
+}
+
 // Old median cut kept for comparison tests only.
 #[cfg(test)]
 /// A box of color entries for median cut subdivision.
@@ -193,8 +219,9 @@ fn kmeans_refine(
     let k = centroids.len();
 
     for _ in 0..MAX_ITERS {
-        // Cooperative cancellation at the iteration boundary — never in the
-        // per-entry inner loop. Returns the centroids converged so far.
+        // Cooperative cancellation at the iteration boundary, and inside the
+        // per-entry pass at CANCEL_STRIDE cadence — one iteration over a large
+        // histogram is tens of ms of nearest-centroid lookups.
         if stop.should_stop() {
             break;
         }
@@ -204,7 +231,10 @@ fn kmeans_refine(
         let mut weights = vec![0.0f32; k];
 
         // Assign each entry to nearest centroid
-        for &(lab, w) in entries {
+        for (i, &(lab, w)) in entries.iter().enumerate() {
+            if i.is_multiple_of(CANCEL_STRIDE) && stop.should_stop() {
+                break;
+            }
             let nearest = find_nearest(&centroids, lab);
             sums_l[nearest] += lab.l * w;
             sums_a[nearest] += lab.a * w;
@@ -901,7 +931,9 @@ pub fn refine_against_pixels(
     max_samples: usize,
     stop: &dyn enough::Stop,
 ) -> Vec<OKLab> {
-    let labs = crate::simd::batch_srgb_to_oklab_vec(pixels);
+    let Some(labs) = batch_oklab_with_stop(pixels, stop) else {
+        return centroids;
+    };
     refine_against_pixels_from_labs(centroids, pixels, &labs, weights, iterations, max_samples, stop)
 }
 
@@ -924,6 +956,10 @@ pub fn refine_against_pixels_from_labs(
     }
 
     let n = pixels.len();
+
+    if stop.should_stop() {
+        return centroids;
+    }
 
     // Pre-compute grid OKLab values once (4096 entries, avoids 4096 srgb_to_oklab per iteration)
     let grid_labs = precompute_nn_grid();
@@ -953,8 +989,9 @@ pub fn refine_against_pixels_from_labs(
 
     for iter in 0..iterations {
         // Cooperative cancellation: bail at the iteration boundary, returning
-        // the best centroids refined so far. Never checked in the per-pixel
-        // inner loop below — only here at the outer k-means iteration loop.
+        // the best centroids refined so far. The per-pixel pass below also
+        // polls at CANCEL_STRIDE cadence — one pass over a large frame is
+        // tens of ms, too long to leave dark.
         if stop.should_stop() {
             break;
         }
@@ -985,6 +1022,12 @@ pub fn refine_against_pixels_from_labs(
             let pixel = &pixels[i];
             let weight = weights[i];
             let lab = labs[i];
+            // Poll inside the assignment pass — one iteration over millions of
+            // pixels is tens of ms of NN lookups. A partial pass still leaves
+            // usable centroids; the iteration-boundary check exits cleanly.
+            if sampled_count.is_multiple_of(CANCEL_STRIDE) && stop.should_stop() {
+                break;
+            }
             sampled_count += 1;
 
             // Triangle-inequality early exit: if the pixel is closer to its
@@ -1057,16 +1100,26 @@ pub fn refine_against_pixels_rgba(
     max_samples: usize,
     stop: &dyn enough::Stop,
 ) -> Vec<OKLab> {
-    // Batch-convert RGB channels, then zero out transparent pixels
+    // Batch-convert RGB channels, then zero out transparent pixels.
+    // Each conversion is an O(pixels) pass — check between them so a stop
+    // returns the seed centroids instead of waiting out the whole prologue.
     let rgb_pixels: Vec<rgb::RGB<u8>> = pixels
         .iter()
         .map(|p| rgb::RGB::new(p.r, p.g, p.b))
         .collect();
-    let mut labs = crate::simd::batch_srgb_to_oklab_vec(&rgb_pixels);
+    if stop.should_stop() {
+        return centroids;
+    }
+    let Some(mut labs) = batch_oklab_with_stop(&rgb_pixels, stop) else {
+        return centroids;
+    };
     for (lab, pixel) in labs.iter_mut().zip(pixels.iter()) {
         if pixel.a == 0 {
             *lab = OKLab::new(0.0, 0.0, 0.0);
         }
+    }
+    if stop.should_stop() {
+        return centroids;
     }
     refine_against_pixels_rgba_from_labs(
         centroids,
@@ -1100,6 +1153,10 @@ pub fn refine_against_pixels_rgba_from_labs(
 
     let n = pixels.len();
 
+    if stop.should_stop() {
+        return centroids;
+    }
+
     // Pre-compute grid OKLab values once (4096 entries)
     let grid_labs = precompute_nn_grid();
 
@@ -1120,8 +1177,9 @@ pub fn refine_against_pixels_rgba_from_labs(
 
     for iter in 0..iterations {
         // Cooperative cancellation: bail at the iteration boundary, returning
-        // the best centroids refined so far. Never checked in the per-pixel
-        // inner loop below — only here at the outer k-means iteration loop.
+        // the best centroids refined so far. The per-pixel pass below also
+        // polls at CANCEL_STRIDE cadence — one pass over a large frame is
+        // tens of ms, too long to leave dark.
         if stop.should_stop() {
             break;
         }
@@ -1153,6 +1211,9 @@ pub fn refine_against_pixels_rgba_from_labs(
             }
             let weight = weights[i];
             let lab = labs[i];
+            if sampled_count.is_multiple_of(CANCEL_STRIDE) && stop.should_stop() {
+                break;
+            }
             sampled_count += 1;
 
             let nearest = if iter > 0 {
@@ -1394,8 +1455,9 @@ fn kmeans_refine_alpha(
     let k = centroids.len();
 
     for _ in 0..MAX_ITERS {
-        // Cooperative cancellation at the iteration boundary — never in the
-        // per-entry inner loop. Returns the centroids converged so far.
+        // Cooperative cancellation at the iteration boundary, and inside the
+        // per-entry pass at CANCEL_STRIDE cadence — one iteration over a large
+        // histogram is tens of ms of nearest-centroid lookups.
         if stop.should_stop() {
             break;
         }
@@ -1405,7 +1467,10 @@ fn kmeans_refine_alpha(
         let mut sums_al = vec![0.0f32; k];
         let mut weights = vec![0.0f32; k];
 
-        for &(laba, w) in entries {
+        for (i, &(laba, w)) in entries.iter().enumerate() {
+            if i.is_multiple_of(CANCEL_STRIDE) && stop.should_stop() {
+                break;
+            }
             let nearest = find_nearest_alpha(&centroids, laba);
             sums_l[nearest] += laba.lab.l * w;
             sums_a[nearest] += laba.lab.a * w;
@@ -1458,7 +1523,12 @@ pub fn refine_against_pixels_alpha(
         .iter()
         .map(|p| rgb::RGB::new(p.r, p.g, p.b))
         .collect();
-    let labs = crate::simd::batch_srgb_to_oklab_vec(&rgb_pixels);
+    if stop.should_stop() {
+        return centroids;
+    }
+    let Some(labs) = batch_oklab_with_stop(&rgb_pixels, stop) else {
+        return centroids;
+    };
     let labas: Vec<OKLabA> = labs
         .iter()
         .zip(pixels.iter())
@@ -1484,8 +1554,9 @@ pub fn refine_against_pixels_alpha(
 
     for iter in 0..iterations {
         // Cooperative cancellation: bail at the iteration boundary, returning
-        // the best centroids refined so far. Never checked in the per-pixel
-        // inner loop below — only here at the outer k-means iteration loop.
+        // the best centroids refined so far. The per-pixel pass below also
+        // polls at CANCEL_STRIDE cadence — one pass over a large frame is
+        // tens of ms, too long to leave dark.
         if stop.should_stop() {
             break;
         }
@@ -1511,6 +1582,9 @@ pub fn refine_against_pixels_alpha(
                 continue;
             }
             let weight = weights[i];
+            if sampled_count.is_multiple_of(CANCEL_STRIDE) && stop.should_stop() {
+                break;
+            }
             sampled_count += 1;
 
             let nearest = find_nearest_alpha(&centroids, laba);
