@@ -2233,15 +2233,15 @@ fn detect_exact_palette_multi_rgb(
 ) -> Result<Option<Vec<rgb::RGB<u8>>>, enough::StopReason> {
     let mut seen = alloc::collections::BTreeSet::new();
     for frame in frames {
-        for row in frame.rows() {
-            for chunk in row.chunks(CANCEL_STRIDE) {
-                stop.check()?;
-                for p in chunk {
-                    let key = (p.r as u32) << 16 | (p.g as u32) << 8 | p.b as u32;
-                    seen.insert(key);
-                    if seen.len() > max_colors {
-                        return Ok(None);
-                    }
+        let mut pixels = frame.pixels();
+        let count = frame.width() * frame.height();
+        for start in (0..count).step_by(CANCEL_STRIDE) {
+            stop.check()?;
+            for p in pixels.by_ref().take((count - start).min(CANCEL_STRIDE)) {
+                let key = (p.r as u32) << 16 | (p.g as u32) << 8 | p.b as u32;
+                seen.insert(key);
+                if seen.len() > max_colors {
+                    return Ok(None);
                 }
             }
         }
@@ -2267,20 +2267,19 @@ fn detect_exact_palette_multi_rgba(
     let mut seen = alloc::collections::BTreeSet::new();
     let mut has_transparent = false;
     for frame in frames {
-        for row in frame.rows() {
-            for chunk in row.chunks(CANCEL_STRIDE) {
-                stop.check()?;
-                for p in chunk {
-                    if p.a == 0 {
-                        has_transparent = true;
-                        continue;
-                    }
-                    let key =
-                        (p.r as u32) << 24 | (p.g as u32) << 16 | (p.b as u32) << 8 | p.a as u32;
-                    seen.insert(key);
-                    if seen.len() > max_colors {
-                        return Ok(None);
-                    }
+        let mut pixels = frame.pixels();
+        let count = frame.width() * frame.height();
+        for start in (0..count).step_by(CANCEL_STRIDE) {
+            stop.check()?;
+            for p in pixels.by_ref().take((count - start).min(CANCEL_STRIDE)) {
+                if p.a == 0 {
+                    has_transparent = true;
+                    continue;
+                }
+                let key = (p.r as u32) << 24 | (p.g as u32) << 16 | (p.b as u32) << 8 | p.a as u32;
+                seen.insert(key);
+                if seen.len() > max_colors {
+                    return Ok(None);
                 }
             }
         }
@@ -2753,5 +2752,51 @@ mod max_pixels_tests {
         let cfg = QuantizeConfig::new(OutputFormat::Png).with_max_pixels(None);
         let (w, h) = (12_000usize, 11_000usize); // 132 MP
         assert!(validate_inputs(w * h, w, h, &cfg).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod strided_palette_scan_tests {
+    use super::*;
+
+    #[test]
+    fn narrow_palette_scan_polls_per_batch() {
+        struct Counter(core::sync::atomic::AtomicUsize);
+        impl enough::Stop for Counter {
+            fn check(&self) -> Result<(), enough::StopReason> {
+                self.0.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                Ok(())
+            }
+        }
+        let pixels = vec![RGB::new(0, 0, 255); CANCEL_STRIDE + 1];
+        let frame = ImgRef::new(pixels.as_slice(), 1, pixels.len());
+        let stop = Counter(core::sync::atomic::AtomicUsize::new(0));
+        assert_eq!(
+            detect_exact_palette_multi_rgb(&[frame], 1, &stop).unwrap(),
+            Some(vec![RGB::new(0, 0, 255)])
+        );
+        assert_eq!(stop.0.load(core::sync::atomic::Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn exact_palette_scans_exclude_row_padding_across_batches() {
+        let width = CANCEL_STRIDE + 1;
+        let stride = width + 3;
+        let mut rgb = vec![RGB::new(255, 0, 0); stride * 2];
+        let mut rgba = vec![RGBA::new(255, 0, 0, 255); stride * 2];
+        for row in 0..2 {
+            rgb[row * stride..row * stride + width].fill(RGB::new(0, 0, 255));
+            rgba[row * stride..row * stride + width].fill(RGBA::new(0, 0, 255, 255));
+        }
+        let rgb_frame = ImgRef::new_stride(rgb.as_slice(), width, 2, stride);
+        let rgba_frame = ImgRef::new_stride(rgba.as_slice(), width, 2, stride);
+        assert_eq!(
+            detect_exact_palette_multi_rgb(&[rgb_frame], 1, &enough::Unstoppable).unwrap(),
+            Some(vec![RGB::new(0, 0, 255)])
+        );
+        assert_eq!(
+            detect_exact_palette_multi_rgba(&[rgba_frame], 1, &enough::Unstoppable).unwrap(),
+            Some((vec![RGBA::new(0, 0, 255, 255)], false))
+        );
     }
 }

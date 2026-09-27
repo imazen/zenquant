@@ -8,7 +8,7 @@
   (5235cfa). All 48 cases in `output_fingerprint` matched a3e61b8 byte hashes.
 - Interrupted refinement retains the last complete centroid set; uncancellable
   sRGB-to-OKLab conversion retains its single-buffer path (a3e61b8).
-- Exact-palette scans poll between row chunks and support strided frames
+- Exact-palette scans poll between logical pixel batches and support strided frames
   (5235cfa). Masking polls at row boundaries; public non-stop signatures remain
   unchanged.
 
