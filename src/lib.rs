@@ -1190,13 +1190,26 @@ pub fn quantize_rgba_with_stop(
             .map(|c| rgb::RGB::new(c.r, c.g, c.b))
             .collect();
         let centroids = simd::batch_srgb_to_oklab_vec(&rgb_colors);
-        let pal = palette::Palette::from_centroids_sorted(
-            centroids,
-            has_transparent,
-            tuning.sort_strategy,
-        );
+        let pal = if tuning.alpha_mode == AlphaMode::Full {
+            let centroids = centroids
+                .into_iter()
+                .zip(&exact_colors)
+                .map(|(lab, p)| lab.with_alpha(p.a as f32 / 255.0))
+                .collect();
+            palette::Palette::from_centroids_alpha(centroids, has_transparent, tuning.sort_strategy)
+        } else {
+            palette::Palette::from_centroids_sorted(
+                centroids,
+                has_transparent,
+                tuning.sort_strategy,
+            )
+        };
         let transparent_idx = pal.transparent_index().unwrap_or(0);
-        let mut indices = dither::simple_remap_rgba(pixels, &pal, transparent_idx);
+        let mut indices = if tuning.alpha_mode == AlphaMode::Full {
+            dither::simple_remap_rgba_alpha(pixels, &pal, transparent_idx)
+        } else {
+            dither::simple_remap_rgba(pixels, &pal, transparent_idx)
+        };
         let pal = if tuning.gif_frequency_reorder {
             palette::reorder_by_frequency(&pal, &mut indices)
         } else {
@@ -1726,8 +1739,11 @@ pub fn build_palette_rgba_with_stop(
                 .zip(exact_colors.iter())
                 .map(|(lab, c)| lab.with_alpha(c.a as f32 / 255.0))
                 .collect();
-            let mut pal =
-                palette::Palette::from_centroids_alpha(centroids, false, tuning.sort_strategy);
+            let mut pal = palette::Palette::from_centroids_alpha(
+                centroids,
+                has_transparent,
+                tuning.sort_strategy,
+            );
             pal.build_nn_cache();
             return Ok(QuantizeResult {
                 palette: pal,
@@ -1787,9 +1803,8 @@ pub fn build_palette_rgba_with_stop(
         let (merged_hist, has_transparent) =
             histogram::build_histogram_alpha(&all_pixels, &all_weights, stop)
                 .map_err(QuantizeError::Cancelled)?;
-        let _ = has_transparent; // transparency handled by alpha channel in palette entries
-
-        let mut centroids = median_cut::wu_quantize_alpha(merged_hist, max_colors, true, stop);
+        let colors = max_colors - usize::from(has_transparent);
+        let mut centroids = median_cut::wu_quantize_alpha(merged_hist, colors, true, stop);
 
         if kmeans_iters > 0 {
             centroids = median_cut::refine_against_pixels_alpha(
@@ -1802,7 +1817,11 @@ pub fn build_palette_rgba_with_stop(
             );
         }
 
-        let mut p = palette::Palette::from_centroids_alpha(centroids, false, tuning.sort_strategy);
+        let mut p = palette::Palette::from_centroids_alpha(
+            centroids,
+            has_transparent,
+            tuning.sort_strategy,
+        );
         p.build_nn_cache();
         p
     } else {
@@ -2274,11 +2293,14 @@ fn detect_exact_palette_multi_rgba(
             for p in pixels.by_ref().take((count - start).min(CANCEL_STRIDE)) {
                 if p.a == 0 {
                     has_transparent = true;
+                    if seen.len() + 1 > max_colors {
+                        return Ok(None);
+                    }
                     continue;
                 }
                 let key = (p.r as u32) << 24 | (p.g as u32) << 16 | (p.b as u32) << 8 | p.a as u32;
                 seen.insert(key);
-                if seen.len() > max_colors {
+                if seen.len() + usize::from(has_transparent) > max_colors {
                     return Ok(None);
                 }
             }
