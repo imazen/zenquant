@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Fixed
+- Transparent-only frames now contain a real transparent palette entry, avoiding
+  a GIF frequency-sort panic on unchanged animation frames. Exact RGBA palettes
+  retain partial alpha, and both single-frame and shared palettes reserve the
+  transparent slot within `max_colors`, including when transparency appears last.
+  The three regressions in `tests/animation_palettes.rs` fail on the prior source.
 - Cancellation polls run between histogram, candidate-search, and refinement
   batches, outside pixel loops; subsampling and accumulation order are unchanged
   (5235cfa). All 48 cases in `output_fingerprint` matched a3e61b8 byte hashes.

@@ -542,11 +542,14 @@ pub(crate) fn detect_exact_palette_rgba(
         for p in chunk {
             if p.a == 0 {
                 has_transparent = true;
-                continue; // transparent pixels don't count toward palette
+                if seen.len() + 1 > max_colors {
+                    return Ok(None);
+                }
+                continue; // All transparent pixels share the one reserved slot.
             }
             let key = (p.r as u32) << 24 | (p.g as u32) << 16 | (p.b as u32) << 8 | p.a as u32;
             seen.insert(key);
-            if seen.len() > max_colors {
+            if seen.len() + usize::from(has_transparent) > max_colors {
                 return Ok(None);
             }
         }

@@ -54,20 +54,7 @@ impl Palette {
         has_transparency: bool,
         strategy: PaletteSortStrategy,
     ) -> Self {
-        if centroids.is_empty() {
-            let empty = Self {
-                entries_srgb: Vec::new(),
-                entries_rgba: Vec::new(),
-                entries_oklab: Vec::new(),
-                transparent_index: if has_transparency { Some(0) } else { None },
-                nn_cache: None,
-                neighbors: Vec::new(),
-                neighbor_counts: Vec::new(),
-                simd_layout: crate::simd::PaletteSimd::empty(),
-            };
-            return empty;
-        }
-
+        // Even without opaque centroids, transparency needs a real entry.
         // Convert to sRGB and keep OKLab paired
         let mut pairs: Vec<(OKLab, [u8; 3])> = centroids
             .into_iter()
@@ -124,20 +111,7 @@ impl Palette {
         has_transparency: bool,
         strategy: PaletteSortStrategy,
     ) -> Self {
-        if centroids.is_empty() {
-            let empty = Self {
-                entries_srgb: Vec::new(),
-                entries_rgba: Vec::new(),
-                entries_oklab: Vec::new(),
-                transparent_index: if has_transparency { Some(0) } else { None },
-                nn_cache: None,
-                neighbors: Vec::new(),
-                neighbor_counts: Vec::new(),
-                simd_layout: crate::simd::PaletteSimd::empty(),
-            };
-            return empty;
-        }
-
+        // Even without nonzero-alpha centroids, transparency needs a real entry.
         // Convert to sRGB+alpha, keep OKLab paired
         let pairs: Vec<(OKLab, [u8; 3], u8)> = centroids
             .into_iter()
