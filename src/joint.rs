@@ -198,40 +198,42 @@ fn build_candidates(
     // not sit in the hot loop.
     const CANCEL_STRIDE: usize = 8192;
 
-    for i in 0..n {
-        if i % CANCEL_STRIDE == 0 && stop.should_stop() {
+    for start in (0..n).step_by(CANCEL_STRIDE) {
+        if stop.should_stop() {
             return None;
         }
-        let seed = initial_indices[i];
-        indices[i][0] = seed;
-
-        let w = weights[i].max(0.01);
-        let tol_sq = base_tol_sq / (w * w);
-
-        let mut buf = [0u8; MAX_CANDIDATES];
-        let found = palette.k_nearest_seeded(pixel_oklab[i], seed, &mut buf);
-
-        let mut count = 0usize;
-        for &cand in &buf[..found] {
-            let dist = palette.distance_sq(pixel_oklab[i], cand);
-            if dist <= tol_sq && count < MAX_CANDIDATES {
-                indices[i][count] = cand;
-                count += 1;
-            }
-        }
-
-        if count == 0 {
+        for i in start..start.saturating_add(CANCEL_STRIDE).min(n) {
+            let seed = initial_indices[i];
             indices[i][0] = seed;
-            count = 1;
-        } else {
-            let has_seed = indices[i][..count].contains(&seed);
-            if !has_seed && count < MAX_CANDIDATES {
-                indices[i][count] = seed;
-                count += 1;
-            }
-        }
 
-        counts[i] = count as u8;
+            let w = weights[i].max(0.01);
+            let tol_sq = base_tol_sq / (w * w);
+
+            let mut buf = [0u8; MAX_CANDIDATES];
+            let found = palette.k_nearest_seeded(pixel_oklab[i], seed, &mut buf);
+
+            let mut count = 0usize;
+            for &cand in &buf[..found] {
+                let dist = palette.distance_sq(pixel_oklab[i], cand);
+                if dist <= tol_sq && count < MAX_CANDIDATES {
+                    indices[i][count] = cand;
+                    count += 1;
+                }
+            }
+
+            if count == 0 {
+                indices[i][0] = seed;
+                count = 1;
+            } else {
+                let has_seed = indices[i][..count].contains(&seed);
+                if !has_seed && count < MAX_CANDIDATES {
+                    indices[i][count] = seed;
+                    count += 1;
+                }
+            }
+
+            counts[i] = count as u8;
+        }
     }
 
     Some(Candidates { indices, counts })

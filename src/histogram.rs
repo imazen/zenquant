@@ -110,7 +110,11 @@ pub fn build_histogram_with_stop(
 /// indicating genuine color diversity lost to bucketing precision. Below that,
 /// the image simply doesn't need that many palette entries.
 #[allow(dead_code)] // reachable via the feature-gated `_dev` module
-pub fn build_histogram_from_labs(labs: &[crate::oklab::OKLab], weights: &[f32], min_entries: usize) -> (Vec<(crate::oklab::OKLab, f32)>, bool) {
+pub fn build_histogram_from_labs(
+    labs: &[crate::oklab::OKLab],
+    weights: &[f32],
+    min_entries: usize,
+) -> (Vec<(crate::oklab::OKLab, f32)>, bool) {
     build_histogram_from_labs_with_stop(labs, weights, min_entries, &enough::Unstoppable)
         .expect("Unstoppable::check never fails")
 }
@@ -159,16 +163,16 @@ fn build_histogram_dedup_rgb(
     let mut seen = vec![0u8; BITVEC_SIZE / 8]; // 2MB
     let mut unique_count = 0usize;
 
-    for (i, p) in pixels.iter().enumerate() {
-        if i.is_multiple_of(CANCEL_STRIDE) {
-            stop.check()?;
-        }
-        let key = ((p.r as usize) << 16) | ((p.g as usize) << 8) | p.b as usize;
-        let byte_idx = key >> 3;
-        let bit_idx = key & 7;
-        if seen[byte_idx] & (1u8 << bit_idx) == 0 {
-            seen[byte_idx] |= 1u8 << bit_idx;
-            unique_count += 1;
+    for chunk in pixels.chunks(CANCEL_STRIDE) {
+        stop.check()?;
+        for p in chunk {
+            let key = ((p.r as usize) << 16) | ((p.g as usize) << 8) | p.b as usize;
+            let byte_idx = key >> 3;
+            let bit_idx = key & 7;
+            if seen[byte_idx] & (1u8 << bit_idx) == 0 {
+                seen[byte_idx] |= 1u8 << bit_idx;
+                unique_count += 1;
+            }
         }
     }
 
@@ -179,12 +183,15 @@ fn build_histogram_dedup_rgb(
 
     // Aggregate weights by exact RGB value
     let mut weight_map: BTreeMap<u32, f32> = BTreeMap::new();
-    for (i, (p, &w)) in pixels.iter().zip(weights.iter()).enumerate() {
-        if i.is_multiple_of(CANCEL_STRIDE) {
-            stop.check()?;
+    for (chunk, weight_chunk) in pixels
+        .chunks(CANCEL_STRIDE)
+        .zip(weights.chunks(CANCEL_STRIDE))
+    {
+        stop.check()?;
+        for (p, &w) in chunk.iter().zip(weight_chunk) {
+            let key = ((p.r as u32) << 16) | ((p.g as u32) << 8) | p.b as u32;
+            *weight_map.entry(key).or_default() += w;
         }
-        let key = ((p.r as u32) << 16) | ((p.g as u32) << 8) | p.b as u32;
-        *weight_map.entry(key).or_default() += w;
     }
 
     // Convert only unique colors to OKLab via SIMD batch
@@ -211,29 +218,32 @@ pub(crate) fn build_hist_at_depth(
 ) -> Result<Vec<(OKLab, f32)>, enough::StopReason> {
     let mut buckets: BTreeMap<u32, HistEntry> = BTreeMap::new();
 
-    for (i, (lab, &weight)) in labs.iter().zip(weights.iter()).enumerate() {
-        if i.is_multiple_of(CANCEL_STRIDE) {
-            stop.check()?;
-        }
-        let key = quantize_key(*lab, bits);
-        let w64 = weight as f64;
+    for (chunk, weight_chunk) in labs
+        .chunks(CANCEL_STRIDE)
+        .zip(weights.chunks(CANCEL_STRIDE))
+    {
+        stop.check()?;
+        for (lab, &weight) in chunk.iter().zip(weight_chunk) {
+            let key = quantize_key(*lab, bits);
+            let w64 = weight as f64;
 
-        buckets
-            .entry(key)
-            .and_modify(|e| {
-                e.l_sum += lab.l as f64 * w64;
-                e.a_sum += lab.a as f64 * w64;
-                e.b_sum += lab.b as f64 * w64;
-                e.weight += w64;
-                e.count += 1;
-            })
-            .or_insert_with(|| HistEntry {
-                l_sum: lab.l as f64 * w64,
-                a_sum: lab.a as f64 * w64,
-                b_sum: lab.b as f64 * w64,
-                weight: w64,
-                count: 1,
-            });
+            buckets
+                .entry(key)
+                .and_modify(|e| {
+                    e.l_sum += lab.l as f64 * w64;
+                    e.a_sum += lab.a as f64 * w64;
+                    e.b_sum += lab.b as f64 * w64;
+                    e.weight += w64;
+                    e.count += 1;
+                })
+                .or_insert_with(|| HistEntry {
+                    l_sum: lab.l as f64 * w64,
+                    a_sum: lab.a as f64 * w64,
+                    b_sum: lab.b as f64 * w64,
+                    weight: w64,
+                    count: 1,
+                });
+        }
     }
 
     Ok(buckets
@@ -268,20 +278,23 @@ pub fn build_histogram_rgba_with_stop(
     let mut opaque_pixels: Vec<rgb::RGB<u8>> = Vec::with_capacity(pixels.len());
     let mut opaque_weights: Vec<f32> = Vec::with_capacity(pixels.len());
 
-    for (i, (pixel, &weight)) in pixels.iter().zip(weights.iter()).enumerate() {
-        if i.is_multiple_of(CANCEL_STRIDE) {
-            stop.check()?;
+    for (chunk, weight_chunk) in pixels
+        .chunks(CANCEL_STRIDE)
+        .zip(weights.chunks(CANCEL_STRIDE))
+    {
+        stop.check()?;
+        for (pixel, &weight) in chunk.iter().zip(weight_chunk) {
+            if pixel.a == 0 {
+                has_transparent = true;
+                continue;
+            }
+            opaque_pixels.push(rgb::RGB {
+                r: pixel.r,
+                g: pixel.g,
+                b: pixel.b,
+            });
+            opaque_weights.push(weight);
         }
-        if pixel.a == 0 {
-            has_transparent = true;
-            continue;
-        }
-        opaque_pixels.push(rgb::RGB {
-            r: pixel.r,
-            g: pixel.g,
-            b: pixel.b,
-        });
-        opaque_weights.push(weight);
     }
 
     // Delegate to the RGB build (which handles dedup internally)
@@ -327,38 +340,41 @@ fn build_histogram_alpha_direct(
     let mut has_transparent = false;
     let mut buckets: BTreeMap<u64, AlphaHistEntry> = BTreeMap::new();
 
-    for (i, (pixel, &weight)) in pixels.iter().zip(weights.iter()).enumerate() {
-        if i.is_multiple_of(CANCEL_STRIDE) {
-            stop.check()?;
-        }
-        if pixel.a == 0 {
-            has_transparent = true;
-            continue;
-        }
+    for (chunk, weight_chunk) in pixels
+        .chunks(CANCEL_STRIDE)
+        .zip(weights.chunks(CANCEL_STRIDE))
+    {
+        stop.check()?;
+        for (pixel, &weight) in chunk.iter().zip(weight_chunk) {
+            if pixel.a == 0 {
+                has_transparent = true;
+                continue;
+            }
 
-        let lab = srgb_to_oklab(pixel.r, pixel.g, pixel.b);
-        let alpha_f = pixel.a as f32 / 255.0;
-        let color_key = quantize_key(lab, bits);
-        let alpha_bin = ((alpha_f * alpha_scale).round() as u32).min(alpha_max);
-        let key = (color_key as u64) << alpha_bits | alpha_bin as u64;
+            let lab = srgb_to_oklab(pixel.r, pixel.g, pixel.b);
+            let alpha_f = pixel.a as f32 / 255.0;
+            let color_key = quantize_key(lab, bits);
+            let alpha_bin = ((alpha_f * alpha_scale).round() as u32).min(alpha_max);
+            let key = (color_key as u64) << alpha_bits | alpha_bin as u64;
 
-        let w64 = weight as f64;
-        buckets
-            .entry(key)
-            .and_modify(|e| {
-                e.l_sum += lab.l as f64 * w64;
-                e.a_sum += lab.a as f64 * w64;
-                e.b_sum += lab.b as f64 * w64;
-                e.alpha_sum += alpha_f as f64 * w64;
-                e.weight += w64;
-            })
-            .or_insert_with(|| AlphaHistEntry {
-                l_sum: lab.l as f64 * w64,
-                a_sum: lab.a as f64 * w64,
-                b_sum: lab.b as f64 * w64,
-                alpha_sum: alpha_f as f64 * w64,
-                weight: w64,
-            });
+            let w64 = weight as f64;
+            buckets
+                .entry(key)
+                .and_modify(|e| {
+                    e.l_sum += lab.l as f64 * w64;
+                    e.a_sum += lab.a as f64 * w64;
+                    e.b_sum += lab.b as f64 * w64;
+                    e.alpha_sum += alpha_f as f64 * w64;
+                    e.weight += w64;
+                })
+                .or_insert_with(|| AlphaHistEntry {
+                    l_sum: lab.l as f64 * w64,
+                    a_sum: lab.a as f64 * w64,
+                    b_sum: lab.b as f64 * w64,
+                    alpha_sum: alpha_f as f64 * w64,
+                    weight: w64,
+                });
+        }
     }
 
     let entries = buckets
@@ -391,16 +407,20 @@ fn build_histogram_alpha_dedup(
 
     // Count unique RGBA values and aggregate weights in one pass
     let mut weight_map: BTreeMap<u32, f32> = BTreeMap::new();
-    for (i, (p, &w)) in pixels.iter().zip(weights.iter()).enumerate() {
-        if i.is_multiple_of(CANCEL_STRIDE) {
-            stop.check()?;
+    for (chunk, weight_chunk) in pixels
+        .chunks(CANCEL_STRIDE)
+        .zip(weights.chunks(CANCEL_STRIDE))
+    {
+        stop.check()?;
+        for (p, &w) in chunk.iter().zip(weight_chunk) {
+            if p.a == 0 {
+                has_transparent = true;
+                continue;
+            }
+            let key =
+                ((p.r as u32) << 24) | ((p.g as u32) << 16) | ((p.b as u32) << 8) | p.a as u32;
+            *weight_map.entry(key).or_default() += w;
         }
-        if p.a == 0 {
-            has_transparent = true;
-            continue;
-        }
-        let key = ((p.r as u32) << 24) | ((p.g as u32) << 16) | ((p.b as u32) << 8) | p.a as u32;
-        *weight_map.entry(key).or_default() += w;
     }
 
     // Only proceed with dedup if unique colors are < 1/4 of total opaque pixels
@@ -487,14 +507,14 @@ pub(crate) fn detect_exact_palette(
     stop: &dyn enough::Stop,
 ) -> Result<Option<Vec<rgb::RGB<u8>>>, enough::StopReason> {
     let mut seen = alloc::collections::BTreeSet::new();
-    for (i, p) in pixels.iter().enumerate() {
-        if i.is_multiple_of(CANCEL_STRIDE) {
-            stop.check()?;
-        }
-        let key = (p.r as u32) << 16 | (p.g as u32) << 8 | p.b as u32;
-        seen.insert(key);
-        if seen.len() > max_colors {
-            return Ok(None);
+    for chunk in pixels.chunks(CANCEL_STRIDE) {
+        stop.check()?;
+        for p in chunk {
+            let key = (p.r as u32) << 16 | (p.g as u32) << 8 | p.b as u32;
+            seen.insert(key);
+            if seen.len() > max_colors {
+                return Ok(None);
+            }
         }
     }
     Ok(Some(
@@ -517,18 +537,18 @@ pub(crate) fn detect_exact_palette_rgba(
 ) -> Result<Option<RgbaExactPalette>, enough::StopReason> {
     let mut seen = alloc::collections::BTreeSet::new();
     let mut has_transparent = false;
-    for (i, p) in pixels.iter().enumerate() {
-        if i.is_multiple_of(CANCEL_STRIDE) {
-            stop.check()?;
-        }
-        if p.a == 0 {
-            has_transparent = true;
-            continue; // transparent pixels don't count toward palette
-        }
-        let key = (p.r as u32) << 24 | (p.g as u32) << 16 | (p.b as u32) << 8 | p.a as u32;
-        seen.insert(key);
-        if seen.len() > max_colors {
-            return Ok(None);
+    for chunk in pixels.chunks(CANCEL_STRIDE) {
+        stop.check()?;
+        for p in chunk {
+            if p.a == 0 {
+                has_transparent = true;
+                continue; // transparent pixels don't count toward palette
+            }
+            let key = (p.r as u32) << 24 | (p.g as u32) << 16 | (p.b as u32) << 8 | p.a as u32;
+            seen.insert(key);
+            if seen.len() > max_colors {
+                return Ok(None);
+            }
         }
     }
     let colors = seen

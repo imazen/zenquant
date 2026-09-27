@@ -2233,14 +2233,16 @@ fn detect_exact_palette_multi_rgb(
 ) -> Result<Option<Vec<rgb::RGB<u8>>>, enough::StopReason> {
     let mut seen = alloc::collections::BTreeSet::new();
     for frame in frames {
-        for (i, p) in frame.pixels().enumerate() {
-            if i.is_multiple_of(CANCEL_STRIDE) {
+        for row in frame.rows() {
+            for chunk in row.chunks(CANCEL_STRIDE) {
                 stop.check()?;
-            }
-            let key = (p.r as u32) << 16 | (p.g as u32) << 8 | p.b as u32;
-            seen.insert(key);
-            if seen.len() > max_colors {
-                return Ok(None);
+                for p in chunk {
+                    let key = (p.r as u32) << 16 | (p.g as u32) << 8 | p.b as u32;
+                    seen.insert(key);
+                    if seen.len() > max_colors {
+                        return Ok(None);
+                    }
+                }
             }
         }
     }
@@ -2265,18 +2267,21 @@ fn detect_exact_palette_multi_rgba(
     let mut seen = alloc::collections::BTreeSet::new();
     let mut has_transparent = false;
     for frame in frames {
-        for (i, p) in frame.pixels().enumerate() {
-            if i.is_multiple_of(CANCEL_STRIDE) {
+        for row in frame.rows() {
+            for chunk in row.chunks(CANCEL_STRIDE) {
                 stop.check()?;
-            }
-            if p.a == 0 {
-                has_transparent = true;
-                continue;
-            }
-            let key = (p.r as u32) << 24 | (p.g as u32) << 16 | (p.b as u32) << 8 | p.a as u32;
-            seen.insert(key);
-            if seen.len() > max_colors {
-                return Ok(None);
+                for p in chunk {
+                    if p.a == 0 {
+                        has_transparent = true;
+                        continue;
+                    }
+                    let key =
+                        (p.r as u32) << 24 | (p.g as u32) << 16 | (p.b as u32) << 8 | p.a as u32;
+                    seen.insert(key);
+                    if seen.len() > max_colors {
+                        return Ok(None);
+                    }
+                }
             }
         }
     }

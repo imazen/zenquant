@@ -15,10 +15,7 @@ const CANCEL_STRIDE: usize = 8192;
 /// consulted between them — a single-shot SIMD pass over multi-megapixel
 /// inputs otherwise goes ~50ms+ without a poll. Elementwise, so chunking is
 /// exact. Returns `None` when stopped.
-fn batch_oklab_with_stop(
-    pixels: &[rgb::RGB<u8>],
-    stop: &dyn enough::Stop,
-) -> Option<Vec<OKLab>> {
+fn batch_oklab_with_stop(pixels: &[rgb::RGB<u8>], stop: &dyn enough::Stop) -> Option<Vec<OKLab>> {
     const CHUNK: usize = 1 << 20;
     if !stop.may_stop() || pixels.len() <= CHUNK {
         return Some(crate::simd::batch_srgb_to_oklab_vec(pixels));
@@ -231,15 +228,17 @@ fn kmeans_refine(
         let mut weights = vec![0.0f32; k];
 
         // Assign each entry to nearest centroid
-        for (i, &(lab, w)) in entries.iter().enumerate() {
-            if i.is_multiple_of(CANCEL_STRIDE) && stop.should_stop() {
+        for chunk in entries.chunks(CANCEL_STRIDE) {
+            if stop.should_stop() {
                 return centroids;
             }
-            let nearest = find_nearest(&centroids, lab);
-            sums_l[nearest] += lab.l * w;
-            sums_a[nearest] += lab.a * w;
-            sums_b[nearest] += lab.b * w;
-            weights[nearest] += w;
+            for &(lab, w) in chunk {
+                let nearest = find_nearest(&centroids, lab);
+                sums_l[nearest] += lab.l * w;
+                sums_a[nearest] += lab.a * w;
+                sums_b[nearest] += lab.b * w;
+                weights[nearest] += w;
+            }
         }
 
         // Recompute centroids and track movement
@@ -634,10 +633,7 @@ fn variance_from_stats_4d(
     if w < 1e-10 {
         return 0.0;
     }
-    (sl2 - sl * sl / w)
-        + (sa2 - sa * sa / w)
-        + (sb2 - sb * sb / w)
-        + (sal2 - sal * sal / w)
+    (sl2 - sl * sl / w) + (sa2 - sa * sa / w) + (sb2 - sb * sb / w) + (sal2 - sal * sal / w)
 }
 
 /// Variance-minimizing quantization with alpha as a 4th dimension.
@@ -719,8 +715,9 @@ pub fn wu_quantize_alpha(
 
         // Total stats for this box
         let (bw, bl, ba, bb, bal, bl2, ba2, bb2, bal2) = {
-            let (mut w, mut sl, mut sa, mut sb, mut sal, mut sl2, mut sa2, mut sb2, mut sal2) =
-                (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+            let (mut w, mut sl, mut sa, mut sb, mut sal, mut sl2, mut sa2, mut sb2, mut sal2) = (
+                0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64,
+            );
             for &i in &buf {
                 let (laba, wt) = &histogram[i];
                 let w64 = *wt as f64;
@@ -819,8 +816,9 @@ pub fn wu_quantize_alpha(
         let mid = start + best_split;
 
         let lvar = {
-            let (mut w, mut sl, mut sa, mut sb, mut sal, mut sl2, mut sa2, mut sb2, mut sal2) =
-                (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+            let (mut w, mut sl, mut sa, mut sb, mut sal, mut sl2, mut sa2, mut sb2, mut sal2) = (
+                0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64,
+            );
             for &i in &indices[start..mid] {
                 let (laba, wt) = &histogram[i];
                 let w64 = *wt as f64;
@@ -843,8 +841,9 @@ pub fn wu_quantize_alpha(
             variance_from_stats_4d(w, sl, sa, sb, sal, sl2, sa2, sb2, sal2)
         };
         let rvar = {
-            let (mut w, mut sl, mut sa, mut sb, mut sal, mut sl2, mut sa2, mut sb2, mut sal2) =
-                (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+            let (mut w, mut sl, mut sa, mut sb, mut sal, mut sl2, mut sa2, mut sb2, mut sal2) = (
+                0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64,
+            );
             for &i in &indices[mid..end] {
                 let (laba, wt) = &histogram[i];
                 let w64 = *wt as f64;
@@ -875,8 +874,7 @@ pub fn wu_quantize_alpha(
     let mut palette: Vec<OKLabA> = boxes
         .iter()
         .map(|&(s, e, _)| {
-            let (mut w, mut sl, mut sa, mut sb, mut sal) =
-                (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+            let (mut w, mut sl, mut sa, mut sb, mut sal) = (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
             for &i in &indices[s..e] {
                 let (laba, wt) = &histogram[i];
                 let w64 = *wt as f64;
@@ -934,7 +932,15 @@ pub fn refine_against_pixels(
     let Some(labs) = batch_oklab_with_stop(pixels, stop) else {
         return centroids;
     };
-    refine_against_pixels_from_labs(centroids, pixels, &labs, weights, iterations, max_samples, stop)
+    refine_against_pixels_from_labs(
+        centroids,
+        pixels,
+        &labs,
+        weights,
+        iterations,
+        max_samples,
+        stop,
+    )
 }
 
 /// Pixel-level k-means refinement using pre-computed OKLab values.
@@ -979,11 +985,7 @@ pub fn refine_against_pixels_from_labs(
     // Subsampling: if we have more pixels than max_samples, stride through them.
     // The stride offset rotates each iteration to cover different pixels.
     let needs_subsample = n > max_samples && max_samples > 0;
-    let stride = if needs_subsample {
-        n / max_samples
-    } else {
-        1
-    };
+    let stride = if needs_subsample { n / max_samples } else { 1 };
     // Prime for rotating offset each iteration
     const OFFSET_PRIME: usize = 7;
 
@@ -1019,45 +1021,48 @@ pub fn refine_against_pixels_from_labs(
 
         let mut i = offset;
         while i < n {
-            let pixel = &pixels[i];
-            let weight = weights[i];
-            let lab = labs[i];
-            // Poll inside the assignment pass — one iteration over millions of
-            // pixels is tens of ms of NN lookups. Keep the last complete
-            // iteration: a prefix-only update biases the palette spatially.
-            if sampled_count.is_multiple_of(CANCEL_STRIDE) && stop.should_stop() {
+            // Only commit centroids after a complete assignment pass.
+            if stop.should_stop() {
                 return centroids;
             }
-            sampled_count += 1;
+            let band_end = i
+                .saturating_add(stride.saturating_mul(CANCEL_STRIDE))
+                .min(n);
+            while i < band_end {
+                let pixel = &pixels[i];
+                let weight = weights[i];
+                let lab = labs[i];
+                sampled_count += 1;
 
-            // Triangle-inequality early exit: if the pixel is closer to its
-            // current centroid than half the distance to the nearest other
-            // centroid, no reassignment is possible.
-            let nearest = if iter > 0 {
-                let prev = assignments[i] as usize;
-                let d = lab.distance_sq(centroids[prev]);
-                if d < skip_threshold[prev] {
-                    prev
+                // Triangle-inequality early exit: if the pixel is closer to its
+                // current centroid than half the distance to the nearest other
+                // centroid, no reassignment is possible.
+                let nearest = if iter > 0 {
+                    let prev = assignments[i] as usize;
+                    let d = lab.distance_sq(centroids[prev]);
+                    if d < skip_threshold[prev] {
+                        prev
+                    } else {
+                        let seed = centroid_cache_lookup(&nn_cache, pixel.r, pixel.g, pixel.b);
+                        find_nearest_seeded(&centroids, lab, seed, &neighbors)
+                    }
                 } else {
                     let seed = centroid_cache_lookup(&nn_cache, pixel.r, pixel.g, pixel.b);
                     find_nearest_seeded(&centroids, lab, seed, &neighbors)
+                };
+
+                if iter > 0 && assignments[i] != nearest as u8 {
+                    changed_count += 1;
                 }
-            } else {
-                let seed = centroid_cache_lookup(&nn_cache, pixel.r, pixel.g, pixel.b);
-                find_nearest_seeded(&centroids, lab, seed, &neighbors)
-            };
+                assignments[i] = nearest as u8;
+                let w = weight as f64;
+                sums_l[nearest] += lab.l as f64 * w;
+                sums_a[nearest] += lab.a as f64 * w;
+                sums_b[nearest] += lab.b as f64 * w;
+                total_w[nearest] += w;
 
-            if iter > 0 && assignments[i] != nearest as u8 {
-                changed_count += 1;
+                i += stride;
             }
-            assignments[i] = nearest as u8;
-            let w = weight as f64;
-            sums_l[nearest] += lab.l as f64 * w;
-            sums_a[nearest] += lab.a as f64 * w;
-            sums_b[nearest] += lab.b as f64 * w;
-            total_w[nearest] += w;
-
-            i += stride;
         }
 
         // Save centroids before update (for incremental neighbor rebuild next iter)
@@ -1168,11 +1173,7 @@ pub fn refine_against_pixels_rgba_from_labs(
     let mut skip_threshold = compute_skip_thresholds(&centroids, &neighbors);
 
     let needs_subsample = n > max_samples && max_samples > 0;
-    let stride = if needs_subsample {
-        n / max_samples
-    } else {
-        1
-    };
+    let stride = if needs_subsample { n / max_samples } else { 1 };
     const OFFSET_PRIME: usize = 7;
 
     for iter in 0..iterations {
@@ -1204,43 +1205,49 @@ pub fn refine_against_pixels_rgba_from_labs(
 
         let mut i = offset;
         while i < n {
-            let pixel = &pixels[i];
-            if pixel.a == 0 {
-                i += stride;
-                continue;
-            }
-            let weight = weights[i];
-            let lab = labs[i];
-            if sampled_count.is_multiple_of(CANCEL_STRIDE) && stop.should_stop() {
+            // Only commit centroids after a complete assignment pass.
+            if stop.should_stop() {
                 return centroids;
             }
-            sampled_count += 1;
+            let band_end = i
+                .saturating_add(stride.saturating_mul(CANCEL_STRIDE))
+                .min(n);
+            while i < band_end {
+                let pixel = &pixels[i];
+                if pixel.a == 0 {
+                    i += stride;
+                    continue;
+                }
+                let weight = weights[i];
+                let lab = labs[i];
+                sampled_count += 1;
 
-            let nearest = if iter > 0 {
-                let prev = assignments[i] as usize;
-                let d = lab.distance_sq(centroids[prev]);
-                if d < skip_threshold[prev] {
-                    prev
+                let nearest = if iter > 0 {
+                    let prev = assignments[i] as usize;
+                    let d = lab.distance_sq(centroids[prev]);
+                    if d < skip_threshold[prev] {
+                        prev
+                    } else {
+                        let seed = centroid_cache_lookup(&nn_cache, pixel.r, pixel.g, pixel.b);
+                        find_nearest_seeded(&centroids, lab, seed, &neighbors)
+                    }
                 } else {
                     let seed = centroid_cache_lookup(&nn_cache, pixel.r, pixel.g, pixel.b);
                     find_nearest_seeded(&centroids, lab, seed, &neighbors)
+                };
+
+                if iter > 0 && assignments[i] != nearest as u8 {
+                    changed_count += 1;
                 }
-            } else {
-                let seed = centroid_cache_lookup(&nn_cache, pixel.r, pixel.g, pixel.b);
-                find_nearest_seeded(&centroids, lab, seed, &neighbors)
-            };
+                assignments[i] = nearest as u8;
+                let w = weight as f64;
+                sums_l[nearest] += lab.l as f64 * w;
+                sums_a[nearest] += lab.a as f64 * w;
+                sums_b[nearest] += lab.b as f64 * w;
+                total_w[nearest] += w;
 
-            if iter > 0 && assignments[i] != nearest as u8 {
-                changed_count += 1;
+                i += stride;
             }
-            assignments[i] = nearest as u8;
-            let w = weight as f64;
-            sums_l[nearest] += lab.l as f64 * w;
-            sums_a[nearest] += lab.a as f64 * w;
-            sums_b[nearest] += lab.b as f64 * w;
-            total_w[nearest] += w;
-
-            i += stride;
         }
 
         // Save centroids before update (for incremental neighbor rebuild next iter)
@@ -1467,16 +1474,18 @@ fn kmeans_refine_alpha(
         let mut sums_al = vec![0.0f32; k];
         let mut weights = vec![0.0f32; k];
 
-        for (i, &(laba, w)) in entries.iter().enumerate() {
-            if i.is_multiple_of(CANCEL_STRIDE) && stop.should_stop() {
+        for chunk in entries.chunks(CANCEL_STRIDE) {
+            if stop.should_stop() {
                 return centroids;
             }
-            let nearest = find_nearest_alpha(&centroids, laba);
-            sums_l[nearest] += laba.lab.l * w;
-            sums_a[nearest] += laba.lab.a * w;
-            sums_b[nearest] += laba.lab.b * w;
-            sums_al[nearest] += laba.alpha * w;
-            weights[nearest] += w;
+            for &(laba, w) in chunk {
+                let nearest = find_nearest_alpha(&centroids, laba);
+                sums_l[nearest] += laba.lab.l * w;
+                sums_a[nearest] += laba.lab.a * w;
+                sums_b[nearest] += laba.lab.b * w;
+                sums_al[nearest] += laba.alpha * w;
+                weights[nearest] += w;
+            }
         }
 
         let mut max_movement = 0.0f32;
@@ -1542,11 +1551,7 @@ pub fn refine_against_pixels_alpha(
         .collect();
 
     let needs_subsample = n > max_samples && max_samples > 0;
-    let stride = if needs_subsample {
-        n / max_samples
-    } else {
-        1
-    };
+    let stride = if needs_subsample { n / max_samples } else { 1 };
     const OFFSET_PRIME: usize = 7;
 
     // Per-pixel assignments for early convergence tracking
@@ -1576,31 +1581,37 @@ pub fn refine_against_pixels_alpha(
 
         let mut i = offset;
         while i < n {
-            let laba = labas[i];
-            if laba.alpha == 0.0 {
-                i += stride;
-                continue;
-            }
-            let weight = weights[i];
-            if sampled_count.is_multiple_of(CANCEL_STRIDE) && stop.should_stop() {
+            // Only commit centroids after a complete assignment pass.
+            if stop.should_stop() {
                 return centroids;
             }
-            sampled_count += 1;
+            let band_end = i
+                .saturating_add(stride.saturating_mul(CANCEL_STRIDE))
+                .min(n);
+            while i < band_end {
+                let laba = labas[i];
+                if laba.alpha == 0.0 {
+                    i += stride;
+                    continue;
+                }
+                let weight = weights[i];
+                sampled_count += 1;
 
-            let nearest = find_nearest_alpha(&centroids, laba);
-            if iter > 0 && assignments[i] != nearest as u8 {
-                changed_count += 1;
+                let nearest = find_nearest_alpha(&centroids, laba);
+                if iter > 0 && assignments[i] != nearest as u8 {
+                    changed_count += 1;
+                }
+                assignments[i] = nearest as u8;
+
+                let w = weight as f64;
+                sums_l[nearest] += laba.lab.l as f64 * w;
+                sums_a[nearest] += laba.lab.a as f64 * w;
+                sums_b[nearest] += laba.lab.b as f64 * w;
+                sums_al[nearest] += laba.alpha as f64 * w;
+                total_w[nearest] += w;
+
+                i += stride;
             }
-            assignments[i] = nearest as u8;
-
-            let w = weight as f64;
-            sums_l[nearest] += laba.lab.l as f64 * w;
-            sums_a[nearest] += laba.lab.a as f64 * w;
-            sums_b[nearest] += laba.lab.b as f64 * w;
-            sums_al[nearest] += laba.alpha as f64 * w;
-            total_w[nearest] += w;
-
-            i += stride;
         }
 
         let mut max_movement = 0.0f32;
@@ -2061,19 +2072,33 @@ mod interrupted_refinement_tests {
         fn check(&self) -> Result<(), enough::StopReason> {
             if self.0.fetch_sub(1, Ordering::Relaxed) == 0 {
                 Err(enough::StopReason::TimedOut)
-            } else { Ok(()) }
+            } else {
+                Ok(())
+            }
         }
     }
 
     #[test]
     fn incomplete_histogram_assignment_keeps_previous_centroids() {
         let seed = vec![OKLab::new(0.5, 0.0, 0.0)];
-        let entries: Vec<_> = (0..16384).map(|i| (OKLab::new(if i < 8192 { 0.1 } else { 0.9 }, 0.0, 0.0), 1.0)).collect();
+        let entries: Vec<_> = (0..16384)
+            .map(|i| (OKLab::new(if i < 8192 { 0.1 } else { 0.9 }, 0.0, 0.0), 1.0))
+            .collect();
         let got = kmeans_refine(seed.clone(), &entries, &StopAfter(AtomicUsize::new(2)));
         assert_eq!(got, seed);
-        let seed_alpha = vec![OKLabA { lab: seed[0], alpha: 1.0 }];
-        let entries_alpha: Vec<_> = entries.iter().map(|&(lab, w)| (OKLabA { lab, alpha: 1.0 }, w)).collect();
-        let got = kmeans_refine_alpha(seed_alpha.clone(), &entries_alpha, &StopAfter(AtomicUsize::new(2)));
+        let seed_alpha = vec![OKLabA {
+            lab: seed[0],
+            alpha: 1.0,
+        }];
+        let entries_alpha: Vec<_> = entries
+            .iter()
+            .map(|&(lab, w)| (OKLabA { lab, alpha: 1.0 }, w))
+            .collect();
+        let got = kmeans_refine_alpha(
+            seed_alpha.clone(),
+            &entries_alpha,
+            &StopAfter(AtomicUsize::new(2)),
+        );
         assert_eq!(got, seed_alpha);
     }
 }
