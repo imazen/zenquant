@@ -3,21 +3,14 @@
 ## [Unreleased]
 
 ### Fixed
-- **Pre-refinement phases of `*_with_stop` entry points now poll the token.** The
-  exact-palette scan, AQ masking-weight computation, histogram aggregation, and
-  the k-means per-pixel assignment passes were O(pixels) loops that ran to
-  completion without ever consulting `stop` — a multi-frame
-  `build_palette_rgba_with_stop` call could go >1s between polls. All such loops
-  now check at 8K-pixel stride (`CANCEL_STRIDE`, same cadence as `joint.rs`) and
-  propagate `StopReason`, which surfaces as `QuantizeError::Cancelled`; mid-pass
-  breaks inside k-means still return converged-so-far centroids per the existing
-  contract. Measured on a 64-frame 512² GIF palette build via the
-  almost-enough `PollMeter` harness: worst inter-poll gap 2.78s → 29ms.
-- **sRGB→OKLab batch conversion in `refine_against_pixels_*` is chunked** at
-  ~1M pixels per chunk so multi-megapixel inputs can't skip polling for a whole
-  SIMD pass.
-- Public non-stop signatures unchanged; the new `*_with_stop` variants in
-  `masking`/`histogram` are reachable under the existing `_dev` module.
+- Cancellation polls run between histogram, candidate-search, and refinement
+  batches, outside pixel loops; subsampling and accumulation order are unchanged
+  (5235cfa). All 48 cases in `output_fingerprint` matched a3e61b8 byte hashes.
+- Interrupted refinement retains the last complete centroid set; uncancellable
+  sRGB-to-OKLab conversion retains its single-buffer path (a3e61b8).
+- Exact-palette scans poll between row chunks and support strided frames
+  (5235cfa). Masking polls at row boundaries; public non-stop signatures remain
+  unchanged.
 
 ### Changed
 - **Manifest version corrected to `0.1.4`** — it had regressed to `0.1.2` in

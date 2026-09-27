@@ -29,3 +29,13 @@ test-verbose:
 
 clippy:
     cargo clippy --all-targets -- -D warnings
+
+# Validate batching and cancellation without changing test expectations.
+check-cancellation:
+    cargo test --release --lib --features joint
+    cargo test --release --test cancellation --features joint
+    cargo clippy --lib --features joint -- -D warnings
+
+# Save stdout from each revision and compare the deterministic output hashes.
+fingerprint:
+    cargo run --release --example output_fingerprint
