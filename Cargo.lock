@@ -1791,7 +1791,22 @@ dependencies = [
 
 [[package]]
 name = "zenquant"
-version = "0.1.2"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "440257260e03abacc233712332cd164f59afb98e8385e49ca5a0581ef0c7269d"
+dependencies = [
+ "archmage",
+ "imgref",
+ "linear-srgb",
+ "magetypes",
+ "num-traits",
+ "rgb",
+ "thiserror",
+]
+
+[[package]]
+name = "zenquant"
+version = "0.1.4"
 dependencies = [
  "almost-enough",
  "archmage",
@@ -1820,21 +1835,6 @@ dependencies = [
  "zenpng",
  "zensim",
  "zenwebp",
-]
-
-[[package]]
-name = "zenquant"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "440257260e03abacc233712332cd164f59afb98e8385e49ca5a0581ef0c7269d"
-dependencies = [
- "archmage",
- "imgref",
- "linear-srgb",
- "magetypes",
- "num-traits",
- "rgb",
- "thiserror",
 ]
 
 [[package]]
