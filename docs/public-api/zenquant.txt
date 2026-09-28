@@ -6,7 +6,7 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: zenquant.txt 94 lines (supported surface) | zenquant.features.txt 0 added (features: joint,std) | zenquant.internal.txt 229 lines (146 hidden + 245 excluded-feature)
+# files: zenquant.txt 96 lines (supported surface) | zenquant.features.txt 0 added (features: joint,std) | zenquant.internal.txt 235 lines (152 hidden + 251 excluded-feature)
 
 ## summary
 #
@@ -15,16 +15,16 @@
 #   free functions                              8
 #   inherent methods                           22
 #   struct fields                              22
-#   enum variants                              24
+#   enum variants                              26
 #   re-exports                                  5
 #   trait roster entries (type × trait)        20
 #   auto-trait-complete types                   5
 #
 # per-module pub lines:
-#   (root)                           69
-#   error                            20
+#   (root)                           70
+#   error                            21
 
-## items (88 lines)
+## items (90 lines)
 
 pub mod zenquant
 pub use Img
@@ -45,6 +45,7 @@ pub error::QuantizeError::InvalidIndex
 pub error::QuantizeError::InvalidIndex::index: u32
 pub error::QuantizeError::InvalidIndex::palette_len: usize
 pub error::QuantizeError::InvalidMaxColors(u32)
+pub error::QuantizeError::NoVisibleColors
 pub error::QuantizeError::QualityNotMet
 pub error::QuantizeError::QualityNotMet::achieved_ssim2: f32
 pub error::QuantizeError::QualityNotMet::min_ssim2: f32
@@ -75,6 +76,7 @@ pub QuantizeError::InvalidIndex
 pub QuantizeError::InvalidIndex::index: u32
 pub QuantizeError::InvalidIndex::palette_len: usize
 pub QuantizeError::InvalidMaxColors(u32)
+pub QuantizeError::NoVisibleColors
 pub QuantizeError::QualityNotMet
 pub QuantizeError::QualityNotMet::achieved_ssim2: f32
 pub QuantizeError::QualityNotMet::min_ssim2: f32
