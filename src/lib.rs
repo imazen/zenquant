@@ -587,7 +587,8 @@ impl QuantizeResult {
     /// Skips palette construction — uses the existing palette and applies
     /// dithering + run optimization from `config`. The palette order is
     /// preserved (no frequency reorder), making this suitable for animation
-    /// frames that share a palette.
+    /// frames that share a palette. A transparent-only palette returns
+    /// [`QuantizeError::NoVisibleColors`] for RGB input.
     ///
     /// # Example
     ///
@@ -643,6 +644,8 @@ impl QuantizeResult {
     /// dithering + run optimization from `config`. The palette order is
     /// preserved (no frequency reorder), making this suitable for GIF
     /// animation frames that share a global color table.
+    /// A transparent-only palette returns [`QuantizeError::NoVisibleColors`]
+    /// when any input pixel has nonzero alpha.
     ///
     /// # Example
     ///
@@ -1901,6 +1904,18 @@ fn remap_rgb_impl(
         validate_prev_indices(prev, expected, source_palette.len())?;
     }
 
+    stop.check().map_err(QuantizeError::Cancelled)?;
+    // A transparent-only palette has no valid seed for color search.
+    // Reject visible input instead of indexing beyond its sole entry or
+    // silently replacing visible pixels with transparency.
+    if source_palette
+        .entries_rgba()
+        .iter()
+        .all(|entry| entry[3] == 0)
+    {
+        return Err(QuantizeError::NoVisibleColors);
+    }
+
     // When target_ssim2 or min_ssim2 is set, force metric computation
     let needs_metric =
         config.compute_metric || config.target_ssim2.is_some() || config.min_ssim2.is_some();
@@ -2082,6 +2097,19 @@ fn remap_rgba_impl(
     }
     if let Some(prev) = prev_indices {
         validate_prev_indices(prev, expected, source_palette.len())?;
+    }
+
+    stop.check().map_err(QuantizeError::Cancelled)?;
+    // A transparent-only palette has no valid seed for color search.
+    // Reject visible input instead of indexing beyond its sole entry or
+    // silently replacing visible pixels with transparency.
+    if source_palette
+        .entries_rgba()
+        .iter()
+        .all(|entry| entry[3] == 0)
+        && pixels.iter().any(|p| p.a != 0)
+    {
+        return Err(QuantizeError::NoVisibleColors);
     }
 
     // When target_ssim2 or min_ssim2 is set, force metric computation

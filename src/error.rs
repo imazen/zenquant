@@ -23,6 +23,10 @@ pub enum QuantizeError {
     #[error("max_colors must be between 2 and 256, got {0}")]
     InvalidMaxColors(u32),
 
+    /// A palette with no visible color entries cannot remap visible pixels.
+    #[error("palette has no visible color entries for the supplied pixels")]
+    NoVisibleColors,
+
     /// The quantized image did not meet the minimum SSIM2 quality threshold.
     #[error("quality target not met: wanted SSIM2 >= {min_ssim2:.1}, got {achieved_ssim2:.1}")]
     QualityNotMet {

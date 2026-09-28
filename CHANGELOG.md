@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased: transparent-only palette remapping
+
+- Reject RGB or nonzero-alpha input remapped against a transparent-only palette with `QuantizeError::NoVisibleColors`. This avoids an out-of-bounds nearest-color seed and refuses silent erasure of visible pixels. Fully transparent remapping remains valid.
+
 ## [Unreleased]
 
 ### Fixed
