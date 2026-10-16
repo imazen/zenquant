@@ -496,6 +496,650 @@ impl QuantizeConfig {
     }
 }
 
+// The ordinary expansion contains the original pipeline with no observer
+// storage, calls, branches or altered return ABI. Both paths share one body.
+macro_rules! dispatch_call {
+    (plain,$observer:ident,$method:ident $(,$args:expr)*)=>{};
+    (capture,$observer:ident,$method:ident $(,$args:expr)*)=>{$observer.$method($($args),*);};
+}
+macro_rules! dispatch_result {
+    (plain,$observer:ident,$value:expr) => {
+        $value
+    };
+    (capture,$observer:ident,$value:expr) => {
+        $value
+    };
+}
+macro_rules! quantize_body {
+    ($mode:ident,$observer:ident,$pixels:ident,$width:ident,$height:ident,$config:ident,$stop:ident, [$($signature:tt)*]) => {
+        $($signature)* {
+        validate_inputs($pixels.len(), $width, $height, $config)?;
+
+        // When target_ssim2 or min_ssim2 is set, force metric computation
+        let needs_metric =
+            $config.compute_metric || $config.target_ssim2.is_some() || $config.min_ssim2.is_some();
+
+        // Apply compression tier overrides when target_ssim2 is set
+        let (effective_quality, effective_run_priority, effective_dither_strength) =
+            if let Some(target) = $config.target_ssim2 {
+                let tier = select_compression_tier(target);
+                (
+                    tier.quality,
+                    tier.run_priority,
+                    $config
+                        .dither_strength
+                        .map(|s| s * tier.dither_strength_mult),
+                )
+            } else {
+                (
+                    $config.quality,
+                    $config.run_priority,
+                    $config.dither_strength,
+                )
+            };
+
+        // Build tuning from effective settings
+        // Fast quality: promote Adaptive → Ordered for ~3-5x faster dithering
+        let effective_dither_mode = if effective_quality == Quality::Fast
+            && $config.dither_mode == dither::DitherMode::Adaptive
+        {
+            dither::DitherMode::Ordered
+        } else {
+            $config.dither_mode
+        };
+        let effective_config = QuantizeConfig {
+            quality: effective_quality,
+            run_priority: effective_run_priority,
+            dither_strength: effective_dither_strength,
+            dither_mode: effective_dither_mode,
+            compute_metric: needs_metric,
+            ..$config.clone()
+        };
+        let tuning = QuantizeTuning::from_config(&effective_config);
+        dispatch_call!($mode, $observer, resolved, &effective_config, &tuning);
+        let max_colors = $config.max_colors as usize;
+
+        // Fast path: image already has ≤max_colors unique colors
+        if let Some(exact_colors) = histogram::detect_exact_palette($pixels, max_colors, $stop)
+            .map_err(QuantizeError::Cancelled)?
+        {
+            let centroids = simd::batch_srgb_to_oklab_vec(&exact_colors);
+            let pal =
+                palette::Palette::from_centroids_sorted(centroids, false, tuning.sort_strategy);
+            let mut indices = dither::simple_remap($pixels, &pal);
+            let pal = if tuning.gif_frequency_reorder {
+                palette::reorder_by_frequency(&pal, &mut indices)
+            } else {
+                pal
+            };
+            let mpe_result = if needs_metric {
+                Some(metric::MpeResult::zero($width, $height))
+            } else {
+                None
+            };
+            dispatch_call!($mode, $observer, exact);
+            return Ok(dispatch_result!(
+                $mode,
+                $observer,
+                QuantizeResult {
+                    palette: pal,
+                    indices,
+                    mpe_result,
+                }
+            ));
+        }
+
+        // Pipeline tiers based on quality:
+        //   Fast:     no masking, histogram-only k-means, no Viterbi
+        //   Balanced: masking + light pixel k-means (2 iters) + run extension
+        //   Best:     masking + full pixel k-means (8 iters) + Viterbi DP
+        let use_masking = matches!(effective_quality, Quality::Balanced | Quality::Best);
+        let kmeans_iters: usize = match effective_quality {
+            Quality::Best => 8,
+            Quality::Balanced => 2,
+            Quality::Fast => 0,
+        };
+
+        dispatch_call!($mode, $observer, masking, use_masking, kmeans_iters);
+
+        // Compute OKLab once — shared across masking, histogram, k-means, dither, viterbi, joint
+        let labs = simd::batch_srgb_to_oklab_vec($pixels);
+
+        // 1. Compute AQ masking weights (skip for fast mode — uniform weights)
+        let weights = if use_masking {
+            masking::compute_masking_weights_from_labs_with_stop(&labs, $width, $height, $stop)
+                .map_err(QuantizeError::Cancelled)?
+        } else {
+            vec![1.0f32; $pixels.len()]
+        };
+
+        // 2. Build weighted histogram (adaptive depth: bumps bit resolution if too few entries)
+        let (hist, _hist_bumped) =
+            histogram::build_histogram_from_labs_with_stop(&labs, &weights, max_colors, $stop)
+                .map_err(QuantizeError::Cancelled)?;
+
+        // 3. Farthest-point seeding with histogram-level k-means refinement
+        let mut centroids = median_cut::farthest_point_quantize(hist, max_colors, $stop);
+
+        // 3b. Pixel-level k-means refinement (skip for Fast — histogram refinement suffices).
+        if kmeans_iters > 0 {
+            centroids = median_cut::refine_against_pixels_from_labs(
+                centroids,
+                $pixels,
+                &labs,
+                &weights,
+                kmeans_iters,
+                $config.kmeans_sample_cap,
+                $stop,
+            );
+        }
+
+        // Phase boundary: decide cancellation after the k-means refine step.
+        $stop.check().map_err(QuantizeError::Cancelled)?;
+
+        // 4. Build palette with format-specific sort
+        let mut pal =
+            palette::Palette::from_centroids_sorted(centroids, false, tuning.sort_strategy);
+        // Build sRGB nearest-neighbor cache — always pays for itself
+        // (32K cells vs 262K+ $pixels, each saving 256 distance checks)
+        pal.build_nn_cache();
+
+        // 5. Dither / remap
+        // Keep greedy run-bias during dithering even when Viterbi will run.
+        // The greedy bias shapes error diffusion favorably, and Viterbi can
+        // further optimize the index sequence post-hoc.
+        let mut mpe_acc = if needs_metric {
+            Some(metric::MpeAccumulator::new($width, $height))
+        } else {
+            None
+        };
+        let dither_params = dither::DitherParams {
+            $width,
+            $height,
+            weights: &weights,
+            palette: &pal,
+            mode: effective_config.dither_mode,
+            run_priority: effective_run_priority,
+            dither_strength: tuning.dither_strength,
+            prev_indices: None,
+            precomputed_labs: Some(&labs),
+        };
+        dispatch_call!($mode, $observer, dither, &dither_params);
+        let mut indices = dither::dither_image($pixels, &dither_params, mpe_acc.as_mut());
+
+        // 5b. Run optimization
+        //   Best:     full Viterbi DP (optimal run extension, ~26ms)
+        //   Balanced: fast run-extend post-pass (greedy bidirectional, ~1ms)
+        //   Fast:     none (dither-level greedy run-bias only)
+        let use_viterbi = matches!(effective_quality, Quality::Best);
+        let run_lambda = if use_masking {
+            $config
+                .viterbi_lambda
+                .unwrap_or(match effective_run_priority {
+                    remap::RunPriority::Quality => 0.0,
+                    remap::RunPriority::Balanced => 0.01,
+                    remap::RunPriority::Compression => 0.02,
+                })
+                * tuning.viterbi_lambda_scale
+        } else {
+            $config.viterbi_lambda.unwrap_or(0.0)
+        };
+        if run_lambda > 0.0 {
+            dispatch_call!($mode, $observer, refinement, run_lambda, use_viterbi);
+            if use_viterbi {
+                remap::viterbi_refine_with_labs(
+                    $pixels,
+                    &labs,
+                    $width,
+                    $height,
+                    &weights,
+                    &pal,
+                    &mut indices,
+                    run_lambda,
+                    $stop,
+                );
+            } else {
+                remap::run_extend_refine_with_labs(
+                    &labs,
+                    $width,
+                    $height,
+                    &weights,
+                    &pal,
+                    &mut indices,
+                    run_lambda,
+                    $stop,
+                );
+            }
+        }
+
+        // Phase boundary: decide cancellation after the dither/remap step.
+        $stop.check().map_err(QuantizeError::Cancelled)?;
+
+        // 6. GIF frequency reorder (post-dither)
+        let pal = if tuning.gif_frequency_reorder {
+            palette::reorder_by_frequency(&pal, &mut indices)
+        } else {
+            pal
+        };
+
+        let mpe_result = mpe_acc.map(|acc| acc.finalize());
+
+        // Check min_ssim2 quality floor
+        if let Some(min) = $config.min_ssim2 {
+            let achieved = mpe_result
+                .as_ref()
+                .map(|r| r.ssimulacra2_estimate)
+                .unwrap_or(100.0);
+            if achieved < min {
+                return Err(QuantizeError::QualityNotMet {
+                    min_ssim2: min,
+                    achieved_ssim2: achieved,
+                });
+            }
+        }
+
+        // 7. Joint deflate+quantization optimization
+        #[cfg(feature = "joint")]
+        let indices = if matches!(
+            $config.output_format,
+            OutputFormat::PngJoint | OutputFormat::PngMinSize
+        ) {
+            dispatch_call!($mode, $observer, joint, $config.joint_tolerance);
+            joint::optimize_rgb_with_labs(
+                &labs,
+                $width,
+                $height,
+                &weights,
+                &pal,
+                &indices,
+                $config.joint_deflate_effort,
+                $config.joint_tolerance,
+                $stop,
+            )
+        } else {
+            indices
+        };
+
+        Ok(dispatch_result!(
+            $mode,
+            $observer,
+            QuantizeResult {
+                palette: pal,
+                indices,
+                mpe_result,
+            }
+        ))
+        }
+    };
+}
+
+macro_rules! quantize_rgba_body {
+    ($mode:ident,$observer:ident,$pixels:ident,$width:ident,$height:ident,$config:ident,$stop:ident, [$($signature:tt)*]) => {
+        $($signature)* {
+        validate_inputs($pixels.len(), $width, $height, $config)?;
+
+        // When target_ssim2 or min_ssim2 is set, force metric computation
+        let needs_metric =
+            $config.compute_metric || $config.target_ssim2.is_some() || $config.min_ssim2.is_some();
+
+        // Apply compression tier overrides when target_ssim2 is set
+        let (effective_quality, effective_run_priority, effective_dither_strength) =
+            if let Some(target) = $config.target_ssim2 {
+                let tier = select_compression_tier(target);
+                (
+                    tier.quality,
+                    tier.run_priority,
+                    $config
+                        .dither_strength
+                        .map(|s| s * tier.dither_strength_mult),
+                )
+            } else {
+                (
+                    $config.quality,
+                    $config.run_priority,
+                    $config.dither_strength,
+                )
+            };
+
+        let effective_dither_mode = if effective_quality == Quality::Fast
+            && $config.dither_mode == dither::DitherMode::Adaptive
+        {
+            dither::DitherMode::Ordered
+        } else {
+            $config.dither_mode
+        };
+        let effective_config = QuantizeConfig {
+            quality: effective_quality,
+            run_priority: effective_run_priority,
+            dither_strength: effective_dither_strength,
+            dither_mode: effective_dither_mode,
+            compute_metric: needs_metric,
+            ..$config.clone()
+        };
+        let tuning = QuantizeTuning::from_config(&effective_config);
+        dispatch_call!($mode, $observer, resolved, &effective_config, &tuning);
+        let max_colors = $config.max_colors as usize;
+
+        // Fast path: image already has ≤max_colors unique colors
+        if let Some((exact_colors, has_transparent)) =
+            histogram::detect_exact_palette_rgba($pixels, max_colors, $stop)
+                .map_err(QuantizeError::Cancelled)?
+        {
+            let rgb_colors: Vec<rgb::RGB<u8>> = exact_colors
+                .iter()
+                .map(|c| rgb::RGB::new(c.r, c.g, c.b))
+                .collect();
+            let centroids = simd::batch_srgb_to_oklab_vec(&rgb_colors);
+            let pal = palette::Palette::from_centroids_sorted(
+                centroids,
+                has_transparent,
+                tuning.sort_strategy,
+            );
+            let transparent_idx = pal.transparent_index().unwrap_or(0);
+            let mut indices = dither::simple_remap_rgba($pixels, &pal, transparent_idx);
+            let pal = if tuning.gif_frequency_reorder {
+                palette::reorder_by_frequency(&pal, &mut indices)
+            } else {
+                pal
+            };
+            let mpe_result = if needs_metric {
+                Some(metric::MpeResult::zero($width, $height))
+            } else {
+                None
+            };
+            dispatch_call!($mode, $observer, exact);
+            return Ok(dispatch_result!(
+                $mode,
+                $observer,
+                QuantizeResult {
+                    palette: pal,
+                    indices,
+                    mpe_result,
+                }
+            ));
+        }
+
+        let use_masking = matches!(effective_quality, Quality::Balanced | Quality::Best);
+        let use_viterbi = matches!(effective_quality, Quality::Best);
+        let kmeans_iters: usize = match effective_quality {
+            Quality::Best => 8,
+            Quality::Balanced => 2,
+            Quality::Fast => 0,
+        };
+
+        dispatch_call!($mode, $observer, masking, use_masking, kmeans_iters);
+
+        // Compute OKLab once from RGB channels — shared across dither, viterbi, joint, k-means
+        let rgb_pixels: Vec<rgb::RGB<u8>> = $pixels
+            .iter()
+            .map(|p| rgb::RGB::new(p.r, p.g, p.b))
+            .collect();
+        let labs = simd::batch_srgb_to_oklab_vec(&rgb_pixels);
+
+        let weights = if use_masking {
+            masking::compute_masking_weights_rgba_with_stop($pixels, $width, $height, $stop)
+                .map_err(QuantizeError::Cancelled)?
+        } else {
+            vec![1.0f32; $pixels.len()]
+        };
+
+        let (pal, mut indices) = if tuning.alpha_mode == AlphaMode::Full {
+            // Full alpha quantization: 4D OKLabA pipeline
+            let (hist, has_transparent) =
+                histogram::build_histogram_alpha($pixels, &weights, $stop)
+                    .map_err(QuantizeError::Cancelled)?;
+            let opaque_colors = if has_transparent {
+                max_colors.saturating_sub(1)
+            } else {
+                max_colors
+            };
+            let mut centroids = median_cut::wu_quantize_alpha(hist, opaque_colors, true, $stop);
+
+            if kmeans_iters > 0 {
+                centroids = median_cut::refine_against_pixels_alpha(
+                    centroids,
+                    $pixels,
+                    &weights,
+                    kmeans_iters,
+                    $config.kmeans_sample_cap,
+                    $stop,
+                );
+            }
+
+            // Phase boundary: decide cancellation after the k-means refine step.
+            $stop.check().map_err(QuantizeError::Cancelled)?;
+
+            let pal = palette::Palette::from_centroids_alpha(
+                centroids,
+                has_transparent,
+                tuning.sort_strategy,
+            );
+
+            let viterbi_lambda = if use_masking {
+                $config
+                    .viterbi_lambda
+                    .unwrap_or(match effective_run_priority {
+                        remap::RunPriority::Quality => 0.0,
+                        remap::RunPriority::Balanced => 0.01,
+                        remap::RunPriority::Compression => 0.02,
+                    })
+                    * tuning.viterbi_lambda_scale
+            } else {
+                $config.viterbi_lambda.unwrap_or(0.0)
+            };
+            let dither_params = dither::DitherParams {
+                $width,
+                $height,
+                weights: &weights,
+                palette: &pal,
+                mode: effective_config.dither_mode,
+                run_priority: effective_run_priority,
+                dither_strength: tuning.dither_strength,
+                prev_indices: None,
+                precomputed_labs: Some(&labs),
+            };
+            dispatch_call!($mode, $observer, dither, &dither_params);
+            let mut indices = dither::dither_image_rgba_alpha($pixels, &dither_params, None);
+
+            if viterbi_lambda > 0.0 {
+                dispatch_call!($mode, $observer, refinement, viterbi_lambda, use_viterbi);
+                if use_viterbi {
+                    remap::viterbi_refine_rgba_with_labs(
+                        $pixels,
+                        &labs,
+                        $width,
+                        $height,
+                        &weights,
+                        &pal,
+                        &mut indices,
+                        viterbi_lambda,
+                        $stop,
+                    );
+                } else {
+                    remap::run_extend_refine_rgba_with_labs(
+                        $pixels,
+                        &labs,
+                        $width,
+                        $height,
+                        &weights,
+                        &pal,
+                        &mut indices,
+                        viterbi_lambda,
+                        $stop,
+                    );
+                }
+            }
+
+            (pal, indices)
+        } else {
+            // Binary transparency: opaque pipeline with transparent index
+            let (hist, has_transparent) =
+                histogram::build_histogram_rgba_with_stop($pixels, &weights, $stop)
+                    .map_err(QuantizeError::Cancelled)?;
+            let opaque_colors = if has_transparent {
+                max_colors.saturating_sub(1)
+            } else {
+                max_colors
+            };
+            let mut centroids = median_cut::farthest_point_quantize(hist, opaque_colors, $stop);
+
+            if kmeans_iters > 0 {
+                centroids = median_cut::refine_against_pixels_rgba_from_labs(
+                    centroids,
+                    $pixels,
+                    &labs,
+                    &weights,
+                    kmeans_iters,
+                    $config.kmeans_sample_cap,
+                    $stop,
+                );
+            }
+
+            // Phase boundary: decide cancellation after the k-means refine step.
+            $stop.check().map_err(QuantizeError::Cancelled)?;
+
+            let mut pal = palette::Palette::from_centroids_sorted(
+                centroids,
+                has_transparent,
+                tuning.sort_strategy,
+            );
+            pal.build_nn_cache();
+
+            let viterbi_lambda = if use_masking {
+                $config
+                    .viterbi_lambda
+                    .unwrap_or(match effective_run_priority {
+                        remap::RunPriority::Quality => 0.0,
+                        remap::RunPriority::Balanced => 0.01,
+                        remap::RunPriority::Compression => 0.02,
+                    })
+                    * tuning.viterbi_lambda_scale
+            } else {
+                $config.viterbi_lambda.unwrap_or(0.0)
+            };
+            let dither_params = dither::DitherParams {
+                $width,
+                $height,
+                weights: &weights,
+                palette: &pal,
+                mode: effective_config.dither_mode,
+                run_priority: effective_run_priority,
+                dither_strength: tuning.dither_strength,
+                prev_indices: None,
+                precomputed_labs: Some(&labs),
+            };
+            dispatch_call!($mode, $observer, dither, &dither_params);
+            let mut indices = dither::dither_image_rgba($pixels, &dither_params, None);
+
+            if viterbi_lambda > 0.0 {
+                dispatch_call!($mode, $observer, refinement, viterbi_lambda, use_viterbi);
+                if use_viterbi {
+                    remap::viterbi_refine_rgba_with_labs(
+                        $pixels,
+                        &labs,
+                        $width,
+                        $height,
+                        &weights,
+                        &pal,
+                        &mut indices,
+                        viterbi_lambda,
+                        $stop,
+                    );
+                } else {
+                    remap::run_extend_refine_rgba_with_labs(
+                        $pixels,
+                        &labs,
+                        $width,
+                        $height,
+                        &weights,
+                        &pal,
+                        &mut indices,
+                        viterbi_lambda,
+                        $stop,
+                    );
+                }
+            }
+
+            (pal, indices)
+        };
+
+        // Phase boundary: decide cancellation after the dither/remap step.
+        $stop.check().map_err(QuantizeError::Cancelled)?;
+
+        // GIF frequency reorder (post-dither)
+        let pal = if tuning.gif_frequency_reorder {
+            palette::reorder_by_frequency(&pal, &mut indices)
+        } else {
+            pal
+        };
+
+        // Check min_ssim2 quality floor
+        // Note: RGBA path doesn't currently compute inline MPE (mpe_result is None).
+        // For min_ssim2 checking, we'd need standalone MPE computation here.
+        // For now, compute standalone MPE when min_ssim2 is set.
+        let mpe_result = if needs_metric {
+            Some(metric::compute_mpe_rgba(
+                $pixels,
+                pal.entries_rgba(),
+                &indices,
+                $width,
+                $height,
+                None,
+            ))
+        } else {
+            None
+        };
+
+        if let Some(min) = $config.min_ssim2 {
+            let achieved = mpe_result
+                .as_ref()
+                .map(|r| r.ssimulacra2_estimate)
+                .unwrap_or(100.0);
+            if achieved < min {
+                return Err(QuantizeError::QualityNotMet {
+                    min_ssim2: min,
+                    achieved_ssim2: achieved,
+                });
+            }
+        }
+
+        // Joint deflate+quantization optimization
+        #[cfg(feature = "joint")]
+        let indices = if matches!(
+            $config.output_format,
+            OutputFormat::PngJoint | OutputFormat::PngMinSize
+        ) {
+            dispatch_call!($mode, $observer, joint, $config.joint_tolerance);
+            joint::optimize_rgba_with_labs(
+                &labs,
+                $width,
+                $height,
+                &weights,
+                &pal,
+                &indices,
+                $config.joint_deflate_effort,
+                $config.joint_tolerance,
+                $stop,
+            )
+        } else {
+            indices
+        };
+
+        Ok(dispatch_result!(
+            $mode,
+            $observer,
+            QuantizeResult {
+                palette: pal,
+                indices,
+                mpe_result,
+            }
+        ))
+        }
+    };
+}
+mod dispatch;
+pub use dispatch::{DispatchError, EffectiveDispatch};
+
 /// Result of palette quantization.
 ///
 /// Contains an optimized palette and per-pixel indices into that palette.
@@ -847,6 +1491,7 @@ pub fn quantize(
     quantize_with_stop(pixels, width, height, config, &enough::Unstoppable)
 }
 
+quantize_body!(plain,unused,pixels,width,height,config,stop, [
 /// Quantize an RGB image to an indexed palette, with cooperative cancellation.
 ///
 /// Same as [`quantize`] but takes a [`stop`](enough::Stop) token: when it
@@ -858,243 +1503,36 @@ pub fn quantize_with_stop(
     height: usize,
     config: &QuantizeConfig,
     stop: &dyn enough::Stop,
-) -> Result<QuantizeResult, QuantizeError> {
-    validate_inputs(pixels.len(), width, height, config)?;
+) -> Result<QuantizeResult, QuantizeError>
+]);
 
-    // When target_ssim2 or min_ssim2 is set, force metric computation
-    let needs_metric =
-        config.compute_metric || config.target_ssim2.is_some() || config.min_ssim2.is_some();
-
-    // Apply compression tier overrides when target_ssim2 is set
-    let (effective_quality, effective_run_priority, effective_dither_strength) =
-        if let Some(target) = config.target_ssim2 {
-            let tier = select_compression_tier(target);
-            (
-                tier.quality,
-                tier.run_priority,
-                config
-                    .dither_strength
-                    .map(|s| s * tier.dither_strength_mult),
-            )
-        } else {
-            (config.quality, config.run_priority, config.dither_strength)
-        };
-
-    // Build tuning from effective settings
-    // Fast quality: promote Adaptive → Ordered for ~3-5x faster dithering
-    let effective_dither_mode = if effective_quality == Quality::Fast
-        && config.dither_mode == dither::DitherMode::Adaptive
-    {
-        dither::DitherMode::Ordered
-    } else {
-        config.dither_mode
-    };
-    let effective_config = QuantizeConfig {
-        quality: effective_quality,
-        run_priority: effective_run_priority,
-        dither_strength: effective_dither_strength,
-        dither_mode: effective_dither_mode,
-        compute_metric: needs_metric,
-        ..config.clone()
-    };
-    let tuning = QuantizeTuning::from_config(&effective_config);
-    let max_colors = config.max_colors as usize;
-
-    // Fast path: image already has ≤max_colors unique colors
-    if let Some(exact_colors) = histogram::detect_exact_palette(pixels, max_colors, stop)
-        .map_err(QuantizeError::Cancelled)?
-    {
-        let centroids = simd::batch_srgb_to_oklab_vec(&exact_colors);
-        let pal = palette::Palette::from_centroids_sorted(centroids, false, tuning.sort_strategy);
-        let mut indices = dither::simple_remap(pixels, &pal);
-        let pal = if tuning.gif_frequency_reorder {
-            palette::reorder_by_frequency(&pal, &mut indices)
-        } else {
-            pal
-        };
-        let mpe_result = if needs_metric {
-            Some(metric::MpeResult::zero(width, height))
-        } else {
-            None
-        };
-        return Ok(QuantizeResult {
-            palette: pal,
-            indices,
-            mpe_result,
-        });
-    }
-
-    // Pipeline tiers based on quality:
-    //   Fast:     no masking, histogram-only k-means, no Viterbi
-    //   Balanced: masking + light pixel k-means (2 iters) + run extension
-    //   Best:     masking + full pixel k-means (8 iters) + Viterbi DP
-    let use_masking = matches!(effective_quality, Quality::Balanced | Quality::Best);
-    let kmeans_iters: usize = match effective_quality {
-        Quality::Best => 8,
-        Quality::Balanced => 2,
-        Quality::Fast => 0,
-    };
-
-    // Compute OKLab once — shared across masking, histogram, k-means, dither, viterbi, joint
-    let labs = simd::batch_srgb_to_oklab_vec(pixels);
-
-    // 1. Compute AQ masking weights (skip for fast mode — uniform weights)
-    let weights = if use_masking {
-        masking::compute_masking_weights_from_labs_with_stop(&labs, width, height, stop)
-            .map_err(QuantizeError::Cancelled)?
-    } else {
-        vec![1.0f32; pixels.len()]
-    };
-
-    // 2. Build weighted histogram (adaptive depth: bumps bit resolution if too few entries)
-    let (hist, _hist_bumped) =
-        histogram::build_histogram_from_labs_with_stop(&labs, &weights, max_colors, stop)
-            .map_err(QuantizeError::Cancelled)?;
-
-    // 3. Farthest-point seeding with histogram-level k-means refinement
-    let mut centroids = median_cut::farthest_point_quantize(hist, max_colors, stop);
-
-    // 3b. Pixel-level k-means refinement (skip for Fast — histogram refinement suffices).
-    if kmeans_iters > 0 {
-        centroids = median_cut::refine_against_pixels_from_labs(
-            centroids,
-            pixels,
-            &labs,
-            &weights,
-            kmeans_iters,
-            config.kmeans_sample_cap,
-            stop,
-        );
-    }
-
-    // Phase boundary: decide cancellation after the k-means refine step.
-    stop.check().map_err(QuantizeError::Cancelled)?;
-
-    // 4. Build palette with format-specific sort
-    let mut pal = palette::Palette::from_centroids_sorted(centroids, false, tuning.sort_strategy);
-    // Build sRGB nearest-neighbor cache — always pays for itself
-    // (32K cells vs 262K+ pixels, each saving 256 distance checks)
-    pal.build_nn_cache();
-
-    // 5. Dither / remap
-    // Keep greedy run-bias during dithering even when Viterbi will run.
-    // The greedy bias shapes error diffusion favorably, and Viterbi can
-    // further optimize the index sequence post-hoc.
-    let mut mpe_acc = if needs_metric {
-        Some(metric::MpeAccumulator::new(width, height))
-    } else {
-        None
-    };
-    let dither_params = dither::DitherParams {
-        width,
-        height,
-        weights: &weights,
-        palette: &pal,
-        mode: effective_config.dither_mode,
-        run_priority: effective_run_priority,
-        dither_strength: tuning.dither_strength,
-        prev_indices: None,
-        precomputed_labs: Some(&labs),
-    };
-    let mut indices = dither::dither_image(pixels, &dither_params, mpe_acc.as_mut());
-
-    // 5b. Run optimization
-    //   Best:     full Viterbi DP (optimal run extension, ~26ms)
-    //   Balanced: fast run-extend post-pass (greedy bidirectional, ~1ms)
-    //   Fast:     none (dither-level greedy run-bias only)
-    let use_viterbi = matches!(effective_quality, Quality::Best);
-    let run_lambda = if use_masking {
-        config
-            .viterbi_lambda
-            .unwrap_or(match effective_run_priority {
-                remap::RunPriority::Quality => 0.0,
-                remap::RunPriority::Balanced => 0.01,
-                remap::RunPriority::Compression => 0.02,
-            })
-            * tuning.viterbi_lambda_scale
-    } else {
-        config.viterbi_lambda.unwrap_or(0.0)
-    };
-    if run_lambda > 0.0 {
-        if use_viterbi {
-            remap::viterbi_refine_with_labs(
-                pixels,
-                &labs,
-                width,
-                height,
-                &weights,
-                &pal,
-                &mut indices,
-                run_lambda,
-                stop,
-            );
-        } else {
-            remap::run_extend_refine_with_labs(
-                &labs,
-                width,
-                height,
-                &weights,
-                &pal,
-                &mut indices,
-                run_lambda,
-                stop,
-            );
-        }
-    }
-
-    // Phase boundary: decide cancellation after the dither/remap step.
-    stop.check().map_err(QuantizeError::Cancelled)?;
-
-    // 6. GIF frequency reorder (post-dither)
-    let pal = if tuning.gif_frequency_reorder {
-        palette::reorder_by_frequency(&pal, &mut indices)
-    } else {
-        pal
-    };
-
-    let mpe_result = mpe_acc.map(|acc| acc.finalize());
-
-    // Check min_ssim2 quality floor
-    if let Some(min) = config.min_ssim2 {
-        let achieved = mpe_result
-            .as_ref()
-            .map(|r| r.ssimulacra2_estimate)
-            .unwrap_or(100.0);
-        if achieved < min {
-            return Err(QuantizeError::QualityNotMet {
-                min_ssim2: min,
-                achieved_ssim2: achieved,
-            });
-        }
-    }
-
-    // 7. Joint deflate+quantization optimization
-    #[cfg(feature = "joint")]
-    let indices = if matches!(
-        config.output_format,
-        OutputFormat::PngJoint | OutputFormat::PngMinSize
-    ) {
-        joint::optimize_rgb_with_labs(
-            &labs,
-            width,
-            height,
-            &weights,
-            &pal,
-            &indices,
-            config.joint_deflate_effort,
-            config.joint_tolerance,
-            stop,
-        )
-    } else {
-        indices
-    };
-
-    Ok(QuantizeResult {
-        palette: pal,
-        indices,
-        mpe_result,
-    })
+/// Quantize with an opt-in report of resolved settings and executed stages.
+///
+/// The result is identical to [`quantize_with_stop`]. Reporting adds no state or
+/// branches to ordinary quantize calls. Errors retain the observation available
+/// at failure in [`DispatchError`]; cancellation behavior is inherited. Palette construction/remapping
+/// entry points do not participate in this per-call report.
+pub fn quantize_with_dispatch(
+    pixels: &[rgb::RGB<u8>],
+    width: usize,
+    height: usize,
+    config: &QuantizeConfig,
+    stop: &dyn enough::Stop,
+) -> Result<(QuantizeResult, EffectiveDispatch), DispatchError> {
+    let mut report = dispatch::Capture::default();
+    let result = quantize_impl(pixels, width, height, config, stop, &mut report);
+    report.complete(result)
 }
+quantize_body!(capture,report,pixels,width,height,config,stop, [
+fn quantize_impl<S: dispatch::Sink>(
+    pixels: &[rgb::RGB<u8>],
+    width: usize,
+    height: usize,
+    config: &QuantizeConfig,
+    stop: &dyn enough::Stop,
+    report: &mut S,
+) -> Result<QuantizeResult, QuantizeError>
+]);
 
 /// Quantize an RGBA image to an indexed palette.
 ///
@@ -1129,6 +1567,7 @@ pub fn quantize_rgba(
     quantize_rgba_with_stop(pixels, width, height, config, &enough::Unstoppable)
 }
 
+quantize_rgba_body!(plain,unused,pixels,width,height,config,stop, [
 /// Quantize an RGBA image to an indexed palette, with cooperative cancellation.
 ///
 /// Same as [`quantize_rgba`] but takes a [`stop`](enough::Stop) token: when it
@@ -1140,344 +1579,36 @@ pub fn quantize_rgba_with_stop(
     height: usize,
     config: &QuantizeConfig,
     stop: &dyn enough::Stop,
-) -> Result<QuantizeResult, QuantizeError> {
-    validate_inputs(pixels.len(), width, height, config)?;
+) -> Result<QuantizeResult, QuantizeError>
+]);
 
-    // When target_ssim2 or min_ssim2 is set, force metric computation
-    let needs_metric =
-        config.compute_metric || config.target_ssim2.is_some() || config.min_ssim2.is_some();
-
-    // Apply compression tier overrides when target_ssim2 is set
-    let (effective_quality, effective_run_priority, effective_dither_strength) =
-        if let Some(target) = config.target_ssim2 {
-            let tier = select_compression_tier(target);
-            (
-                tier.quality,
-                tier.run_priority,
-                config
-                    .dither_strength
-                    .map(|s| s * tier.dither_strength_mult),
-            )
-        } else {
-            (config.quality, config.run_priority, config.dither_strength)
-        };
-
-    let effective_dither_mode = if effective_quality == Quality::Fast
-        && config.dither_mode == dither::DitherMode::Adaptive
-    {
-        dither::DitherMode::Ordered
-    } else {
-        config.dither_mode
-    };
-    let effective_config = QuantizeConfig {
-        quality: effective_quality,
-        run_priority: effective_run_priority,
-        dither_strength: effective_dither_strength,
-        dither_mode: effective_dither_mode,
-        compute_metric: needs_metric,
-        ..config.clone()
-    };
-    let tuning = QuantizeTuning::from_config(&effective_config);
-    let max_colors = config.max_colors as usize;
-
-    // Fast path: image already has ≤max_colors unique colors
-    if let Some((exact_colors, has_transparent)) =
-        histogram::detect_exact_palette_rgba(pixels, max_colors, stop)
-            .map_err(QuantizeError::Cancelled)?
-    {
-        let rgb_colors: Vec<rgb::RGB<u8>> = exact_colors
-            .iter()
-            .map(|c| rgb::RGB::new(c.r, c.g, c.b))
-            .collect();
-        let centroids = simd::batch_srgb_to_oklab_vec(&rgb_colors);
-        let pal = palette::Palette::from_centroids_sorted(
-            centroids,
-            has_transparent,
-            tuning.sort_strategy,
-        );
-        let transparent_idx = pal.transparent_index().unwrap_or(0);
-        let mut indices = dither::simple_remap_rgba(pixels, &pal, transparent_idx);
-        let pal = if tuning.gif_frequency_reorder {
-            palette::reorder_by_frequency(&pal, &mut indices)
-        } else {
-            pal
-        };
-        let mpe_result = if needs_metric {
-            Some(metric::MpeResult::zero(width, height))
-        } else {
-            None
-        };
-        return Ok(QuantizeResult {
-            palette: pal,
-            indices,
-            mpe_result,
-        });
-    }
-
-    let use_masking = matches!(effective_quality, Quality::Balanced | Quality::Best);
-    let use_viterbi = matches!(effective_quality, Quality::Best);
-    let kmeans_iters: usize = match effective_quality {
-        Quality::Best => 8,
-        Quality::Balanced => 2,
-        Quality::Fast => 0,
-    };
-
-    // Compute OKLab once from RGB channels — shared across dither, viterbi, joint, k-means
-    let rgb_pixels: Vec<rgb::RGB<u8>> = pixels
-        .iter()
-        .map(|p| rgb::RGB::new(p.r, p.g, p.b))
-        .collect();
-    let labs = simd::batch_srgb_to_oklab_vec(&rgb_pixels);
-
-    let weights = if use_masking {
-        masking::compute_masking_weights_rgba_with_stop(pixels, width, height, stop)
-            .map_err(QuantizeError::Cancelled)?
-    } else {
-        vec![1.0f32; pixels.len()]
-    };
-
-    let (pal, mut indices) = if tuning.alpha_mode == AlphaMode::Full {
-        // Full alpha quantization: 4D OKLabA pipeline
-        let (hist, has_transparent) = histogram::build_histogram_alpha(pixels, &weights, stop)
-            .map_err(QuantizeError::Cancelled)?;
-        let opaque_colors = if has_transparent {
-            max_colors.saturating_sub(1)
-        } else {
-            max_colors
-        };
-        let mut centroids = median_cut::wu_quantize_alpha(hist, opaque_colors, true, stop);
-
-        if kmeans_iters > 0 {
-            centroids = median_cut::refine_against_pixels_alpha(
-                centroids,
-                pixels,
-                &weights,
-                kmeans_iters,
-                config.kmeans_sample_cap,
-                stop,
-            );
-        }
-
-        // Phase boundary: decide cancellation after the k-means refine step.
-        stop.check().map_err(QuantizeError::Cancelled)?;
-
-        let pal = palette::Palette::from_centroids_alpha(
-            centroids,
-            has_transparent,
-            tuning.sort_strategy,
-        );
-
-        let viterbi_lambda = if use_masking {
-            config
-                .viterbi_lambda
-                .unwrap_or(match effective_run_priority {
-                    remap::RunPriority::Quality => 0.0,
-                    remap::RunPriority::Balanced => 0.01,
-                    remap::RunPriority::Compression => 0.02,
-                })
-                * tuning.viterbi_lambda_scale
-        } else {
-            config.viterbi_lambda.unwrap_or(0.0)
-        };
-        let dither_params = dither::DitherParams {
-            width,
-            height,
-            weights: &weights,
-            palette: &pal,
-            mode: effective_config.dither_mode,
-            run_priority: effective_run_priority,
-            dither_strength: tuning.dither_strength,
-            prev_indices: None,
-            precomputed_labs: Some(&labs),
-        };
-        let mut indices = dither::dither_image_rgba_alpha(pixels, &dither_params, None);
-
-        if viterbi_lambda > 0.0 {
-            if use_viterbi {
-                remap::viterbi_refine_rgba_with_labs(
-                    pixels,
-                    &labs,
-                    width,
-                    height,
-                    &weights,
-                    &pal,
-                    &mut indices,
-                    viterbi_lambda,
-                    stop,
-                );
-            } else {
-                remap::run_extend_refine_rgba_with_labs(
-                    pixels,
-                    &labs,
-                    width,
-                    height,
-                    &weights,
-                    &pal,
-                    &mut indices,
-                    viterbi_lambda,
-                    stop,
-                );
-            }
-        }
-
-        (pal, indices)
-    } else {
-        // Binary transparency: opaque pipeline with transparent index
-        let (hist, has_transparent) =
-            histogram::build_histogram_rgba_with_stop(pixels, &weights, stop)
-                .map_err(QuantizeError::Cancelled)?;
-        let opaque_colors = if has_transparent {
-            max_colors.saturating_sub(1)
-        } else {
-            max_colors
-        };
-        let mut centroids = median_cut::farthest_point_quantize(hist, opaque_colors, stop);
-
-        if kmeans_iters > 0 {
-            centroids = median_cut::refine_against_pixels_rgba_from_labs(
-                centroids,
-                pixels,
-                &labs,
-                &weights,
-                kmeans_iters,
-                config.kmeans_sample_cap,
-                stop,
-            );
-        }
-
-        // Phase boundary: decide cancellation after the k-means refine step.
-        stop.check().map_err(QuantizeError::Cancelled)?;
-
-        let mut pal = palette::Palette::from_centroids_sorted(
-            centroids,
-            has_transparent,
-            tuning.sort_strategy,
-        );
-        pal.build_nn_cache();
-
-        let viterbi_lambda = if use_masking {
-            config
-                .viterbi_lambda
-                .unwrap_or(match effective_run_priority {
-                    remap::RunPriority::Quality => 0.0,
-                    remap::RunPriority::Balanced => 0.01,
-                    remap::RunPriority::Compression => 0.02,
-                })
-                * tuning.viterbi_lambda_scale
-        } else {
-            config.viterbi_lambda.unwrap_or(0.0)
-        };
-        let dither_params = dither::DitherParams {
-            width,
-            height,
-            weights: &weights,
-            palette: &pal,
-            mode: effective_config.dither_mode,
-            run_priority: effective_run_priority,
-            dither_strength: tuning.dither_strength,
-            prev_indices: None,
-            precomputed_labs: Some(&labs),
-        };
-        let mut indices = dither::dither_image_rgba(pixels, &dither_params, None);
-
-        if viterbi_lambda > 0.0 {
-            if use_viterbi {
-                remap::viterbi_refine_rgba_with_labs(
-                    pixels,
-                    &labs,
-                    width,
-                    height,
-                    &weights,
-                    &pal,
-                    &mut indices,
-                    viterbi_lambda,
-                    stop,
-                );
-            } else {
-                remap::run_extend_refine_rgba_with_labs(
-                    pixels,
-                    &labs,
-                    width,
-                    height,
-                    &weights,
-                    &pal,
-                    &mut indices,
-                    viterbi_lambda,
-                    stop,
-                );
-            }
-        }
-
-        (pal, indices)
-    };
-
-    // Phase boundary: decide cancellation after the dither/remap step.
-    stop.check().map_err(QuantizeError::Cancelled)?;
-
-    // GIF frequency reorder (post-dither)
-    let pal = if tuning.gif_frequency_reorder {
-        palette::reorder_by_frequency(&pal, &mut indices)
-    } else {
-        pal
-    };
-
-    // Check min_ssim2 quality floor
-    // Note: RGBA path doesn't currently compute inline MPE (mpe_result is None).
-    // For min_ssim2 checking, we'd need standalone MPE computation here.
-    // For now, compute standalone MPE when min_ssim2 is set.
-    let mpe_result = if needs_metric {
-        Some(metric::compute_mpe_rgba(
-            pixels,
-            pal.entries_rgba(),
-            &indices,
-            width,
-            height,
-            None,
-        ))
-    } else {
-        None
-    };
-
-    if let Some(min) = config.min_ssim2 {
-        let achieved = mpe_result
-            .as_ref()
-            .map(|r| r.ssimulacra2_estimate)
-            .unwrap_or(100.0);
-        if achieved < min {
-            return Err(QuantizeError::QualityNotMet {
-                min_ssim2: min,
-                achieved_ssim2: achieved,
-            });
-        }
-    }
-
-    // Joint deflate+quantization optimization
-    #[cfg(feature = "joint")]
-    let indices = if matches!(
-        config.output_format,
-        OutputFormat::PngJoint | OutputFormat::PngMinSize
-    ) {
-        joint::optimize_rgba_with_labs(
-            &labs,
-            width,
-            height,
-            &weights,
-            &pal,
-            &indices,
-            config.joint_deflate_effort,
-            config.joint_tolerance,
-            stop,
-        )
-    } else {
-        indices
-    };
-
-    Ok(QuantizeResult {
-        palette: pal,
-        indices,
-        mpe_result,
-    })
+/// Quantize with an opt-in report of resolved settings and executed stages.
+///
+/// The result is identical to [`quantize_rgba_with_stop`]. Reporting adds no state or
+/// branches to ordinary quantize calls. Errors retain the observation available
+/// at failure in [`DispatchError`]; cancellation behavior is inherited. Palette construction/remapping
+/// entry points do not participate in this per-call report.
+pub fn quantize_rgba_with_dispatch(
+    pixels: &[rgb::RGBA<u8>],
+    width: usize,
+    height: usize,
+    config: &QuantizeConfig,
+    stop: &dyn enough::Stop,
+) -> Result<(QuantizeResult, EffectiveDispatch), DispatchError> {
+    let mut report = dispatch::Capture::default();
+    let result = quantize_rgba_impl(pixels, width, height, config, stop, &mut report);
+    report.complete(result)
 }
+quantize_rgba_body!(capture,report,pixels,width,height,config,stop, [
+fn quantize_rgba_impl<S: dispatch::Sink>(
+    pixels: &[rgb::RGBA<u8>],
+    width: usize,
+    height: usize,
+    config: &QuantizeConfig,
+    stop: &dyn enough::Stop,
+    report: &mut S,
+) -> Result<QuantizeResult, QuantizeError>
+]);
 
 /// Build a shared palette from multiple RGB frames.
 ///
