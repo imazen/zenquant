@@ -93,6 +93,13 @@ fn parity() {
                             )
                             .unwrap();
                             let e = reference::quantize(&rgb, w, h, &r).unwrap();
+                            let ordinary = candidate::quantize(&rgb, w, h, &c).unwrap();
+                            assert_eq!(ordinary.indices(), e.indices(), "ordinary rgb indices");
+                            assert_eq!(
+                                ordinary.palette_rgba(),
+                                e.palette_rgba(),
+                                "ordinary rgb palette"
+                            );
                             assert_eq!(
                                 a.indices(),
                                 e.indices(),
