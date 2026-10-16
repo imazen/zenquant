@@ -1,0 +1,17 @@
+[package]
+name = "dispatch-parity"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+candidate = { package = "zenquant", path = "../..", default-features = false }
+reference = { package = "zenquant", version = "=0.1.3", default-features = false }
+before = { package = "zenquant", git = "https://github.com/imazen/zenquant", rev = "1dc144cace307fc744ccc5c5ff0b1812d2845f07", default-features = false }
+rgb = "0.8.53"
+enough = "0.4.4"
+
+[features]
+joint = ["candidate/joint", "reference/joint", "before/joint"]
