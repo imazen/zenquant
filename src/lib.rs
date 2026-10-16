@@ -511,7 +511,8 @@ macro_rules! dispatch_result {
     };
 }
 macro_rules! quantize_body {
-    ($mode:ident,$observer:ident,$pixels:ident,$width:ident,$height:ident,$config:ident,$stop:ident) => {{
+    ($mode:ident,$observer:ident,$pixels:ident,$width:ident,$height:ident,$config:ident,$stop:ident, [$($signature:tt)*]) => {
+        $($signature)* {
         validate_inputs($pixels.len(), $width, $height, $config)?;
 
         // When target_ssim2 or min_ssim2 is set, force metric computation
@@ -768,11 +769,13 @@ macro_rules! quantize_body {
                 mpe_result,
             }
         ))
-    }};
+        }
+    };
 }
 
 macro_rules! quantize_rgba_body {
-    ($mode:ident,$observer:ident,$pixels:ident,$width:ident,$height:ident,$config:ident,$stop:ident) => {{
+    ($mode:ident,$observer:ident,$pixels:ident,$width:ident,$height:ident,$config:ident,$stop:ident, [$($signature:tt)*]) => {
+        $($signature)* {
         validate_inputs($pixels.len(), $width, $height, $config)?;
 
         // When target_ssim2 or min_ssim2 is set, force metric computation
@@ -1131,7 +1134,8 @@ macro_rules! quantize_rgba_body {
                 mpe_result,
             }
         ))
-    }};
+        }
+    };
 }
 mod dispatch;
 pub use dispatch::{DispatchError, EffectiveDispatch};
@@ -1487,6 +1491,7 @@ pub fn quantize(
     quantize_with_stop(pixels, width, height, config, &enough::Unstoppable)
 }
 
+quantize_body!(plain,unused,pixels,width,height,config,stop, [
 /// Quantize an RGB image to an indexed palette, with cooperative cancellation.
 ///
 /// Same as [`quantize`] but takes a [`stop`](enough::Stop) token: when it
@@ -1498,9 +1503,8 @@ pub fn quantize_with_stop(
     height: usize,
     config: &QuantizeConfig,
     stop: &dyn enough::Stop,
-) -> Result<QuantizeResult, QuantizeError> {
-    quantize_body!(plain, unused, pixels, width, height, config, stop)
-}
+) -> Result<QuantizeResult, QuantizeError>
+]);
 
 /// Quantize with an opt-in report of resolved settings and executed stages.
 ///
@@ -1519,6 +1523,7 @@ pub fn quantize_with_dispatch(
     let result = quantize_impl(pixels, width, height, config, stop, &mut report);
     report.complete(result)
 }
+quantize_body!(capture,report,pixels,width,height,config,stop, [
 fn quantize_impl<S: dispatch::Sink>(
     pixels: &[rgb::RGB<u8>],
     width: usize,
@@ -1526,9 +1531,8 @@ fn quantize_impl<S: dispatch::Sink>(
     config: &QuantizeConfig,
     stop: &dyn enough::Stop,
     report: &mut S,
-) -> Result<QuantizeResult, QuantizeError> {
-    quantize_body!(capture, report, pixels, width, height, config, stop)
-}
+) -> Result<QuantizeResult, QuantizeError>
+]);
 
 /// Quantize an RGBA image to an indexed palette.
 ///
@@ -1563,6 +1567,7 @@ pub fn quantize_rgba(
     quantize_rgba_with_stop(pixels, width, height, config, &enough::Unstoppable)
 }
 
+quantize_rgba_body!(plain,unused,pixels,width,height,config,stop, [
 /// Quantize an RGBA image to an indexed palette, with cooperative cancellation.
 ///
 /// Same as [`quantize_rgba`] but takes a [`stop`](enough::Stop) token: when it
@@ -1574,9 +1579,8 @@ pub fn quantize_rgba_with_stop(
     height: usize,
     config: &QuantizeConfig,
     stop: &dyn enough::Stop,
-) -> Result<QuantizeResult, QuantizeError> {
-    quantize_rgba_body!(plain, unused, pixels, width, height, config, stop)
-}
+) -> Result<QuantizeResult, QuantizeError>
+]);
 
 /// Quantize with an opt-in report of resolved settings and executed stages.
 ///
@@ -1595,6 +1599,7 @@ pub fn quantize_rgba_with_dispatch(
     let result = quantize_rgba_impl(pixels, width, height, config, stop, &mut report);
     report.complete(result)
 }
+quantize_rgba_body!(capture,report,pixels,width,height,config,stop, [
 fn quantize_rgba_impl<S: dispatch::Sink>(
     pixels: &[rgb::RGBA<u8>],
     width: usize,
@@ -1602,9 +1607,8 @@ fn quantize_rgba_impl<S: dispatch::Sink>(
     config: &QuantizeConfig,
     stop: &dyn enough::Stop,
     report: &mut S,
-) -> Result<QuantizeResult, QuantizeError> {
-    quantize_rgba_body!(capture, report, pixels, width, height, config, stop)
-}
+) -> Result<QuantizeResult, QuantizeError>
+]);
 
 /// Build a shared palette from multiple RGB frames.
 ///
