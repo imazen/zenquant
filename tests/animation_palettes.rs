@@ -86,3 +86,34 @@ fn transparency_consumes_a_slot_even_when_it_is_the_last_pixel() {
         }
     }
 }
+
+#[test]
+fn transparent_only_palette_rejects_visible_pixels_without_panicking() {
+    let clear = vec![RGBA::new(17, 43, 91, 0); 35];
+    for format in [
+        OutputFormat::Gif,
+        OutputFormat::Png,
+        OutputFormat::WebpLossless,
+    ] {
+        for quality in [
+            zenquant::Quality::Fast,
+            zenquant::Quality::Balanced,
+            zenquant::Quality::Best,
+        ] {
+            let config = QuantizeConfig::new(format).with_quality(quality);
+            let shared =
+                zenquant::build_palette_rgba(&[ImgRef::new(&clear, 7, 5)], &config).unwrap();
+            // An opaque caller cannot be mapped to the transparent entry.
+            let rgb = vec![rgb::RGB::new(255, 0, 0); 35];
+            assert!(shared.remap(&rgb, 7, 5, &config).is_err());
+            for alpha in [1, 127, 128, 255] {
+                let mut rgba = clear.clone();
+                rgba[17] = RGBA::new(255, 0, 0, alpha);
+                assert!(shared.remap_rgba(&rgba, 7, 5, &config).is_err());
+            }
+            let remapped = shared.remap_rgba(&clear, 7, 5, &config).unwrap();
+            assert_valid(&remapped, 35, 1);
+            assert!(remapped.indices().iter().all(|&i| i == 0));
+        }
+    }
+}
