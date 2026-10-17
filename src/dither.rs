@@ -1781,7 +1781,7 @@ fn dither_image_rgba_alpha_blue_noise(
 }
 
 /// Simple nearest-color remap for alpha-aware palettes.
-fn simple_remap_rgba_alpha(
+pub(crate) fn simple_remap_rgba_alpha(
     pixels: &[rgb::RGBA<u8>],
     palette: &Palette,
     transparent_idx: u8,
