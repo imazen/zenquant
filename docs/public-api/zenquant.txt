@@ -6,7 +6,7 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: zenquant.txt 123 lines (supported surface) | zenquant.features.txt 0 added (features: joint,std) | zenquant.internal.txt 235 lines (152 hidden + 251 excluded-feature)
+# files: zenquant.txt 123 lines (supported surface) | zenquant.features.txt 0 added (features: joint,std) | zenquant.internal.txt 234 lines (151 hidden + 251 excluded-feature)
 
 ## summary
 #
@@ -15,14 +15,14 @@
 #   free functions                             10
 #   inherent methods                           22
 #   struct fields                              45
-#   enum variants                              24
-#   re-exports                                  5
+#   enum variants                              26
+#   re-exports                                  3
 #   trait roster entries (type × trait)        25
 #   auto-trait-complete types                   7
 #
 # per-module pub lines:
-#   (root)                           96
-#   error                            20
+#   (root)                           95
+#   error                            21
 
 ## items (115 lines)
 
@@ -30,8 +30,6 @@ pub mod zenquant
 pub use Img
 pub use ImgRef
 pub use ImgVec
-pub use RGB
-pub use RGBA
 pub mod error
 pub error::QuantizeError::Cancelled(enough::reason::StopReason)
 pub error::QuantizeError::DimensionMismatch
@@ -45,6 +43,7 @@ pub error::QuantizeError::InvalidIndex
 pub error::QuantizeError::InvalidIndex::index: u32
 pub error::QuantizeError::InvalidIndex::palette_len: usize
 pub error::QuantizeError::InvalidMaxColors(u32)
+pub error::QuantizeError::NoVisibleColors
 pub error::QuantizeError::QualityNotMet
 pub error::QuantizeError::QualityNotMet::achieved_ssim2: f32
 pub error::QuantizeError::QualityNotMet::min_ssim2: f32
@@ -75,6 +74,7 @@ pub QuantizeError::InvalidIndex
 pub QuantizeError::InvalidIndex::index: u32
 pub QuantizeError::InvalidIndex::palette_len: usize
 pub QuantizeError::InvalidMaxColors(u32)
+pub QuantizeError::NoVisibleColors
 pub QuantizeError::QualityNotMet
 pub QuantizeError::QualityNotMet::achieved_ssim2: f32
 pub QuantizeError::QualityNotMet::min_ssim2: f32
