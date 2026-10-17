@@ -6,6 +6,19 @@
 
 ## [Unreleased]
 
+### QUEUED BREAKING CHANGES
+
+None.
+
+### Added
+- Opt-in `quantize_with_dispatch` / `quantize_rgba_with_dispatch` return an
+  additive `EffectiveDispatch` observation of actual automatic choices and
+  executed stages. Ordinary calls expand the shared pipeline without observer code. No
+  quantization or output-byte changes; published-output parity covers both
+  build variants. `DispatchError` preserves observations for failures, including
+  quality-floor outcomes (`d439bdfe`). Public signatures await PR review.
+
+
 ### Fixed
 - Transparent-only frames now contain a real transparent palette entry, avoiding
   a GIF frequency-sort panic on unchanged animation frames. Exact RGBA palettes

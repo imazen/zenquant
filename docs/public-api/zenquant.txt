@@ -6,32 +6,30 @@
 # impls omitted; re-export duplicates annotated `[also: path]`.
 # DO NOT EDIT BY HAND — commit regenerated changes with the code.
 #
-# files: zenquant.txt 96 lines (supported surface) | zenquant.features.txt 0 added (features: joint,std) | zenquant.internal.txt 235 lines (152 hidden + 251 excluded-feature)
+# files: zenquant.txt 123 lines (supported surface) | zenquant.features.txt 0 added (features: joint,std) | zenquant.internal.txt 234 lines (151 hidden + 251 excluded-feature)
 
 ## summary
 #
 #   pub modules                                 2
-#   pub types (struct/enum/trait/alias)         6
-#   free functions                              8
+#   pub types (struct/enum/trait/alias)         8
+#   free functions                             10
 #   inherent methods                           22
-#   struct fields                              22
+#   struct fields                              45
 #   enum variants                              26
-#   re-exports                                  5
-#   trait roster entries (type × trait)        20
-#   auto-trait-complete types                   5
+#   re-exports                                  3
+#   trait roster entries (type × trait)        25
+#   auto-trait-complete types                   7
 #
 # per-module pub lines:
-#   (root)                           70
+#   (root)                           95
 #   error                            21
 
-## items (90 lines)
+## items (115 lines)
 
 pub mod zenquant
 pub use Img
 pub use ImgRef
 pub use ImgVec
-pub use RGB
-pub use RGBA
 pub mod error
 pub error::QuantizeError::Cancelled(enough::reason::StopReason)
 pub error::QuantizeError::DimensionMismatch
@@ -84,6 +82,31 @@ pub QuantizeError::TooManyPixels
 pub QuantizeError::TooManyPixels::max: usize
 pub QuantizeError::TooManyPixels::pixels: usize
 pub QuantizeError::ZeroDimension
+#[non_exhaustive] pub struct DispatchError
+pub DispatchError::dispatch: core::option::Option<alloc::boxed::Box<EffectiveDispatch>>
+pub DispatchError::error: error::QuantizeError
+#[non_exhaustive] pub struct EffectiveDispatch
+pub EffectiveDispatch::alpha: &'static str
+pub EffectiveDispatch::dither: &'static str
+pub EffectiveDispatch::dither_strength: f32
+pub EffectiveDispatch::dither_used: bool
+pub EffectiveDispatch::exact_palette: bool
+pub EffectiveDispatch::format: OutputFormat
+pub EffectiveDispatch::frequency_reorder: bool
+pub EffectiveDispatch::joint_available: bool
+pub EffectiveDispatch::joint_deflate_effort_used: bool
+pub EffectiveDispatch::joint_tolerance: core::option::Option<f32>
+pub EffectiveDispatch::joint_used: bool
+pub EffectiveDispatch::kmeans_iterations: usize
+pub EffectiveDispatch::kmeans_sample_cap: usize
+pub EffectiveDispatch::masking: bool
+pub EffectiveDispatch::metric: bool
+pub EffectiveDispatch::palette_sort: &'static str
+pub EffectiveDispatch::quality: Quality
+pub EffectiveDispatch::run_lambda: f32
+pub EffectiveDispatch::run_priority: &'static str
+pub EffectiveDispatch::run_refinement: core::option::Option<&'static str>
+pub EffectiveDispatch::target_tier: core::option::Option<&'static str>
 pub struct QuantizeConfig
 pub fn QuantizeConfig::new(OutputFormat) -> Self
 pub fn QuantizeConfig::with_compute_quality_metric(self, bool) -> Self
@@ -114,11 +137,15 @@ pub fn build_palette_rgba_with_stop(&[imgref::ImgRef<'_, rgb::formats::rgba::Rgb
 pub fn build_palette_with_stop(&[imgref::ImgRef<'_, rgb::formats::rgb::Rgb<u8>>], &QuantizeConfig, &dyn enough::Stop) -> core::result::Result<QuantizeResult, error::QuantizeError>
 pub fn quantize(&[rgb::formats::rgb::Rgb<u8>], usize, usize, &QuantizeConfig) -> core::result::Result<QuantizeResult, error::QuantizeError>
 pub fn quantize_rgba(&[rgb::formats::rgba::Rgba<u8>], usize, usize, &QuantizeConfig) -> core::result::Result<QuantizeResult, error::QuantizeError>
+pub fn quantize_rgba_with_dispatch(&[rgb::formats::rgba::Rgba<u8>], usize, usize, &QuantizeConfig, &dyn enough::Stop) -> core::result::Result<(QuantizeResult, EffectiveDispatch), DispatchError>
 pub fn quantize_rgba_with_stop(&[rgb::formats::rgba::Rgba<u8>], usize, usize, &QuantizeConfig, &dyn enough::Stop) -> core::result::Result<QuantizeResult, error::QuantizeError>
+pub fn quantize_with_dispatch(&[rgb::formats::rgb::Rgb<u8>], usize, usize, &QuantizeConfig, &dyn enough::Stop) -> core::result::Result<(QuantizeResult, EffectiveDispatch), DispatchError>
 pub fn quantize_with_stop(&[rgb::formats::rgb::Rgb<u8>], usize, usize, &QuantizeConfig, &dyn enough::Stop) -> core::result::Result<QuantizeResult, error::QuantizeError>
 
-## trait impls (5 types)
+## trait impls (7 types)
 
+DispatchError: Debug, Display, Error
+EffectiveDispatch: Clone, Debug
 OutputFormat: Clone, Copy, Debug, Eq, Hash, PartialEq
 Quality: Clone, Copy, Debug, Default, Eq, Hash, PartialEq
 QuantizeConfig: Clone, Debug
@@ -127,4 +154,4 @@ error::QuantizeError: Clone, Debug, Display, Error
 
 ## auto traits
 
-5 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
+7 types implement all of: Freeze, RefUnwindSafe, Send, Sync, Unpin, UnwindSafe
