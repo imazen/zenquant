@@ -151,23 +151,23 @@ fn srgb_to_oklab_8x<T: F32x8Convert>(
     lin_g: [f32; 8],
     lin_b: [f32; 8],
 ) -> ([f32; 8], [f32; 8], [f32; 8]) {
-    let r = f32x8::from_array(token, lin_r);
-    let g = f32x8::from_array(token, lin_g);
-    let b = f32x8::from_array(token, lin_b);
+    let r = f32x8::from_array_t(token, lin_r);
+    let g = f32x8::from_array_t(token, lin_g);
+    let b = f32x8::from_array_t(token, lin_b);
 
     // M1: linear sRGB → LMS (Ottosson's matrix)
     // Each row: FMA chain = coeff0*r + (coeff1*g + coeff2*b)
-    let lms_l = f32x8::splat(token, 0.4122214708).mul_add(
+    let lms_l = f32x8::splat_t(token, 0.4122214708).mul_add(
         r,
-        f32x8::splat(token, 0.5363325363).mul_add(g, f32x8::splat(token, 0.0514459929) * b),
+        f32x8::splat_t(token, 0.5363325363).mul_add(g, f32x8::splat_t(token, 0.0514459929) * b),
     );
-    let lms_m = f32x8::splat(token, 0.2119034982).mul_add(
+    let lms_m = f32x8::splat_t(token, 0.2119034982).mul_add(
         r,
-        f32x8::splat(token, 0.6806995451).mul_add(g, f32x8::splat(token, 0.1073969566) * b),
+        f32x8::splat_t(token, 0.6806995451).mul_add(g, f32x8::splat_t(token, 0.1073969566) * b),
     );
-    let lms_s = f32x8::splat(token, 0.0883024619).mul_add(
+    let lms_s = f32x8::splat_t(token, 0.0883024619).mul_add(
         r,
-        f32x8::splat(token, 0.2817188376).mul_add(g, f32x8::splat(token, 0.6299787005) * b),
+        f32x8::splat_t(token, 0.2817188376).mul_add(g, f32x8::splat_t(token, 0.6299787005) * b),
     );
 
     // Cube root (~3 ULP precision, sufficient for perceptual color)
@@ -176,17 +176,17 @@ fn srgb_to_oklab_8x<T: F32x8Convert>(
     let s_ = lms_s.cbrt_midp();
 
     // M2: LMS^(1/3) → OKLab (Ottosson's matrix)
-    let ok_l = f32x8::splat(token, 0.2104542553).mul_add(
+    let ok_l = f32x8::splat_t(token, 0.2104542553).mul_add(
         l_,
-        f32x8::splat(token, 0.7936177850).mul_add(m_, f32x8::splat(token, -0.0040720468) * s_),
+        f32x8::splat_t(token, 0.7936177850).mul_add(m_, f32x8::splat_t(token, -0.0040720468) * s_),
     );
-    let ok_a = f32x8::splat(token, 1.9779984951).mul_add(
+    let ok_a = f32x8::splat_t(token, 1.9779984951).mul_add(
         l_,
-        f32x8::splat(token, -2.4285922050).mul_add(m_, f32x8::splat(token, 0.4505937099) * s_),
+        f32x8::splat_t(token, -2.4285922050).mul_add(m_, f32x8::splat_t(token, 0.4505937099) * s_),
     );
-    let ok_b = f32x8::splat(token, 0.0259040371).mul_add(
+    let ok_b = f32x8::splat_t(token, 0.0259040371).mul_add(
         l_,
-        f32x8::splat(token, 0.7827717662).mul_add(m_, f32x8::splat(token, -0.8086757660) * s_),
+        f32x8::splat_t(token, 0.7827717662).mul_add(m_, f32x8::splat_t(token, -0.8086757660) * s_),
     );
 
     (ok_l.to_array(), ok_a.to_array(), ok_b.to_array())
@@ -387,28 +387,28 @@ fn palette_nearest_dispatch_scalar(
 ///    than something to reproduce.
 #[inline(always)]
 fn palette_nearest_generic<T: F32x8Convert>(token: T, pal: &PaletteSimd, color: OKLab) -> u8 {
-    let ql = f32x8::splat(token, color.l);
-    let qa = f32x8::splat(token, color.a);
-    let qb = f32x8::splat(token, color.b);
+    let ql = f32x8::splat_t(token, color.l);
+    let qa = f32x8::splat_t(token, color.a);
+    let qb = f32x8::splat_t(token, color.b);
 
     // Per-lane running minimum and the packed index (group * 8 + lane) that
     // produced it. Indices ride in f32: the palette is at most 256 entries, so
     // every value is exactly representable.
-    let mut best_d = f32x8::splat(token, f32::INFINITY);
-    let mut best_i = f32x8::splat(token, f32::INFINITY);
+    let mut best_d = f32x8::splat_t(token, f32::INFINITY);
+    let mut best_i = f32x8::splat_t(token, f32::INFINITY);
 
     // Index vector carried as an accumulator rather than recomputed as
     // `splat(gi * 8) + lane_ids` each group: that recompute is an integer
     // multiply, an int->float convert and a splat per iteration, which at
     // small palettes (pal8 is ONE group) is a large fraction of the loop body.
     // Adding 8.0 is exact for every index a u8 palette can hold.
-    let mut idx = f32x8::from_array(token, [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
-    let eight = f32x8::splat(token, 8.0);
+    let mut idx = f32x8::from_array_t(token, [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
+    let eight = f32x8::splat_t(token, 8.0);
 
     for ((pl, pa), pb) in pal.l.iter().zip(pal.a.iter()).zip(pal.b.iter()) {
-        let pl = f32x8::load(token, pl);
-        let pa = f32x8::load(token, pa);
-        let pb = f32x8::load(token, pb);
+        let pl = f32x8::load_t(token, pl);
+        let pa = f32x8::load_t(token, pa);
+        let pb = f32x8::load_t(token, pb);
 
         // Squared distance: (ql-pl)^2 + (qa-pa)^2 + (qb-pb)^2
         let dl = ql - pl;

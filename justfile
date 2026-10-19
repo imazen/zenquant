@@ -66,3 +66,9 @@ dispatch-api-check:
 
 dispatch-cost-analyze log:
     python3 tests/dispatch-parity/analyze_cost.py '{{log}}'
+
+# Check compatibility after admitting the current archmage/magetypes beta.
+beta-cohort-check:
+    cargo fmt --check
+    cargo clippy --locked --workspace --lib -- -D warnings
+    cargo test --locked --workspace --lib --no-fail-fast
