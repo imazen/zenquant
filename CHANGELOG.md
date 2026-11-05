@@ -8,6 +8,8 @@
 
 ### Changed
 
+- Accept the archmage and magetypes 0.9.31 stable release.
+
 - Admit archmage/magetypes 0.9.31-beta.1 alongside compatible stable versions; use explicit-token aliases where needed. Formatting, strict library lint and library tests pass (`960d96f6`).
 
 ### QUEUED BREAKING CHANGES
