@@ -8,6 +8,9 @@
 
 ### Changed
 
+- Require stable magetypes 0.9.31 and name existing SIMD multiply-add as
+  `mul_add_relaxed`, retaining the deprecated alias behavior.
+
 - Accept the archmage and magetypes 0.9.31 stable release.
 
 - Admit archmage/magetypes 0.9.31-beta.1 alongside compatible stable versions; use explicit-token aliases where needed. Formatting, strict library lint and library tests pass (`960d96f6`).

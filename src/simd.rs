@@ -157,17 +157,17 @@ fn srgb_to_oklab_8x<T: F32x8Convert>(
 
     // M1: linear sRGB → LMS (Ottosson's matrix)
     // Each row: FMA chain = coeff0*r + (coeff1*g + coeff2*b)
-    let lms_l = f32x8::splat_t(token, 0.4122214708).mul_add(
+    let lms_l = f32x8::splat_t(token, 0.4122214708).mul_add_relaxed(
         r,
-        f32x8::splat_t(token, 0.5363325363).mul_add(g, f32x8::splat_t(token, 0.0514459929) * b),
+        f32x8::splat_t(token, 0.5363325363).mul_add_relaxed(g, f32x8::splat_t(token, 0.0514459929) * b),
     );
-    let lms_m = f32x8::splat_t(token, 0.2119034982).mul_add(
+    let lms_m = f32x8::splat_t(token, 0.2119034982).mul_add_relaxed(
         r,
-        f32x8::splat_t(token, 0.6806995451).mul_add(g, f32x8::splat_t(token, 0.1073969566) * b),
+        f32x8::splat_t(token, 0.6806995451).mul_add_relaxed(g, f32x8::splat_t(token, 0.1073969566) * b),
     );
-    let lms_s = f32x8::splat_t(token, 0.0883024619).mul_add(
+    let lms_s = f32x8::splat_t(token, 0.0883024619).mul_add_relaxed(
         r,
-        f32x8::splat_t(token, 0.2817188376).mul_add(g, f32x8::splat_t(token, 0.6299787005) * b),
+        f32x8::splat_t(token, 0.2817188376).mul_add_relaxed(g, f32x8::splat_t(token, 0.6299787005) * b),
     );
 
     // Cube root (~3 ULP precision, sufficient for perceptual color)
@@ -176,17 +176,17 @@ fn srgb_to_oklab_8x<T: F32x8Convert>(
     let s_ = lms_s.cbrt_midp();
 
     // M2: LMS^(1/3) → OKLab (Ottosson's matrix)
-    let ok_l = f32x8::splat_t(token, 0.2104542553).mul_add(
+    let ok_l = f32x8::splat_t(token, 0.2104542553).mul_add_relaxed(
         l_,
-        f32x8::splat_t(token, 0.7936177850).mul_add(m_, f32x8::splat_t(token, -0.0040720468) * s_),
+        f32x8::splat_t(token, 0.7936177850).mul_add_relaxed(m_, f32x8::splat_t(token, -0.0040720468) * s_),
     );
-    let ok_a = f32x8::splat_t(token, 1.9779984951).mul_add(
+    let ok_a = f32x8::splat_t(token, 1.9779984951).mul_add_relaxed(
         l_,
-        f32x8::splat_t(token, -2.4285922050).mul_add(m_, f32x8::splat_t(token, 0.4505937099) * s_),
+        f32x8::splat_t(token, -2.4285922050).mul_add_relaxed(m_, f32x8::splat_t(token, 0.4505937099) * s_),
     );
-    let ok_b = f32x8::splat_t(token, 0.0259040371).mul_add(
+    let ok_b = f32x8::splat_t(token, 0.0259040371).mul_add_relaxed(
         l_,
-        f32x8::splat_t(token, 0.7827717662).mul_add(m_, f32x8::splat_t(token, -0.8086757660) * s_),
+        f32x8::splat_t(token, 0.7827717662).mul_add_relaxed(m_, f32x8::splat_t(token, -0.8086757660) * s_),
     );
 
     (ok_l.to_array(), ok_a.to_array(), ok_b.to_array())
@@ -414,7 +414,7 @@ fn palette_nearest_generic<T: F32x8Convert>(token: T, pal: &PaletteSimd, color: 
         let dl = ql - pl;
         let da = qa - pa;
         let db = qb - pb;
-        let dist = dl.mul_add(dl, da.mul_add(da, db * db));
+        let dist = dl.mul_add_relaxed(dl, da.mul_add_relaxed(da, db * db));
 
         let improves = dist.simd_lt(best_d);
         best_i = f32x8::blend(improves, idx, best_i);
