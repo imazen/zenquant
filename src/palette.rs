@@ -224,8 +224,8 @@ impl Palette {
         let mut best_idx = start;
         let mut best_dist = f32::MAX;
 
-        for i in start..self.entries_oklab.len() {
-            let d = color.distance_sq(self.entries_oklab[i]);
+        for (i, &entry) in self.entries_oklab.iter().enumerate().skip(start) {
+            let d = color.distance_sq(entry);
             if d < best_dist {
                 best_dist = d;
                 best_idx = i;
@@ -371,8 +371,8 @@ impl Palette {
         let slots = k.min(best.len());
         let mut filled = 0usize;
 
-        for i in start..self.entries_oklab.len() {
-            let d = color.distance_sq(self.entries_oklab[i]);
+        for (i, &entry) in self.entries_oklab.iter().enumerate().skip(start) {
+            let d = color.distance_sq(entry);
 
             if filled < slots {
                 // Still filling — insert in sorted position
