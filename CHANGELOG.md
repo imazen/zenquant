@@ -8,6 +8,7 @@
 
 ### Changed
 
+- Upgrade `archmage` and `magetypes` to `0.9.33` (including `tests/dispatch-parity/Cargo.lock`).
 - Bump dependencies (`linear-srgb` 0.6.12, `enough` 0.4.5, `almost-enough`
   0.4.5, `zenbench` 0.1.11), use published `zengif`/`zenwebp`/`zenpng` dev-deps
   and `dssim-core` default features, and refresh `Cargo.lock` (preserving
