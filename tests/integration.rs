@@ -23,7 +23,9 @@ fn load_png_rgb(path: &std::path::Path) -> Option<(Vec<rgb::RGB<u8>>, u32, u32)>
 
     let pixels = match frame.color_type {
         png::ColorType::Rgb => buf
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|c| rgb::RGB {
                 r: c[0],
                 g: c[1],
@@ -31,7 +33,9 @@ fn load_png_rgb(path: &std::path::Path) -> Option<(Vec<rgb::RGB<u8>>, u32, u32)>
             })
             .collect(),
         png::ColorType::Rgba => buf
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| rgb::RGB {
                 r: c[0],
                 g: c[1],
@@ -58,7 +62,9 @@ fn load_png_rgba(path: &std::path::Path) -> Option<(Vec<rgb::RGBA<u8>>, u32, u32
 
     let pixels = match frame.color_type {
         png::ColorType::Rgba => buf
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| rgb::RGBA {
                 r: c[0],
                 g: c[1],
@@ -67,7 +73,9 @@ fn load_png_rgba(path: &std::path::Path) -> Option<(Vec<rgb::RGBA<u8>>, u32, u32
             })
             .collect(),
         png::ColorType::Rgb => buf
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|c| rgb::RGBA {
                 r: c[0],
                 g: c[1],

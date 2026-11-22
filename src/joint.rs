@@ -1259,7 +1259,7 @@ mod tests {
         // 1 poll for the (single-stride) candidate pass + 1 per scanline.
         let polls = stop.0.load(core::sync::atomic::Ordering::Relaxed);
         assert!(
-            polls >= height + 1,
+            polls > height,
             "expected at least {} stop polls (1 candidate-pass + {height} scanlines), got {polls}",
             height + 1
         );

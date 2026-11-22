@@ -577,13 +577,12 @@ fn run_color_quant(
     let nq = color_quant::NeuQuant::new(10, 256, &rgba_bytes);
 
     let palette_flat = nq.color_map_rgb();
-    let palette: Vec<[u8; 3]> = palette_flat
-        .chunks_exact(3)
-        .map(|c| [c[0], c[1], c[2]])
-        .collect();
+    let palette: Vec<[u8; 3]> = palette_flat.as_chunks::<3>().0.to_vec();
 
     let indices: Vec<u8> = rgba_bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|pix| nq.index_of(pix) as u8)
         .collect();
 
