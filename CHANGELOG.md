@@ -8,6 +8,13 @@
 
 ### Changed
 
+- Bump dependencies (`linear-srgb` 0.6.12, `enough` 0.4.5, `almost-enough`
+  0.4.5, `zenbench` 0.1.11), use published `zengif`/`zenwebp`/`zenpng` dev-deps
+  and `dssim-core` default features, and refresh `Cargo.lock` (preserving
+  `tests/dispatch-parity` baseline pins).
+- Pass `CROSS_CONTAINER_OPTS="--security-opt seccomp=unconfined"` in the
+  `i686` CI job.
+
 - Accept the archmage and magetypes 0.9.31 stable release.
 
 - Admit archmage/magetypes 0.9.31-beta.1 alongside compatible stable versions; use explicit-token aliases where needed. Formatting, strict library lint and library tests pass (`960d96f6`).
