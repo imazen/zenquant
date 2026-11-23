@@ -105,9 +105,9 @@ pub mod _dev {
                 Self(PaletteSimd::from_oklab_slice(entries, 0))
             }
 
-            /// The shape every caller uses: `nearest` in a per-pixel loop
-            /// (remap.rs:55, median_cut.rs:1216, dither.rs:1816/1834,
-            /// joint.rs:1123, palette.rs:511).
+            /// The per-call `nearest` dispatch shape production used to run
+            /// (now `nearest_batch`): kept so the bench can measure the
+            /// single-color kernel itself.
             pub fn map(&self, colors: &[OKLab], out: &mut [u8]) {
                 for (c, o) in colors.iter().zip(out.iter_mut()) {
                     *o = self.0.nearest(*c);

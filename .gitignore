@@ -50,6 +50,8 @@ benchmarks/*.md
 benchmarks/*.log
 benchmarks/*.csv
 benchmarks/*.tsv
+# Lane benchmark reports are authored source, not generated results.
+!benchmarks/dispatch_and_size_2026-11-23.md
 benchmarks/*.meta
 # ...but the committed methodology doc is source, not a generated result
 !benchmarks/README.md

@@ -291,17 +291,40 @@ impl PaletteSimd {
     }
 
     /// Find the nearest palette index to the given OKLab color.
+    ///
+    /// `_dev`-only: every production caller batches through
+    /// [`nearest_batch`](Self::nearest_batch); the per-call dispatch remains
+    /// for the `kernel_tiers` bench, which measures this exact call shape.
+    #[cfg(any(feature = "_dev", test))]
     pub(crate) fn nearest(&self, color: OKLab) -> u8 {
         incant!(
             palette_nearest_dispatch(self, color),
             [v3, neon, wasm128, scalar]
         )
     }
+
+    /// Fill `out[i]` with the nearest palette index to `labs[i]`.
+    ///
+    /// Resolves the tier once for the whole batch instead of re-dispatching
+    /// inside [`nearest`](Self::nearest) at every pixel — identical kernel
+    /// per element, identical results (each tier fn loops
+    /// [`palette_nearest_generic`], and the aarch64
+    /// [`NEON_MIN_PALETTE_ENTRIES`] gate depends only on `num_entries`).
+    pub(crate) fn nearest_batch(&self, labs: &[OKLab], out: &mut [u8]) {
+        assert_eq!(labs.len(), out.len());
+        incant!(
+            palette_nearest_batch_dispatch(self, labs, out),
+            [v3, neon, wasm128, scalar]
+        )
+    }
 }
 
 // --- Platform-specific nearest entry points ---
+// `_dev`-only: production dispatches once per batch via
+// `palette_nearest_batch_dispatch_*`; these per-call entries back
+// `PaletteSimd::nearest` for the `kernel_tiers` bench.
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(any(feature = "_dev", test), target_arch = "x86_64"))]
 #[archmage::arcane]
 fn palette_nearest_dispatch_v3(token: archmage::X64V3Token, pal: &PaletteSimd, color: OKLab) -> u8 {
     palette_nearest_generic(token, pal, color)
@@ -338,7 +361,7 @@ fn palette_nearest_dispatch_v3(token: archmage::X64V3Token, pal: &PaletteSimd, c
 #[cfg(target_arch = "aarch64")]
 const NEON_MIN_PALETTE_ENTRIES: usize = 112;
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(any(feature = "_dev", test), target_arch = "aarch64"))]
 #[archmage::arcane]
 fn palette_nearest_dispatch_neon(
     token: archmage::NeonToken,
@@ -351,7 +374,7 @@ fn palette_nearest_dispatch_neon(
     palette_nearest_generic(token, pal, color)
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(any(feature = "_dev", test), target_arch = "wasm32"))]
 #[archmage::arcane]
 fn palette_nearest_dispatch_wasm128(
     token: archmage::Wasm128Token,
@@ -361,12 +384,71 @@ fn palette_nearest_dispatch_wasm128(
     palette_nearest_generic(token, pal, color)
 }
 
+#[cfg(any(feature = "_dev", test))]
 fn palette_nearest_dispatch_scalar(
     token: archmage::ScalarToken,
     pal: &PaletteSimd,
     color: OKLab,
 ) -> u8 {
     palette_nearest_generic(token, pal, color)
+}
+
+// --- Batch nearest entry points (one dispatch per batch) ---
+
+#[cfg(target_arch = "x86_64")]
+#[archmage::arcane]
+fn palette_nearest_batch_dispatch_v3(
+    token: archmage::X64V3Token,
+    pal: &PaletteSimd,
+    labs: &[OKLab],
+    out: &mut [u8],
+) {
+    for (&color, o) in labs.iter().zip(out.iter_mut()) {
+        *o = palette_nearest_generic(token, pal, color);
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[archmage::arcane]
+fn palette_nearest_batch_dispatch_neon(
+    token: archmage::NeonToken,
+    pal: &PaletteSimd,
+    labs: &[OKLab],
+    out: &mut [u8],
+) {
+    if pal.num_entries < NEON_MIN_PALETTE_ENTRIES {
+        for (&color, o) in labs.iter().zip(out.iter_mut()) {
+            *o = palette_nearest_generic(archmage::ScalarToken, pal, color);
+        }
+        return;
+    }
+    for (&color, o) in labs.iter().zip(out.iter_mut()) {
+        *o = palette_nearest_generic(token, pal, color);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[archmage::arcane]
+fn palette_nearest_batch_dispatch_wasm128(
+    token: archmage::Wasm128Token,
+    pal: &PaletteSimd,
+    labs: &[OKLab],
+    out: &mut [u8],
+) {
+    for (&color, o) in labs.iter().zip(out.iter_mut()) {
+        *o = palette_nearest_generic(token, pal, color);
+    }
+}
+
+fn palette_nearest_batch_dispatch_scalar(
+    token: archmage::ScalarToken,
+    pal: &PaletteSimd,
+    labs: &[OKLab],
+    out: &mut [u8],
+) {
+    for (&color, o) in labs.iter().zip(out.iter_mut()) {
+        *o = palette_nearest_generic(token, pal, color);
+    }
 }
 
 /// Generic SIMD nearest-neighbor search.

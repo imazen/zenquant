@@ -481,9 +481,7 @@ impl Palette {
         let grid_labs = crate::simd::batch_srgb_to_oklab_vec(&grid_pixels);
 
         let mut cache = vec![0u8; TOTAL];
-        for (i, lab) in grid_labs.iter().enumerate() {
-            cache[i] = self.simd_layout.nearest(*lab);
-        }
+        self.simd_layout.nearest_batch(&grid_labs, &mut cache);
 
         self.nn_cache = Some(cache);
     }

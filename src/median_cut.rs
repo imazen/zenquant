@@ -1323,10 +1323,9 @@ fn precompute_nn_grid() -> Vec<OKLab> {
 /// Used for the first k-means iteration (no previous cache to seed from).
 fn build_centroid_nn_cache(centroids: &[OKLab], grid_labs: &[OKLab]) -> Vec<u8> {
     let simd_layout = crate::simd::PaletteSimd::from_oklab_slice(centroids, 0);
-    grid_labs
-        .iter()
-        .map(|lab| simd_layout.nearest(*lab))
-        .collect()
+    let mut cache = vec![0u8; grid_labs.len()];
+    simd_layout.nearest_batch(grid_labs, &mut cache);
+    cache
 }
 
 /// Rebuild the NN cache using the previous cache as seed + neighbor refinement.

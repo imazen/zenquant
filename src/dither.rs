@@ -1,5 +1,4 @@
 extern crate alloc;
-use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -251,7 +250,7 @@ macro_rules! diffuse_kernel_4ch_opaque {
 ///
 /// Preserves error direction (critical for hue consistency) by scaling all
 /// channels uniformly when any would overflow the gamut bounds.
-#[inline(always)]
+#[inline(never)]
 fn diffuse_err_3ch(
     buf: &mut [[f32; 3]],
     target_idx: usize,
@@ -301,7 +300,7 @@ fn diffuse_err_3ch(
 }
 
 /// 4-channel error diffusion with proportional overflow control and gamut clamping.
-#[inline(always)]
+#[inline(never)]
 #[allow(clippy::too_many_arguments)]
 fn diffuse_err_4ch(
     buf: &mut [[f32; 4]],
@@ -586,13 +585,8 @@ pub fn dither_image(
         let forward = linear || y % 2 == 0;
         let mut prev_index: Option<u8> = None;
 
-        let x_iter: Box<dyn Iterator<Item = usize>> = if forward {
-            Box::new(0..width)
-        } else {
-            Box::new((0..width).rev())
-        };
-
-        for x in x_iter {
+        for x_step in 0..width {
+            let x = if forward { x_step } else { width - 1 - x_step };
             let idx = y * width + x;
             let current = OKLab::new(lab_buf[idx][0], lab_buf[idx][1], lab_buf[idx][2]);
 
@@ -779,13 +773,8 @@ pub fn dither_image_rgba(
         let forward = linear || y % 2 == 0;
         let mut prev_index: Option<u8> = None;
 
-        let x_iter: Box<dyn Iterator<Item = usize>> = if forward {
-            Box::new(0..width)
-        } else {
-            Box::new((0..width).rev())
-        };
-
-        for x in x_iter {
+        for x_step in 0..width {
+            let x = if forward { x_step } else { width - 1 - x_step };
             let idx = y * width + x;
 
             if pixels[idx].a == 0 {
@@ -987,13 +976,8 @@ pub fn dither_image_rgba_alpha(
         let forward = linear || y % 2 == 0;
         let mut prev_index: Option<u8> = None;
 
-        let x_iter: Box<dyn Iterator<Item = usize>> = if forward {
-            Box::new(0..width)
-        } else {
-            Box::new((0..width).rev())
-        };
-
-        for x in x_iter {
+        for x_step in 0..width {
+            let x = if forward { x_step } else { width - 1 - x_step };
             let idx = y * width + x;
             let current_alpha = lab_buf[idx][3];
 
@@ -1162,13 +1146,8 @@ fn dither_image_ordered(
         let forward = y % 2 == 0;
         let mut prev_index: Option<u8> = None;
 
-        let x_iter: Box<dyn Iterator<Item = usize>> = if forward {
-            Box::new(0..width)
-        } else {
-            Box::new((0..width).rev())
-        };
-
-        for x in x_iter {
+        for x_step in 0..width {
+            let x = if forward { x_step } else { width - 1 - x_step };
             let idx = y * width + x;
             let current = OKLab::new(lab_buf[idx][0], lab_buf[idx][1], lab_buf[idx][2]);
 
@@ -1273,13 +1252,8 @@ fn dither_image_rgba_ordered(
         let forward = y % 2 == 0;
         let mut prev_index: Option<u8> = None;
 
-        let x_iter: Box<dyn Iterator<Item = usize>> = if forward {
-            Box::new(0..width)
-        } else {
-            Box::new((0..width).rev())
-        };
-
-        for x in x_iter {
+        for x_step in 0..width {
+            let x = if forward { x_step } else { width - 1 - x_step };
             let idx = y * width + x;
 
             if pixels[idx].a == 0 {
@@ -1395,13 +1369,8 @@ fn dither_image_rgba_alpha_ordered(
         let forward = y % 2 == 0;
         let mut prev_index: Option<u8> = None;
 
-        let x_iter: Box<dyn Iterator<Item = usize>> = if forward {
-            Box::new(0..width)
-        } else {
-            Box::new((0..width).rev())
-        };
-
-        for x in x_iter {
+        for x_step in 0..width {
+            let x = if forward { x_step } else { width - 1 - x_step };
             let idx = y * width + x;
             let current_alpha = lab_buf[idx][3];
 
